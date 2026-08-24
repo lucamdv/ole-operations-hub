@@ -1,0 +1,3 @@
+-- Migration intentionally disabled.
+-- Admin users will be created through Supabase Auth
+-- after the database schema migration is completed.

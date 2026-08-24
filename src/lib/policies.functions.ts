@@ -1,0 +1,425 @@
+import { createServerFn } from "@tanstack/react-start";
+import { resolveWebhookUrl, type WebhookMode } from "@/lib/webhook-mode";
+import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { z } from "zod";
+
+// URL do webhook MOTOR OLÉ. DEVE ser configurada via secret N8N_MOTOR_POLICIES_URL
+// (use a URL de produção /webhook/..., não /webhook-test/...).
+
+export interface PolicyListItem {
+  id: string;
+  numero_apolice: string;
+  numero_endosso_atual: string | null;
+  premio_liquido: number;
+  premio_moeda: string;
+  endorsements_count: number;
+  updated_at: string;
+  segurado_nome: string | null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type JsonObject = Record<string, any>;
+
+export interface PolicyDetail {
+  id: string;
+  numero_apolice: string;
+  numero_endosso_atual: string | null;
+  premio_liquido: number;
+  premio_moeda: string;
+  proposta: JsonObject;
+  updated_at: string;
+  last_sync_at: string | null;
+  endorsements: Array<{
+    id: string;
+    numero_endosso: string;
+    premio_liquido: number;
+    premio_moeda: string;
+    ordem: number;
+    proposta: JsonObject;
+    created_at: string;
+  }>;
+}
+
+export interface PolicySyncStatus {
+  id: string;
+  status: string;
+  total_apolices: number;
+  error_message: string | null;
+  duration_ms: number | null;
+  finished_at: string | null;
+  emissoes_status: string;
+  emissoes_finished_at: string | null;
+  cobrancas_status: string;
+  cobrancas_finished_at: string | null;
+  cobrancas_total: number;
+}
+
+
+// Implementação interna (sem auth). Usada tanto pela serverFn protegida quanto
+// pelo hook público /api/public/hooks/policy-sync (que já valida shared-secret).
+export async function runPolicySyncImpl(webhookMode?: WebhookMode | null) {
+  const rawUrl = process.env.N8N_MOTOR_POLICIES_URL;
+  const url = rawUrl ? resolveWebhookUrl(rawUrl, webhookMode) : rawUrl;
+  if (!url) {
+    throw new Error(
+      "Secret N8N_MOTOR_POLICIES_URL ainda não configurada. Cole a URL do webhook do MOTOR OLÉ.",
+    );
+  }
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+  const { data: runRow, error: insertErr } = await supabaseAdmin
+    .from("policy_sync_runs")
+    .insert({ status: "running" } as never)
+    .select("id")
+    .single();
+
+  if (insertErr || !runRow) {
+    throw new Error("Falha ao criar run: " + (insertErr?.message ?? "sem id"));
+  }
+  const runId = (runRow as { id: string }).id;
+
+  const base =
+    process.env.PUBLIC_APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+  if (!base) throw new Error("PUBLIC_APP_URL não configurada e nenhuma URL da Vercel disponível.");
+  const normalizedBase = /^https?:\/\//.test(base) ? base : `https://${base}`;
+  const origin = normalizedBase.replace(/\/$/, "");
+  const callbackUrl = `${origin}/api/public/policy-sync-callback?run_id=${runId}`;
+  const callbackUrlCobrancas = `${origin}/api/public/billing-sync-callback?run_id=${runId}`;
+
+  // Mapa { numero_apolice: maior_sequencial_de_endosso } para o motor devolver
+  // apenas os endossos novos (sincronização incremental).
+  const ultimosEndossos: Record<string, number> = {};
+  try {
+    const { data: pols } = await supabaseAdmin
+      .from("policies")
+      .select("numero_apolice, numero_endosso_atual, endorsements(numero_endosso)");
+    for (const p of (pols ?? []) as Array<{
+      numero_apolice: string;
+      numero_endosso_atual: string | null;
+      endorsements: Array<{ numero_endosso: string }> | null;
+    }>) {
+      const nums = (p.endorsements ?? [])
+        .map((e) => parseInt(String(e.numero_endosso).replace(/\D/g, ""), 10))
+        .filter((n) => Number.isFinite(n));
+      const fromHead = p.numero_endosso_atual
+        ? parseInt(p.numero_endosso_atual.replace(/\D/g, ""), 10)
+        : NaN;
+      if (Number.isFinite(fromHead)) nums.push(fromHead);
+      ultimosEndossos[p.numero_apolice] = nums.length > 0 ? Math.max(...nums) : 0;
+    }
+  } catch (err) {
+    console.error("[policy-sync] falha ao montar ultimos_endossos_plataforma", err);
+  }
+
+  // Documentos ainda pendentes de cobrança: emissão Ativa + pagamento Aberto.
+  // Identificador = 24 primeiros dígitos da apólice + sequencial do endosso (6).
+  const documentosPendentes: string[] = [];
+  try {
+    const { data: billing } = await supabaseAdmin
+      .from("policy_billing")
+      .select("numero_apolice, numero_endosso, status_pagamento, situacao_emissao");
+    const seen = new Set<string>();
+    for (const b of (billing ?? []) as Array<{
+      numero_apolice: string;
+      numero_endosso: string;
+      status_pagamento: string | null;
+      situacao_emissao: string | null;
+    }>) {
+      const pago = (b.status_pagamento ?? "").trim().toLowerCase();
+      const situacao = (b.situacao_emissao ?? "").trim().toLowerCase();
+      if (!pago.startsWith("abert") || !situacao.startsWith("ativ")) continue;
+      const seq = String(b.numero_endosso).replace(/\D/g, "").slice(-6).padStart(6, "0");
+      const doc = b.numero_apolice.slice(0, -6) + seq;
+      if (!seen.has(doc)) {
+        seen.add(doc);
+        documentosPendentes.push(doc);
+      }
+    }
+  } catch (err) {
+    console.error("[policy-sync] falha ao montar documentos_pendentes_cobranca", err);
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        run_id: runId,
+        callback_url_emissoes: callbackUrl,
+        callback_url_cobrancas: callbackUrlCobrancas,
+        // Compatibilidade com o fluxo antigo do n8n.
+        callback_url: callbackUrl,
+        trigger: "ole-copilot-policies",
+        at: new Date().toISOString(),
+        ultimos_endossos_plataforma: ultimosEndossos,
+        documentos_pendentes_cobranca: documentosPendentes,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      const msg =
+        res.status === 404 && url.includes("/webhook-test/")
+          ? 'Webhook n8n (modo teste) não está escutando. Clique em "Listen for test event" no n8n.'
+          : `MOTOR OLÉ retornou ${res.status}: ${body.slice(0, 200)}`;
+      await supabaseAdmin
+        .from("policy_sync_runs")
+        .update({ status: "error", error_message: msg, finished_at: new Date().toISOString() } as never)
+        .eq("id", runId);
+      throw new Error(msg);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Falha de rede";
+    await supabaseAdmin
+      .from("policy_sync_runs")
+      .update({ status: "error", error_message: msg, finished_at: new Date().toISOString() } as never)
+      .eq("id", runId);
+    throw new Error(`Não foi possível disparar a sincronização: ${msg}`);
+  }
+
+  return { runId, status: "running" as const };
+}
+
+export const runPolicySync = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d?: { mode?: WebhookMode }) => d ?? {})
+  .handler(async ({ data }) => runPolicySyncImpl(data.mode));
+
+export const getPolicySyncStatus = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth])
+  .inputValidator((d: { runId: string }) => d)
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: row, error } = await supabaseAdmin
+      .from("policy_sync_runs")
+      .select(
+        "id, status, total_apolices, error_message, duration_ms, finished_at, emissoes_status, emissoes_finished_at, cobrancas_status, cobrancas_finished_at, cobrancas_total",
+      )
+      .eq("id", data.runId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return row as PolicySyncStatus | null;
+  });
+
+export const cancelPolicySync = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { runId: string }) => d)
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const now = new Date().toISOString();
+    const { error } = await supabaseAdmin
+      .from("policy_sync_runs")
+      .update({
+        status: "cancelled",
+        error_message: "Sincronização cancelada pelo usuário.",
+        finished_at: now,
+        emissoes_status: "cancelled",
+        cobrancas_status: "cancelled",
+        emissoes_finished_at: now,
+        cobrancas_finished_at: now,
+      } as never)
+      .eq("id", data.runId)
+      .eq("status", "running");
+    if (error) throw new Error(error.message);
+    return { ok: true };
+  });
+
+export const getLatestPolicySync = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth]).handler(async () => {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data, error } = await supabaseAdmin
+    .from("policy_sync_runs")
+    .select("id, status, total_apolices, finished_at, created_at, error_message")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  return data as {
+    id: string;
+    status: string;
+    total_apolices: number;
+    finished_at: string | null;
+    created_at: string;
+    error_message: string | null;
+  } | null;
+});
+
+export const getPolicies = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth]).handler(async () => {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { findSeguradoNome, computePremioLiquido, normalizeEndossoNum } = await import(
+    "@/lib/excelsior/translate"
+  );
+  const { data, error } = await supabaseAdmin
+    .from("policies")
+    .select(
+      "id, numero_apolice, numero_endosso_atual, premio_liquido, proposta, updated_at, endorsements(numero_endosso, ordem)",
+    )
+    .order("updated_at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return ((data ?? []) as Array<{
+    id: string;
+    numero_apolice: string;
+    numero_endosso_atual: string | null;
+    premio_liquido: number | string;
+    proposta: JsonObject | null;
+    updated_at: string;
+    endorsements: Array<{ numero_endosso: string; ordem: number }>;
+  }>).map((p) => {
+    const { valor, moeda } = computePremioLiquido(p.proposta ?? {});
+    const endos = p.endorsements ?? [];
+    // Último endosso = maior ordem (a apólice base tem ordem 0).
+    const ultimo = endos.reduce<{ numero_endosso: string; ordem: number } | null>(
+      (acc, e) => (acc && acc.ordem >= e.ordem ? acc : e),
+      null,
+    );
+    const ultimoNum = ultimo ? normalizeEndossoNum(ultimo.numero_endosso) : null;
+    return {
+      id: p.id,
+      numero_apolice: p.numero_apolice,
+      numero_endosso_atual: ultimoNum ?? p.numero_endosso_atual,
+      premio_liquido: valor,
+      premio_moeda: moeda,
+      endorsements_count: endos.length,
+      updated_at: p.updated_at,
+      segurado_nome: findSeguradoNome(p.proposta ?? {}),
+    };
+  }) as PolicyListItem[];
+});
+
+export const getPolicyByNumero = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth])
+  .inputValidator((d: { numero: string }) => d)
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: p, error } = await supabaseAdmin
+      .from("policies")
+      .select("id, numero_apolice, numero_endosso_atual, premio_liquido, proposta, updated_at, last_sync_run_id")
+      .eq("numero_apolice", data.numero)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!p) return null;
+
+    const row = p as {
+      id: string;
+      numero_apolice: string;
+      numero_endosso_atual: string | null;
+      premio_liquido: number | string;
+      proposta: Record<string, unknown>;
+      updated_at: string;
+      last_sync_run_id: string | null;
+    };
+
+    const { data: endos, error: errE } = await supabaseAdmin
+      .from("endorsements")
+      .select("id, numero_endosso, premio_liquido, ordem, proposta, created_at")
+      .eq("policy_id", row.id)
+      .order("ordem", { ascending: true });
+    if (errE) throw new Error(errE.message);
+
+    let lastSyncAt: string | null = null;
+    if (row.last_sync_run_id) {
+      const { data: run } = await supabaseAdmin
+        .from("policy_sync_runs")
+        .select("finished_at, created_at")
+        .eq("id", row.last_sync_run_id)
+        .maybeSingle();
+      const r = run as { finished_at: string | null; created_at: string } | null;
+      lastSyncAt = r?.finished_at ?? r?.created_at ?? null;
+    }
+
+    const { computePremioLiquido } = await import("@/lib/excelsior/translate");
+    const headPL = computePremioLiquido(row.proposta ?? {});
+    return {
+      id: row.id,
+      numero_apolice: row.numero_apolice,
+      numero_endosso_atual: row.numero_endosso_atual,
+      premio_liquido: headPL.valor,
+      premio_moeda: headPL.moeda,
+      proposta: row.proposta ?? {},
+      updated_at: row.updated_at,
+      last_sync_at: lastSyncAt,
+      endorsements: ((endos ?? []) as Array<{
+        id: string;
+        numero_endosso: string;
+        premio_liquido: number | string;
+        ordem: number;
+        proposta: Record<string, unknown>;
+        created_at: string;
+      }>).map((e) => {
+        const pl = computePremioLiquido(e.proposta ?? {});
+        return {
+          id: e.id,
+          numero_endosso: e.numero_endosso,
+          premio_liquido: pl.valor,
+          premio_moeda: pl.moeda,
+          ordem: e.ordem,
+          proposta: e.proposta ?? {},
+          created_at: e.created_at,
+        };
+      }),
+    } as unknown as PolicyDetail;
+  });
+
+export const getEndorsement = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth])
+  .inputValidator((d: { numero: string; endosso: string }) => d)
+  .handler(async ({ data }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: p } = await supabaseAdmin
+      .from("policies")
+      .select("id, numero_apolice")
+      .eq("numero_apolice", data.numero)
+      .maybeSingle();
+    if (!p) return null;
+    const policy = p as { id: string; numero_apolice: string };
+    const { data: e, error } = await supabaseAdmin
+      .from("endorsements")
+      .select("id, numero_endosso, premio_liquido, ordem, proposta, created_at")
+      .eq("policy_id", policy.id)
+      .eq("numero_endosso", data.endosso)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!e) return null;
+    const row = e as {
+      id: string;
+      numero_endosso: string;
+      premio_liquido: number | string;
+      ordem: number;
+      proposta: Record<string, unknown>;
+      created_at: string;
+    };
+    const { computePremioLiquido } = await import("@/lib/excelsior/translate");
+    const pl = computePremioLiquido(row.proposta ?? {});
+    return {
+      numero_apolice: policy.numero_apolice,
+      id: row.id,
+      numero_endosso: row.numero_endosso,
+      premio_liquido: pl.valor,
+      premio_moeda: pl.moeda,
+      ordem: row.ordem,
+      proposta: row.proposta ?? {},
+      created_at: row.created_at,
+    } as unknown as EndorsementDetail;
+  });
+
+export interface EndorsementDetail {
+  numero_apolice: string;
+  id: string;
+  numero_endosso: string;
+  premio_liquido: number;
+  premio_moeda: string;
+  ordem: number;
+  proposta: JsonObject;
+  created_at: string;
+}
+
+// Schema do callback do MOTOR OLÉ — tolerante a variações de nomes de chave.
+// `dados` pode ser: lista plana de endossos novos (formato atual) ou lista de
+// apólices com `historico_endossos` aninhado (formato antigo).
+export const PolicySyncCallbackSchema = z.object({
+  origem: z.string().optional(),
+  total_apolices: z.coerce.number().optional(),
+  total_endossos_novos: z.coerce.number().optional(),
+  dados: z
+    .array(z.record(z.string(), z.unknown()))
+    .optional()
+    .default([]),
+});
+
