@@ -67,6 +67,39 @@ export async function runPolicySyncImpl(webhookMode?: WebhookMode | null) {
   }
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
+  const syncStartedAt = new Date();
+  // A consulta de parcelas quitadas é incremental. Usamos a última perna de
+  // cobrança concluída com sucesso para não criar lacunas depois de uma falha.
+  // Na primeira execução, fazemos um lookback conservador de sete dias.
+  let billingWindowStart = new Date(syncStartedAt.getTime() - 7 * 24 * 60 * 60 * 1_000);
+  try {
+    const { data: previousBillingRun, error: previousBillingErr } = await supabaseAdmin
+      .from("policy_sync_runs")
+      .select("cobrancas_finished_at")
+      .eq("cobrancas_status", "success")
+      .not("cobrancas_finished_at", "is", null)
+      .order("cobrancas_finished_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (previousBillingErr) throw previousBillingErr;
+    const previousFinishedAt = (previousBillingRun as { cobrancas_finished_at: string | null } | null)
+      ?.cobrancas_finished_at;
+    if (previousFinishedAt) {
+      const parsed = new Date(previousFinishedAt);
+      if (!Number.isNaN(parsed.getTime())) billingWindowStart = parsed;
+    }
+  } catch (err) {
+    console.error("[policy-sync] falha ao calcular janela incremental de cobranças", err);
+  }
+
+  const billingWindow = {
+    inicio: billingWindowStart.toISOString().slice(0, 10),
+    fim: syncStartedAt.toISOString().slice(0, 10),
+    inicio_iso: billingWindowStart.toISOString(),
+    fim_iso: syncStartedAt.toISOString(),
+  };
+
   const { data: runRow, error: insertErr } = await supabaseAdmin
     .from("policy_sync_runs")
     .insert({ status: "running" } as never)
@@ -114,14 +147,27 @@ export async function runPolicySyncImpl(webhookMode?: WebhookMode | null) {
   // Documentos ainda pendentes de cobrança: emissão Ativa + pagamento Aberto.
   // Identificador = 24 primeiros dígitos da apólice + sequencial do endosso (6).
   const documentosPendentes: string[] = [];
+  const parcelasPendentes: Array<{
+    numero_documento: string;
+    numero_parcela: string;
+    id_parcela: string | null;
+    numero_proposta: string | null;
+    data_vencimento: string | null;
+  }> = [];
   try {
     const { data: billing } = await supabaseAdmin
       .from("policy_billing")
-      .select("numero_apolice, numero_endosso, status_pagamento, situacao_emissao");
+      .select(
+        "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, data_vencimento, status_pagamento, situacao_emissao",
+      );
     const seen = new Set<string>();
     for (const b of (billing ?? []) as Array<{
       numero_apolice: string;
       numero_endosso: string;
+      numero_parcela: string;
+      id_parcela_seguradora: string | null;
+      numero_proposta: string | null;
+      data_vencimento: string | null;
       status_pagamento: string | null;
       situacao_emissao: string | null;
     }>) {
@@ -130,6 +176,13 @@ export async function runPolicySyncImpl(webhookMode?: WebhookMode | null) {
       if (!pago.startsWith("abert") || !situacao.startsWith("ativ")) continue;
       const seq = String(b.numero_endosso).replace(/\D/g, "").slice(-6).padStart(6, "0");
       const doc = b.numero_apolice.slice(0, -6) + seq;
+      parcelasPendentes.push({
+        numero_documento: doc,
+        numero_parcela: b.numero_parcela,
+        id_parcela: b.id_parcela_seguradora,
+        numero_proposta: b.numero_proposta,
+        data_vencimento: b.data_vencimento,
+      });
       if (!seen.has(doc)) {
         seen.add(doc);
         documentosPendentes.push(doc);
@@ -153,6 +206,11 @@ export async function runPolicySyncImpl(webhookMode?: WebhookMode | null) {
         at: new Date().toISOString(),
         ultimos_endossos_plataforma: ultimosEndossos,
         documentos_pendentes_cobranca: documentosPendentes,
+        parcelas_abertas_cobranca: parcelasPendentes,
+        cobrancas_inicio: billingWindow.inicio,
+        cobrancas_fim: billingWindow.fim,
+        cobrancas_inicio_iso: billingWindow.inicio_iso,
+        cobrancas_fim_iso: billingWindow.fim_iso,
       }),
       signal: AbortSignal.timeout(30_000),
     });
