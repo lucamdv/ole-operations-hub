@@ -153,6 +153,8 @@ export async function runPolicySyncImpl(webhookMode?: WebhookMode | null) {
     id_parcela: string | null;
     numero_proposta: string | null;
     data_vencimento: string | null;
+    status_pagamento: string;
+    situacao_emissao: string;
   }> = [];
   try {
     const { data: billing } = await supabaseAdmin
@@ -182,6 +184,8 @@ export async function runPolicySyncImpl(webhookMode?: WebhookMode | null) {
         id_parcela: b.id_parcela_seguradora,
         numero_proposta: b.numero_proposta,
         data_vencimento: b.data_vencimento,
+        status_pagamento: b.status_pagamento ?? "Aberta",
+        situacao_emissao: b.situacao_emissao ?? "Ativa",
       });
       if (!seen.has(doc)) {
         seen.add(doc);
