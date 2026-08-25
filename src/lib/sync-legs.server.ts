@@ -36,7 +36,7 @@ export async function markSyncLeg(
 
   const done = (s: string) => s === "success" || s === "error";
   if (done(r.emissoes_status) && done(r.cobrancas_status)) {
-    const failed = r.emissoes_status === "error" && r.cobrancas_status === "error";
+    const failed = r.emissoes_status === "error" || r.cobrancas_status === "error";
     await supabaseAdmin
       .from("policy_sync_runs")
       .update({
