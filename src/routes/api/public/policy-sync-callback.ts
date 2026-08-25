@@ -111,7 +111,7 @@ export const Route = createFileRoute("/api/public/policy-sync-callback")({
         const startedAt = new Date((existing as { created_at: string }).created_at).getTime();
         const durationMs = Date.now() - startedAt;
 
-        const { normalizeEndossoNum } = await import("@/lib/excelsior/translate");
+        const { normalizeEndossoNum, unwrapProposta } = await import("@/lib/excelsior/translate");
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const pickNum = (o: any): string | undefined => {
@@ -119,11 +119,32 @@ export const Route = createFileRoute("/api/public/policy-sync-callback")({
             o?.numero_apolice_seguradora ?? o?.numero_apolice ?? o?.numeroApolice ?? undefined;
           return v === undefined || v === null ? undefined : String(v);
         };
+
+        // Extrai o sequencial do endosso de formatos diretos ou do número completo
+        // do documento. Respostas da Excelsior podem trazer o número apenas dentro
+        // do envelope endosso_A/B/C, por isso também reaproveitamos unwrapProposta.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const pickEnd = (o: any): string | null => {
-          const v =
+          const direct =
             o?.numero_endosso_seguradora ?? o?.numero_endosso ?? o?.numeroEndosso ?? null;
-          return v === undefined || v === null ? null : String(v);
+          if (direct !== undefined && direct !== null && String(direct).trim() !== "") {
+            return String(direct);
+          }
+
+          const fullDocument =
+            o?.numero_documento_seguradora ?? o?.numero_documento ?? o?.numeroDocumento ?? null;
+          if (fullDocument !== undefined && fullDocument !== null) {
+            const digits = String(fullDocument).replace(/\D/g, "");
+            if (digits.length >= 6) return digits.slice(-6);
+          }
+
+          const parsedProposal = unwrapProposta(o?.proposta ?? o);
+          if (parsedProposal.numeroDocumento) {
+            const digits = parsedProposal.numeroDocumento.replace(/\D/g, "");
+            if (digits.length >= 6) return digits.slice(-6);
+          }
+
+          return null;
         };
 
         type FlatEndo = {
@@ -149,9 +170,12 @@ export const Route = createFileRoute("/api/public/policy-sync-callback")({
             : null;
 
           if (historico) {
-            for (const e of historico) {
+            for (const [index, e] of historico.entries()) {
               const endRaw = pickEnd(e);
-              const num = normalizeEndossoNum(endRaw ?? "0");
+              // O MOTOR legado gera o histórico em ordem 0..N. O índice é somente
+              // o último fallback para não colapsar todos os endossos em 000000
+              // quando a API não expõe um campo de sequencial reconhecido.
+              const num = normalizeEndossoNum(endRaw ?? String(index));
               const isBase = num === "000000";
               const proposta = isBase
                 ? {
@@ -291,9 +315,6 @@ export const Route = createFileRoute("/api/public/policy-sync-callback")({
           insertedEndos += rows.length;
           processed++;
         }
-
-
-
 
         const { error: updErr } = await supabaseAdmin
           .from("policy_sync_runs")
