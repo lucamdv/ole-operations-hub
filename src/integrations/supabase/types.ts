@@ -466,8 +466,10 @@ export type Database = {
           data_quitacao: string | null
           data_vencimento: string | null
           id: string
+          id_parcela_seguradora: string | null
           numero_apolice: string
           numero_endosso: string
+          numero_parcela: string
           numero_proposta: string | null
           situacao_emissao: string
           status_pagamento: string
@@ -478,8 +480,10 @@ export type Database = {
           data_quitacao?: string | null
           data_vencimento?: string | null
           id?: string
+          id_parcela_seguradora?: string | null
           numero_apolice: string
           numero_endosso: string
+          numero_parcela: string
           numero_proposta?: string | null
           situacao_emissao: string
           status_pagamento: string
@@ -490,8 +494,10 @@ export type Database = {
           data_quitacao?: string | null
           data_vencimento?: string | null
           id?: string
+          id_parcela_seguradora?: string | null
           numero_apolice?: string
           numero_endosso?: string
+          numero_parcela?: string
           numero_proposta?: string | null
           situacao_emissao?: string
           status_pagamento?: string

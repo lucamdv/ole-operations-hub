@@ -3,9 +3,9 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import type { BillingRecord } from "@/lib/billing/status";
 
 const COLS =
-  "numero_apolice, numero_endosso, numero_proposta, status_pagamento, situacao_emissao, data_quitacao, data_vencimento";
+  "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_quitacao, data_vencimento";
 
-/** Cobranças (uma por endosso) de uma apólice. */
+/** Parcelas de cobrança de uma apólice. */
 export const getPolicyBilling = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { numero: string }) => d)
@@ -14,7 +14,8 @@ export const getPolicyBilling = createServerFn({ method: "GET" })
       .from("policy_billing")
       .select(COLS)
       .eq("numero_apolice", data.numero)
-      .order("numero_endosso", { ascending: true });
+      .order("numero_endosso", { ascending: true })
+      .order("numero_parcela", { ascending: true });
     if (error) throw new Error(error.message);
     return (rows ?? []) as BillingRecord[];
   });
@@ -26,7 +27,8 @@ export const getBillingIndex = createServerFn({ method: "GET" })
     const { data: rows, error } = await context.supabase
       .from("policy_billing")
       .select(COLS)
-      .order("numero_endosso", { ascending: true });
+      .order("numero_endosso", { ascending: true })
+      .order("numero_parcela", { ascending: true });
     if (error) throw new Error(error.message);
     return (rows ?? []) as BillingRecord[];
   });

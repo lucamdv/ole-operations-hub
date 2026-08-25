@@ -3,6 +3,8 @@
 export interface BillingRecord {
   numero_apolice: string;
   numero_endosso: string;
+  numero_parcela: string;
+  id_parcela_seguradora: string | null;
   numero_proposta: string | null;
   status_pagamento: string;
   situacao_emissao: string;
@@ -53,14 +55,38 @@ export function billingTagClass(tag: BillingTag): string {
   return TAG_STYLES[tag];
 }
 
-/** Cobrança vigente = registro com o maior sequencial de endosso. */
-export function currentBilling<T extends { numero_endosso: string }>(rows: T[]): T | null {
+function sequence(value: string): number {
+  return parseInt(String(value).replace(/\D/g, ""), 10) || 0;
+}
+
+/**
+ * Cobrança operacional vigente:
+ * - considera primeiro o endosso mais novo;
+ * - dentro dele prioriza parcela ativa em aberto, depois parcial;
+ * - se todas estiverem encerradas, usa a parcela de maior sequencial.
+ */
+export function currentBilling<
+  T extends {
+    numero_endosso: string;
+    numero_parcela?: string;
+    status_pagamento?: string | null;
+    situacao_emissao?: string | null;
+  },
+>(rows: T[]): T | null {
   if (!rows || rows.length === 0) return null;
-  return rows.reduce((acc, r) => {
-    const a = parseInt(String(acc.numero_endosso).replace(/\D/g, ""), 10) || 0;
-    const b = parseInt(String(r.numero_endosso).replace(/\D/g, ""), 10) || 0;
-    return b > a ? r : acc;
-  });
+  const latestEndorsement = Math.max(...rows.map((row) => sequence(row.numero_endosso)));
+  const latestRows = rows.filter((row) => sequence(row.numero_endosso) === latestEndorsement);
+  const open = latestRows.find(
+    (row) =>
+      norm(row.status_pagamento).startsWith("abert") &&
+      norm(row.situacao_emissao).startsWith("ativ"),
+  );
+  if (open) return open;
+  const partial = latestRows.find((row) => norm(row.status_pagamento).startsWith("parcial"));
+  if (partial) return partial;
+  return latestRows.reduce((acc, row) =>
+    sequence(row.numero_parcela ?? "") > sequence(acc.numero_parcela ?? "") ? row : acc,
+  );
 }
 
 export function normalizeBillingEndosso(numero: string): string {

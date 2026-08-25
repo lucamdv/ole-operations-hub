@@ -867,7 +867,7 @@ function statusPagamentoLabel(v: string | null | undefined): string {
   return v ?? "—";
 }
 
-/** Card de cobrança de um documento (apólice vigente ou endosso). */
+/** Card da parcela operacional vigente de um documento. */
 export function CobrancaCard({
   record,
   titulo = "Cobrança",
@@ -897,6 +897,7 @@ export function CobrancaCard({
         <Field label="Status do pagamento" value={statusPagamentoLabel(record.status_pagamento)} />
         <Field label="Situação da emissão" value={record.situacao_emissao || "—"} />
         <Field label="Nº da proposta" value={record.numero_proposta ?? "—"} mono />
+        <Field label="Parcela" value={record.numero_parcela} mono />
         <Field label="Vencimento" value={fmtDateOnly(record.data_vencimento)} mono />
         <Field label="Quitação" value={fmtDate(record.data_quitacao)} mono />
         <Field label="Endosso" value={record.numero_endosso} mono />
@@ -905,7 +906,7 @@ export function CobrancaCard({
   );
 }
 
-/** Histórico de cobranças por endosso da apólice, com filtros por tag e situação. */
+/** Histórico de parcelas por endosso da apólice, com filtros por tag e situação. */
 export function CobrancasList({ rows: allRows }: { rows: BillingRecord[] }) {
   const [tags, setTags] = useState<BillingTag[]>([]);
   const [situacao, setSituacao] = useState<SituacaoFilter>("todas");
@@ -938,7 +939,8 @@ export function CobrancasList({ rows: allRows }: { rows: BillingRecord[] }) {
       </div>
       <div className="grid grid-cols-12 px-4 py-2.5 text-[10.5px] uppercase tracking-wider text-muted-foreground bg-surface-2/60 border-b border-border">
         <div className="col-span-2">Endosso</div>
-        <div className="col-span-3">Proposta</div>
+        <div className="col-span-1">Parcela</div>
+        <div className="col-span-2">Proposta</div>
         <div className="col-span-2">Status</div>
         <div className="col-span-2 text-right">Vencimento</div>
         <div className="col-span-3 text-right">Quitação</div>
@@ -951,11 +953,12 @@ export function CobrancasList({ rows: allRows }: { rows: BillingRecord[] }) {
 
       {rows.map((r) => (
         <div
-          key={`${r.numero_apolice}-${r.numero_endosso}`}
+          key={`${r.numero_apolice}-${r.numero_endosso}-${r.numero_parcela}`}
           className="grid grid-cols-12 items-center px-4 py-2.5 border-b border-border/40 last:border-0 text-[12px]"
         >
           <div className="col-span-2 font-mono text-muted-foreground">{r.numero_endosso}</div>
-          <div className="col-span-3 font-mono text-[11.5px] text-muted-foreground truncate">
+          <div className="col-span-1 font-mono text-muted-foreground">{r.numero_parcela}</div>
+          <div className="col-span-2 font-mono text-[11.5px] text-muted-foreground truncate">
             {r.numero_proposta ?? "—"}
           </div>
           <div className="col-span-2">

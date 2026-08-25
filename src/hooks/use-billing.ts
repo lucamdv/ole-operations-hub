@@ -15,7 +15,7 @@ export const billingIndexQuery = queryOptions({
   staleTime: 60_000,
 });
 
-/** Cobranças de uma apólice, ordenadas por sequencial de endosso. */
+/** Parcelas de uma apólice, ordenadas por endosso e parcela. */
 export function usePolicyBilling(numero: string | undefined) {
   const query = useQuery({
     queryKey: ["billing", "policy", numero] as const,
@@ -26,11 +26,16 @@ export function usePolicyBilling(numero: string | undefined) {
 
   const rows = useMemo<BillingRecord[]>(() => {
     const list = query.data ?? [];
-    return [...list].sort(
-      (a, b) =>
+    return [...list].sort((a, b) => {
+      const endorsement =
         (parseInt(a.numero_endosso.replace(/\D/g, ""), 10) || 0) -
-        (parseInt(b.numero_endosso.replace(/\D/g, ""), 10) || 0),
-    );
+        (parseInt(b.numero_endosso.replace(/\D/g, ""), 10) || 0);
+      if (endorsement !== 0) return endorsement;
+      return (
+        (parseInt(a.numero_parcela.replace(/\D/g, ""), 10) || 0) -
+        (parseInt(b.numero_parcela.replace(/\D/g, ""), 10) || 0)
+      );
+    });
   }, [query.data]);
 
   const vigente = useMemo(() => currentBilling(rows), [rows]);
@@ -38,14 +43,14 @@ export function usePolicyBilling(numero: string | undefined) {
   return { ...query, rows, vigente };
 }
 
-/** Cobrança de um endosso específico. */
+/** Cobrança operacional vigente dentro de um endosso específico. */
 export function useEndorsementBilling(numero: string | undefined, endosso: string | undefined) {
   const { rows, isLoading } = usePolicyBilling(numero);
   const seq = endosso ? normalizeBillingEndosso(endosso) : null;
-  const record = useMemo(
-    () => (seq ? (rows.find((r) => normalizeBillingEndosso(r.numero_endosso) === seq) ?? null) : null),
-    [rows, seq],
-  );
+  const record = useMemo(() => {
+    if (!seq) return null;
+    return currentBilling(rows.filter((r) => normalizeBillingEndosso(r.numero_endosso) === seq));
+  }, [rows, seq]);
   return { record, isLoading };
 }
 
@@ -86,4 +91,3 @@ export function useBillingTagMap() {
   }, [query.data]);
   return { map, infoMap, isLoading: query.isLoading };
 }
-
