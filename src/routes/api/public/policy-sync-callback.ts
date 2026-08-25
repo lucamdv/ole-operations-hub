@@ -15,6 +15,137 @@ function json(body: unknown, status = 200) {
   });
 }
 
+type JsonMap = Record<string, any>;
+
+const isPlainObject = (value: unknown): value is JsonMap =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+
+const hasMeaningfulValue = (value: unknown) =>
+  value !== undefined && value !== null && value !== "";
+
+/**
+ * Campos que pertencem ao documento específico (apólice/endosso), e não ao
+ * estado consolidado da apólice. Um endosso nunca deve sobrescrevê-los no
+ * registro principal de `policies`.
+ *
+ * Importante: `datas` aqui é SOMENTE o objeto de datas no topo da proposta.
+ * Datas de coberturas ficam dentro de `itens[].coberturas[].datas` e continuam
+ * sendo atualizadas normalmente pelos endossos.
+ */
+const DOCUMENT_ONLY_ROOT_FIELDS = new Set([
+  "datas",
+  "data_emissao",
+  "motivo_endosso",
+  "descricao_motivo_endosso",
+  "tipo_cancelamento",
+  "numero_endosso_cancelado",
+  "numero_documento_seguradora",
+  "numero_endosso_seguradora",
+  "numero_apolice_seguradora",
+  "numero_proposta_seguradora",
+  "id_proposta_origem",
+]);
+
+function arrayIdentity(item: unknown, field: string): string | null {
+  if (!isPlainObject(item)) return null;
+
+  const candidates: Record<string, unknown[]> = {
+    partes: [
+      item.id_pessoa,
+      item.id_pessoa_origem,
+      item.numero_documento,
+      item.nome_pessoa && item.papel_parte ? `${item.papel_parte}:${item.nome_pessoa}` : null,
+    ],
+    itens: [item.numero_item, item.id_item, item.id_item_origem],
+    coberturas: [item.codigo_cobertura, item.id_cobertura, item.nome_cobertura],
+    parcelas: [item.numero_parcela, item.id_parcela],
+  };
+
+  for (const value of candidates[field] ?? []) {
+    if (hasMeaningfulValue(value)) return String(value);
+  }
+  return null;
+}
+
+/**
+ * Faz merge de arrays de entidades conhecidas sem apagar registros que não
+ * apareceram em um endosso parcial. Para arrays sem identidade estável, uma
+ * lista nova e não vazia substitui a anterior.
+ */
+function mergeArray(base: unknown[], incoming: unknown[], field: string, path: string[]): unknown[] {
+  if (incoming.length === 0) return base;
+
+  const supportsEntityMerge = ["partes", "itens", "coberturas", "parcelas"].includes(field);
+  if (!supportsEntityMerge) return incoming;
+
+  const result = [...base];
+  const positions = new Map<string, number>();
+
+  result.forEach((item, index) => {
+    const id = arrayIdentity(item, field);
+    if (id) positions.set(id, index);
+  });
+
+  for (const incomingItem of incoming) {
+    const id = arrayIdentity(incomingItem, field);
+    if (!id) {
+      result.push(incomingItem);
+      continue;
+    }
+
+    const position = positions.get(id);
+    if (position === undefined) {
+      positions.set(id, result.length);
+      result.push(incomingItem);
+      continue;
+    }
+
+    result[position] = mergeCanonicalValue(
+      result[position],
+      incomingItem,
+      [...path, `${field}[${id}]`],
+    );
+  }
+
+  return result;
+}
+
+/**
+ * Merge orientado à regra de negócio:
+ * - valores ausentes no endosso herdam o estado anterior;
+ * - objetos parciais são mesclados recursivamente;
+ * - entidades como itens/coberturas/partes são mescladas por identidade;
+ * - campos exclusivos do documento não contaminam a proposta consolidada.
+ */
+function mergeCanonicalValue(base: unknown, incoming: unknown, path: string[] = []): unknown {
+  if (!hasMeaningfulValue(incoming)) return base;
+
+  if (Array.isArray(incoming)) {
+    const baseArray = Array.isArray(base) ? base : [];
+    const field = path[path.length - 1] ?? "";
+    return mergeArray(baseArray, incoming, field, path.slice(0, -1));
+  }
+
+  if (isPlainObject(incoming)) {
+    const result: JsonMap = isPlainObject(base) ? { ...base } : {};
+    const isRoot = path.length === 0;
+
+    for (const [key, value] of Object.entries(incoming)) {
+      if (isRoot && DOCUMENT_ONLY_ROOT_FIELDS.has(key)) continue;
+
+      // Em alguns endossos `pagamento` aparece como metadado textual do motivo
+      // do endosso. Só aceitamos `pagamento` no consolidado quando ele realmente
+      // é o objeto de pagamento/parcelas da proposta.
+      if (isRoot && key === "pagamento" && !isPlainObject(value)) continue;
+
+      result[key] = mergeCanonicalValue(result[key], value, [...path, key]);
+    }
+    return result;
+  }
+
+  return incoming;
+}
+
 export const Route = createFileRoute("/api/public/policy-sync-callback")({
   server: {
     handlers: {
@@ -152,6 +283,7 @@ export const Route = createFileRoute("/api/public/policy-sync-callback")({
           num: string;
           seq: number;
           premio: number;
+          // Payload bruto do documento; `endorsements` preserva isso integralmente.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           proposta: any;
         };
@@ -224,16 +356,21 @@ export const Route = createFileRoute("/api/public/policy-sync-callback")({
 
         for (const [numero, endoMap] of byPolicy) {
           const endos = [...endoMap.values()].sort((a, b) => a.seq - b.seq);
-          // Endosso de maior sequencial dita os dados "atuais" da apólice.
+          // Endosso de maior sequencial dita qual é o documento atual, mas NÃO
+          // substitui sozinho a proposta consolidada da apólice.
           const top = endos[endos.length - 1]!;
 
           const { data: existingPolicy } = await supabaseAdmin
             .from("policies")
-            .select("id, numero_endosso_atual")
+            .select("id, numero_endosso_atual, proposta")
             .eq("numero_apolice", numero)
             .maybeSingle();
           const existingRow = existingPolicy as
-            | { id: string; numero_endosso_atual: string | null }
+            | {
+                id: string;
+                numero_endosso_atual: string | null;
+                proposta: Record<string, unknown> | null;
+              }
             | null;
 
           const existingSeq = existingRow?.numero_endosso_atual
@@ -245,16 +382,38 @@ export const Route = createFileRoute("/api/public/policy-sync-callback")({
             ? top.num
             : (existingRow?.numero_endosso_atual ?? top.num);
 
+          /*
+           * Estado canônico da apólice:
+           * 1. Se a emissão 000000 veio no payload, ela é a base preferencial.
+           * 2. Em sincronizações incrementais sem 000000, reutilizamos o estado já
+           *    consolidado da policy.
+           * 3. Aplicamos os endossos em ordem, preenchendo/atualizando apenas os
+           *    campos de estado. Campos exclusivos do documento ficam preservados
+           *    somente em `endorsements.proposta`.
+           */
+          const baseDocument = endos.find((e) => e.num === "000000");
+          const baseProposal = baseDocument
+            ? unwrapProposta(baseDocument.proposta ?? {}).proposta
+            : (existingRow?.proposta ?? {});
+
+          let canonicalProposal: unknown = { ...(baseProposal ?? {}) };
+          for (const endorsement of endos) {
+            if (endorsement.num === "000000") continue;
+            const endorsementProposal = unwrapProposta(endorsement.proposta ?? {}).proposta;
+            canonicalProposal = mergeCanonicalValue(canonicalProposal, endorsementProposal);
+          }
+
           const patch: Record<string, unknown> = {
             numero_apolice: numero,
             numero_endosso_atual: endossoAtualFinal,
             last_sync_run_id: runId,
             updated_at: new Date().toISOString(),
           };
-          // Só atualiza conteúdo quando o endosso recebido é o mais novo.
+          // Só atualiza o estado da apólice quando o lote contém o documento mais
+          // novo (ou o mesmo sequencial para permitir reconstruções/correções).
           if (isNewer) {
             patch.premio_liquido = top.premio;
-            patch.proposta = top.proposta ?? {};
+            patch.proposta = canonicalProposal ?? {};
           }
 
           const { data: up, error: upErr } = await supabaseAdmin
@@ -268,6 +427,9 @@ export const Route = createFileRoute("/api/public/policy-sync-callback")({
           }
           const policyId = (up as { id: string }).id;
 
+          // Histórico documental: cada endosso continua bruto e independente.
+          // Assim motivo, datas próprias do endosso e demais metadados nunca são
+          // perdidos pelo processo de consolidação da `policies.proposta`.
           const rows = endos.map((e) => ({
             policy_id: policyId,
             numero_apolice: numero,
