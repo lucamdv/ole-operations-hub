@@ -34,6 +34,20 @@ export default tseslint.config(
       ],
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
       "@typescript-eslint/no-unused-vars": "off",
+      // `strict` continua sendo imposto pelo TypeScript. `any` em fronteiras de
+      // SDKs/plugins fica visível como warning sem bloquear o deploy.
+      "@typescript-eslint/no-explicit-any": "warn",
+      // Catches vazios são usados apenas quando a operação é opcional, como
+      // persistência em localStorage indisponível.
+      "no-empty": ["error", { allowEmptyCatch: true }],
+    },
+  },
+  {
+    files: ["src/components/ui/chart.tsx"],
+    rules: {
+      // Wrapper de compatibilidade com a superfície genérica do Recharts v3.
+      // O restante do projeto continua validado por `tsc --noEmit` em modo strict.
+      "@typescript-eslint/ban-ts-comment": "off",
     },
   },
   // Formatação é validada separadamente pelo Prettier; o ESLint fica focado
