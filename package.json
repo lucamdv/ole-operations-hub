@@ -9,7 +9,13 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:static",
+    "test:static": "node --test tests/architecture.test.mjs",
+    "test:smoke": "node --test tests/smoke.test.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "ci": "npm run test:static && npm run typecheck && npm run lint && npm run build"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.2.2",
