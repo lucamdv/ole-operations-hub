@@ -1,8 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/public/hooks/scheduler",
-      "schedule": "*/5 * * * *"
-    }
-  ]
-}
+{}
