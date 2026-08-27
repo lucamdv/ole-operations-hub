@@ -116,10 +116,30 @@ function updatedAtValue(row: { updated_at?: string | null }): number {
   return Number.isFinite(value) ? value : 0;
 }
 
+function billingRecordCompleteness(row: BillingRecord): number {
+  return [
+    row.id_parcela_seguradora,
+    row.numero_proposta,
+    row.data_vencimento,
+    row.data_quitacao,
+  ].filter((value) => value !== null && String(value).trim() !== "").length;
+}
+
 function preferredBillingRecord<T extends BillingRecord>(current: T, candidate: T): T {
   const currentLegacy = isLegacyInstallment(current.numero_parcela);
   const candidateLegacy = isLegacyInstallment(candidate.numero_parcela);
   if (currentLegacy !== candidateLegacy) return candidateLegacy ? current : candidate;
+
+  // Registros LEGACY vieram do modelo agregado anterior. Quando o mesmo
+  // documento existe nos formatos longo e sequencial, preservamos a versão
+  // com proposta/datas em vez da cópia vazia mais recente.
+  if (currentLegacy && candidateLegacy) {
+    const currentCompleteness = billingRecordCompleteness(current);
+    const candidateCompleteness = billingRecordCompleteness(candidate);
+    if (currentCompleteness !== candidateCompleteness) {
+      return candidateCompleteness > currentCompleteness ? candidate : current;
+    }
+  }
 
   const currentUpdated = updatedAtValue(current);
   const candidateUpdated = updatedAtValue(candidate);
@@ -211,24 +231,24 @@ export function dedupeBillingRecords<T extends BillingRecord>(rows: T[]): T[] {
       continue;
     }
 
+    const currentDocumentMatches = result
+      .map((row, index) => ({ row, index }))
+      .filter(
+        ({ row }) =>
+          billingDocumentKey(row) === document && !isLegacyInstallment(row.numero_parcela),
+      );
+    // Uma única parcela numerada substitui inequivocamente o agregado antigo,
+    // inclusive quando o LEGACY não possuía vencimento/proposta preenchidos.
+    if (currentDocumentMatches.length === 1) continue;
+
     const dueDateMatches = legacy.data_vencimento
-      ? result
-          .map((row, index) => ({ row, index }))
-          .filter(
-            ({ row }) =>
-              billingDocumentKey(row) === document &&
-              !isLegacyInstallment(row.numero_parcela) &&
-              row.data_vencimento === legacy.data_vencimento,
-          )
+      ? currentDocumentMatches.filter(({ row }) => row.data_vencimento === legacy.data_vencimento)
       : [];
     if (dueDateMatches.length === 1) continue;
 
-    const legacyIdentity = [
-      document,
-      "legacy",
-      legacy.numero_proposta ?? "",
-      legacy.data_vencimento ?? "",
-    ].join("#");
+    // LEGACY representava o documento agregado, não uma parcela individual.
+    // Portanto só pode restar um registro histórico por documento.
+    const legacyIdentity = `${document}#legacy`;
     const existingPosition = identityPositions.get(legacyIdentity);
     if (existingPosition === undefined) {
       identityPositions.set(legacyIdentity, result.length);
@@ -241,7 +261,7 @@ export function dedupeBillingRecords<T extends BillingRecord>(rows: T[]): T[] {
   return result;
 }
 
-/** Rótulo amigável para registros anteriores à identificação individual de parcelas. */
+/** Oculta o marcador técnico sem remover o registro histórico. */
 export function billingInstallmentLabel(value: string): string {
-  return isLegacyInstallment(value) ? "Histórica" : value;
+  return isLegacyInstallment(value) ? "—" : value;
 }

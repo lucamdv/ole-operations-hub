@@ -7,11 +7,18 @@ import {
   dedupeBillingItems,
   extractBasePolicies,
   normalizeBillingResponse,
+  normalizeBillingInstallmentNumber,
   normalizeEmissionDocument,
   planBillingRefresh,
   selectMissingEndorsementDocuments,
   selectBillingDocumentsToRefresh,
 } from "../src/lib/excelsior/motor-sync.core.ts";
+
+test("sequenciais numéricos de parcela têm uma identidade canônica", () => {
+  assert.equal(normalizeBillingInstallmentNumber("0001"), "1");
+  assert.equal(normalizeBillingInstallmentNumber(2), "2");
+  assert.equal(normalizeBillingInstallmentNumber("parcela-001"), "parcela-001");
+});
 
 test("seleciona apenas apólices base e enumera todos os documentos até o último endosso", () => {
   const policies = extractBasePolicies({

@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
+import { normalizeBillingInstallmentNumber } from "@/lib/excelsior/motor-sync.core";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -170,8 +171,11 @@ async function handleBillingSyncCallback(
     const dataVencimento = toDateOnly(item.data_vencimento);
     // Proposta + vencimento é apenas fallback para APIs antigas que ainda
     // não expõem um sequencial; nunca voltamos a agrupar só por endosso.
+    const parcelaText = identityText(parcelaRaw);
     const numeroParcela =
-      identityText(parcelaRaw) ??
+      (parcelaText && parcelaText === idParcela
+        ? idParcela
+        : normalizeBillingInstallmentNumber(parcelaText)) ??
       idParcela ??
       (numeroProposta && dataVencimento ? `${numeroProposta}@${dataVencimento}` : null);
     if (!numeroParcela) {

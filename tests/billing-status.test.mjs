@@ -55,7 +55,7 @@ test("id da seguradora liga uma identidade antiga à parcela numerada atual", ()
   assert.equal(rows[0]?.numero_parcela, "1");
 });
 
-test("LEGACY correspondente é ocultado, mas histórico sem correspondência é preservado", () => {
+test("LEGACY é substituído por uma única parcela numerada do mesmo documento", () => {
   const matched = dedupeBillingRecords([
     billing({ numero_endosso: "123456000001", numero_parcela: "LEGACY" }),
     billing(),
@@ -63,12 +63,50 @@ test("LEGACY correspondente é ocultado, mas histórico sem correspondência é 
   assert.equal(matched.length, 1);
   assert.equal(matched[0]?.numero_parcela, "1");
 
-  const unmatched = dedupeBillingRecords([
-    billing({ numero_parcela: "LEGACY", data_vencimento: "2026-07-10" }),
+  const withoutDates = dedupeBillingRecords([
+    billing({
+      numero_parcela: "LEGACY",
+      numero_proposta: null,
+      data_vencimento: null,
+    }),
     billing(),
   ]);
-  assert.equal(unmatched.length, 2);
-  assert.equal(billingInstallmentLabel("LEGACY"), "Histórica");
+  assert.equal(withoutDates.length, 1);
+  assert.equal(withoutDates[0]?.numero_parcela, "1");
+  assert.equal(billingInstallmentLabel("LEGACY"), "—");
+});
+
+test("LEGACY sem substituto é preservado sem rótulo técnico e sem cópia vazia", () => {
+  const rows = dedupeBillingRecords([
+    billing({
+      numero_endosso: "123456000001",
+      numero_parcela: "LEGACY",
+      numero_proposta: "PROP-HIST",
+      data_vencimento: "2026-07-10",
+      updated_at: "2026-08-18T12:00:00Z",
+    }),
+    billing({
+      numero_endosso: "000001",
+      numero_parcela: "LEGACY",
+      numero_proposta: null,
+      data_vencimento: null,
+      updated_at: "2026-08-22T12:00:00Z",
+    }),
+  ]);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.numero_proposta, "PROP-HIST");
+  assert.equal(billingInstallmentLabel(rows[0]?.numero_parcela ?? ""), "—");
+});
+
+test("LEGACY ambíguo é preservado quando há várias parcelas numeradas", () => {
+  const rows = dedupeBillingRecords([
+    billing({ numero_parcela: "LEGACY", data_vencimento: "2026-07-10" }),
+    billing({ numero_parcela: "1", data_vencimento: "2026-08-10" }),
+    billing({ numero_parcela: "2", data_vencimento: "2026-09-10" }),
+  ]);
+
+  assert.equal(rows.length, 3);
 });
 
 test("parcelas diferentes com o mesmo vencimento não são colapsadas", () => {

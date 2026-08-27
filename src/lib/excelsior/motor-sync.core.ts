@@ -57,6 +57,13 @@ function optionalText(value: unknown): string | null {
   return text || null;
 }
 
+/** Canoniza sequenciais numéricos sem alterar identificadores alfanuméricos. */
+export function normalizeBillingInstallmentNumber(value: unknown): string | null {
+  const text = normalizedText(value);
+  if (!text) return null;
+  return /^\d+$/.test(text) ? text.replace(/^0+(?=\d)/, "") : text;
+}
+
 export function billingDocumentNumber(value: unknown): string | null {
   if (typeof value === "string" || typeof value === "number") {
     return normalizedText(value) || null;
@@ -319,11 +326,16 @@ export function normalizeBillingResponse(
         ? `${String(item.numero_proposta)}@${String(item.data_vencimento)}`
         : String(index + 1);
 
+    const installmentNumber =
+      explicitNumber !== null
+        ? normalizeBillingInstallmentNumber(explicitNumber)
+        : normalizedText(installmentId ?? fallback);
+
     return [
       {
         numero_documento: document,
         numero_endosso: optionalText(item.numero_endosso ?? item.numero_endosso_seguradora),
-        numero_parcela: String(explicitNumber ?? installmentId ?? fallback),
+        numero_parcela: installmentNumber!,
         id_parcela: installmentId == null ? null : String(installmentId),
         numero_proposta: optionalText(item.numero_proposta),
         status_pagamento: normalizedText(
@@ -341,8 +353,12 @@ export function normalizeBillingResponse(
 export function dedupeBillingItems(items: NormalizedBillingItem[]) {
   const byInstallment = new Map<string, NormalizedBillingItem>();
   for (const item of items) {
-    const identity = item.id_parcela || item.numero_parcela;
-    byInstallment.set(`${item.numero_documento}#${identity}`, item);
+    const document = item.numero_documento.replace(/\D/g, "") || item.numero_documento.trim();
+    const identity =
+      item.id_parcela ||
+      normalizeBillingInstallmentNumber(item.numero_parcela) ||
+      item.numero_parcela;
+    byInstallment.set(`${document}#${identity}`, item);
   }
   return [...byInstallment.values()];
 }
