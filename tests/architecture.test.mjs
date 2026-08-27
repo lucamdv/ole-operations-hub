@@ -118,6 +118,13 @@ test("motor direto cobre emissões, contratos, cobrança aberta, individual e qu
   assert.match(source, /"Consulta de emissão", url, \{ method: "GET" \}/);
 });
 
+test("falha de um detalhe de cobrança preserva dados locais sem derrubar o lote", async () => {
+  const source = await read("src/lib/excelsior/motor-sync.server.ts");
+  assert.match(source, /detalhes individuais indisponíveis; dados locais preservados/);
+  assert.match(source, /context\.openInstallments\.filter/);
+  assert.match(source, /falhasIndividuais: detailFailures\.length/);
+});
+
 test("emissões consultam somente documentos ausentes na plataforma", async () => {
   const source = await read("src/lib/excelsior/motor-sync.server.ts");
   assert.match(source, /endorsements\(numero_endosso\)/);

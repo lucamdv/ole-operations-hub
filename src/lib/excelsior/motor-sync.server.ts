@@ -232,16 +232,38 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
     { defaultPaymentStatus: "Aberta" },
   );
   const billingConcurrency = concurrencyFromEnv("EXCELSIOR_BILLING_CONCURRENCY", 4);
-  const individualGroups = await mapWithConcurrency(
+  const individualResults = await mapWithConcurrency(
     plan.detailDocuments,
     billingConcurrency,
     async (documentNumber) => {
       await assertRunActive(runId);
-      const response = await client.getBillingDocument(documentNumber);
-      return normalizeBillingResponse(response, {
-        fallbackDocument: documentNumber,
-        defaultPaymentStatus: "Aberta",
-      });
+      try {
+        const response = await client.getBillingDocument(documentNumber);
+        return {
+          updates: normalizeBillingResponse(response, {
+            fallbackDocument: documentNumber,
+            defaultPaymentStatus: "Aberta",
+          }),
+          failure: null,
+        };
+      } catch (error) {
+        // O lote de abertas/quitadas é a fonte principal. Se um detalhe isolado
+        // falhar, preservamos as parcelas locais desse documento e seguimos com
+        // as demais atualizações, em vez de invalidar toda a sincronização.
+        const localFallback = context.openInstallments.filter(
+          (item) => item.numero_documento === documentNumber,
+        );
+        return {
+          updates: normalizeBillingResponse(
+            { items: localFallback },
+            { fallbackDocument: documentNumber, defaultPaymentStatus: "Aberta" },
+          ),
+          failure: {
+            documentNumber,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
     },
   );
 
@@ -249,13 +271,26 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
   const settled = normalizeBillingResponse(settledResponse, {
     defaultPaymentStatus: "Total",
   });
-  const updates = dedupeBillingItems([...directOpen, ...individualGroups.flat(), ...settled]);
+  const individual = individualResults.flatMap((result) => result.updates);
+  const detailFailures = individualResults
+    .map((result) => result.failure)
+    .filter((failure): failure is NonNullable<typeof failure> => failure !== null);
+  const updates = dedupeBillingItems([...directOpen, ...individual, ...settled]);
+
+  if (detailFailures.length > 0) {
+    console.warn("[motor-sync][billing] detalhes individuais indisponíveis; dados locais preservados", {
+      quantidade: detailFailures.length,
+      documentos: detailFailures.slice(0, 10).map((failure) => failure.documentNumber),
+      erros: detailFailures.slice(0, 3).map((failure) => failure.message),
+    });
+  }
 
   console.info("[motor-sync][billing] plano concluído", {
     abertasLocais: context.openInstallments.length,
     abertasEmLote: flattenApiItems(openResponse).length,
     abertasAproveitadas: directOpen.length,
     consultasIndividuais: plan.detailDocuments.length,
+    falhasIndividuais: detailFailures.length,
     quitadasNoIntervalo: settled.length,
     atualizacoes: updates.length,
     duracaoMs: Date.now() - billingStartedAt,

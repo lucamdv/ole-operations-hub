@@ -292,9 +292,10 @@ export class ExcelsiorMotorClient {
       `/backoffice/cobranca/parcelas/${encodeURIComponent(documentNumber)}/1`,
       this.config.servicesBaseUrl,
     );
-    return this.authorizedRequest("Consulta individual de cobrança", url, {}, {
-      attempts: 2,
-      timeoutMs: this.config.billingRequestTimeoutMs,
+    // O detalhe é apenas um fallback para itens incompletos da listagem em lote.
+    // Não deve bloquear toda a carteira quando um documento isolado fica preso.
+    return this.authorizedRequest(`Consulta individual de cobrança ${documentNumber}`, url, {}, {
+      attempts: 1,
     });
   }
 
