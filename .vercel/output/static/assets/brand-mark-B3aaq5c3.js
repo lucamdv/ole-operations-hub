@@ -1,1 +1,0 @@
-import{j as t,e as a}from"./index-B-AJjXUD.js";const c="/__l5e/assets-v1/780bc76b-664a-436b-95c9-c956dd603c74/olex.png",n={url:c};function l({className:s,height:e=32}){return t.jsx("img",{src:n.url,alt:"Oléx",style:{height:e,width:"auto"},className:a("object-contain select-none",s),draggable:!1})}export{l as B};
