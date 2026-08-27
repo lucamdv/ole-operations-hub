@@ -104,6 +104,8 @@ test("motor usa o host direto da Excelsior em todas as chamadas", async () => {
   assert.doesNotMatch(source, /this\.config\.contractsBaseUrl/);
   assert.equal((source.match(/this\.config\.servicesBaseUrl/g) ?? []).length, 7);
   assert.match(source, /EXCELSIOR_SERVICES_BASE_URL/);
+  assert.match(source, /EXCELSIOR_BILLING_REQUEST_TIMEOUT_MS/);
+  assert.match(source, /billingRequestTimeoutMs/);
 });
 
 test("motor direto cobre emissões, contratos, cobrança aberta, individual e quitada", async () => {

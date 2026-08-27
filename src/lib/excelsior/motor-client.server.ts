@@ -12,6 +12,7 @@ interface MotorClientConfig {
   servicesBaseUrl: string;
   systemId: string;
   requestTimeoutMs: number;
+  billingRequestTimeoutMs: number;
 }
 
 function positiveInteger(value: string | undefined, fallback: number) {
@@ -38,6 +39,7 @@ export function getExcelsiorMotorConfig(): MotorClientConfig {
     throw new Error(`Credenciais da API Excelsior não configuradas: ${missing.join(", ")}.`);
   }
 
+  const requestTimeoutMs = positiveInteger(process.env.EXCELSIOR_REQUEST_TIMEOUT_MS, 30_000);
   return {
     username: username!,
     password: password!,
@@ -50,7 +52,13 @@ export function getExcelsiorMotorConfig(): MotorClientConfig {
       "EXCELSIOR_SERVICES_BASE_URL",
     ),
     systemId: process.env.EXCELSIOR_SYSTEM_ID?.trim() || "1009",
-    requestTimeoutMs: positiveInteger(process.env.EXCELSIOR_REQUEST_TIMEOUT_MS, 30_000),
+    requestTimeoutMs,
+    // As listagens de cobrança são relatórios maiores e, em produção, podem
+    // ultrapassar os 30 s usados pelas consultas unitárias do MOTOR.
+    billingRequestTimeoutMs: positiveInteger(
+      process.env.EXCELSIOR_BILLING_REQUEST_TIMEOUT_MS,
+      Math.max(requestTimeoutMs, 120_000),
+    ),
   };
 }
 
@@ -113,8 +121,10 @@ export class ExcelsiorMotorClient {
     label: string,
     url: URL,
     init: RequestInit,
-    attempts = 3,
+    options: { attempts?: number; timeoutMs?: number } = {},
   ): Promise<unknown> {
+    const attempts = options.attempts ?? 3;
+    const timeoutMs = options.timeoutMs ?? this.config.requestTimeoutMs;
     let lastError: unknown;
     for (let attempt = 0; attempt < attempts; attempt++) {
       let response: Response | null = null;
@@ -122,7 +132,7 @@ export class ExcelsiorMotorClient {
         response = await fetch(url, {
           ...init,
           headers: { Accept: "application/json", ...init.headers },
-          signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+          signal: AbortSignal.timeout(timeoutMs),
         });
         if (response.ok) {
           const text = await response.text();
@@ -152,7 +162,14 @@ export class ExcelsiorMotorClient {
       await delay(retryDelay(response, attempt));
     }
 
-    if (lastError instanceof Error) throw lastError;
+    if (lastError instanceof Error) {
+      const timedOut =
+        lastError.name === "TimeoutError" || /aborted due to timeout|timed? ?out/i.test(lastError.message);
+      if (timedOut) {
+        throw new Error(`${label}: tempo limite de ${Math.round(timeoutMs / 1_000)}s excedido.`);
+      }
+      throw new Error(`${label}: ${lastError.message}`);
+    }
     throw new Error(`${label}: falha de rede.`);
   }
 
@@ -172,7 +189,7 @@ export class ExcelsiorMotorClient {
             senha: this.config.password,
           }),
         },
-        2,
+        { attempts: 2 },
       );
       const token = isJsonRecord(response) ? response.token : null;
       if (typeof token !== "string" || !token.trim()) {
@@ -193,20 +210,31 @@ export class ExcelsiorMotorClient {
     label: string,
     url: URL,
     init: RequestInit = {},
+    options: { attempts?: number; timeoutMs?: number } = {},
   ): Promise<unknown> {
     let token = await this.login();
     try {
-      return await this.requestJson(label, url, {
-        ...init,
-        headers: { ...init.headers, Authorization: `Bearer ${token}` },
-      });
+      return await this.requestJson(
+        label,
+        url,
+        {
+          ...init,
+          headers: { ...init.headers, Authorization: `Bearer ${token}` },
+        },
+        options,
+      );
     } catch (error) {
       if (!(error instanceof ExcelsiorApiError) || error.status !== 401) throw error;
       token = await this.login(true);
-      return this.requestJson(label, url, {
-        ...init,
-        headers: { ...init.headers, Authorization: `Bearer ${token}` },
-      });
+      return this.requestJson(
+        label,
+        url,
+        {
+          ...init,
+          headers: { ...init.headers, Authorization: `Bearer ${token}` },
+        },
+        options,
+      );
     }
   }
 
@@ -253,7 +281,10 @@ export class ExcelsiorMotorClient {
     url.searchParams.set("quitacao", "Aberta");
     url.searchParams.set("situacao", "Ativo");
     url.searchParams.set("sistemaorigem", this.config.systemId);
-    return this.authorizedRequest("Listagem de parcelas abertas", url);
+    return this.authorizedRequest("Listagem de parcelas abertas", url, {}, {
+      attempts: 2,
+      timeoutMs: this.config.billingRequestTimeoutMs,
+    });
   }
 
   async getBillingDocument(documentNumber: string) {
@@ -261,7 +292,10 @@ export class ExcelsiorMotorClient {
       `/backoffice/cobranca/parcelas/${encodeURIComponent(documentNumber)}/1`,
       this.config.servicesBaseUrl,
     );
-    return this.authorizedRequest("Consulta individual de cobrança", url);
+    return this.authorizedRequest("Consulta individual de cobrança", url, {}, {
+      attempts: 2,
+      timeoutMs: this.config.billingRequestTimeoutMs,
+    });
   }
 
   async listSettledBilling(start: string, end: string) {
@@ -271,7 +305,10 @@ export class ExcelsiorMotorClient {
     url.searchParams.set("fim", end);
     url.searchParams.set("quitacao", "Total");
     url.searchParams.set("sistemaorigem", this.config.systemId);
-    return this.authorizedRequest("Listagem de parcelas quitadas", url);
+    return this.authorizedRequest("Listagem de parcelas quitadas", url, {}, {
+      attempts: 2,
+      timeoutMs: this.config.billingRequestTimeoutMs,
+    });
   }
 
   async testConnection() {
