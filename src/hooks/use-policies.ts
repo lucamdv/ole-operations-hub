@@ -93,12 +93,24 @@ export function useRunPolicySync() {
     setActiveRunId(null);
   };
 
-  const pollOnce = async (runId: string) => {
+  function schedulePoll(runId: string, delayMs: number) {
+    if (pollTimer.current) clearTimeout(pollTimer.current);
+    pollTimer.current = setTimeout(() => {
+      pollTimer.current = null;
+      void pollOnce(runId);
+    }, delayMs);
+  }
+
+  async function pollOnce(runId: string) {
+    let nextDelayMs = 5_000;
     try {
       const row = await statusFn({ data: { runId } });
       if (row) {
         setEmissoes(resolvedLegStatus(row.status, row.emissoes_status));
         setCobrancas(resolvedLegStatus(row.status, row.cobrancas_status));
+        const oneLegAlreadyFinished =
+          row.emissoes_status !== "running" || row.cobrancas_status !== "running";
+        if (oneLegAlreadyFinished) nextDelayMs = 10_000;
       }
       if (row?.status === "cancelled") {
         stopPolling();
@@ -126,8 +138,9 @@ export function useRunPolicySync() {
     } catch (err) {
       console.error("[poll] erro consultando status:", err);
     }
-    pollTimer.current = setTimeout(() => pollOnce(runId), 3_000);
-  };
+    if (document.visibilityState === "hidden") nextDelayMs = Math.max(nextDelayMs, 15_000);
+    schedulePoll(runId, nextDelayMs);
+  }
 
   // Recupera o estado persistido da última run. Assim F5, troca de rota ou uma
   // segunda aba não liberam o botão enquanto o backend continua trabalhando.
@@ -148,7 +161,7 @@ export function useRunPolicySync() {
         if (row.status === "running") {
           setActiveRunId(row.id);
           setIsPolling(true);
-          pollTimer.current = setTimeout(() => pollOnce(row.id), 0);
+          schedulePoll(row.id, 0);
         }
       })
       .catch((error) => {
@@ -179,7 +192,7 @@ export function useRunPolicySync() {
       toast.info(reused ? "Sincronização já em andamento" : "Sincronização iniciada", {
         description: "Consultando as APIs da Excelsior…",
       });
-      pollTimer.current = setTimeout(() => pollOnce(runId), reused ? 0 : 1_000);
+      schedulePoll(runId, reused ? 0 : 1_000);
     },
     onError: (err: Error) => {
       setEmissoes("error");

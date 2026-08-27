@@ -6,8 +6,8 @@ import {
   flattenApiItems,
   normalizeBillingResponse,
   normalizeEmissionDocument,
+  planBillingRefresh,
   selectMissingEndorsementDocuments,
-  selectBillingDocumentsToRefresh,
   type JsonRecord,
 } from "./motor-sync.core";
 
@@ -214,14 +214,26 @@ async function syncPoliciesAndEndorsements(runId: string, client: ExcelsiorMotor
 }
 
 async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStartedAt: Date) {
+  const billingStartedAt = Date.now();
   const context = await loadBillingContext(syncStartedAt);
   await assertRunActive(runId);
 
-  const openResponse = await client.listOpenBilling();
-  const documents = selectBillingDocumentsToRefresh(context.openInstallments, openResponse);
+  // As duas listagens são independentes e compartilham a mesma autenticação.
+  // Executá-las juntas elimina uma latência inteira do caminho de cobrança.
+  const [openResponse, settledResponse] = await Promise.all([
+    client.listOpenBilling(),
+    client.listSettledBilling(context.window.start, context.window.end),
+  ]);
+  await assertRunActive(runId);
+
+  const plan = planBillingRefresh(context.openInstallments, openResponse, settledResponse);
+  const directOpen = normalizeBillingResponse(
+    { items: plan.directOpenItems },
+    { defaultPaymentStatus: "Aberta" },
+  );
   const billingConcurrency = concurrencyFromEnv("EXCELSIOR_BILLING_CONCURRENCY", 4);
   const individualGroups = await mapWithConcurrency(
-    documents,
+    plan.detailDocuments,
     billingConcurrency,
     async (documentNumber) => {
       await assertRunActive(runId);
@@ -234,11 +246,20 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
   );
 
   await assertRunActive(runId);
-  const settledResponse = await client.listSettledBilling(context.window.start, context.window.end);
   const settled = normalizeBillingResponse(settledResponse, {
     defaultPaymentStatus: "Total",
   });
-  const updates = dedupeBillingItems([...individualGroups.flat(), ...settled]);
+  const updates = dedupeBillingItems([...directOpen, ...individualGroups.flat(), ...settled]);
+
+  console.info("[motor-sync][billing] plano concluído", {
+    abertasLocais: context.openInstallments.length,
+    abertasEmLote: flattenApiItems(openResponse).length,
+    abertasAproveitadas: directOpen.length,
+    consultasIndividuais: plan.detailDocuments.length,
+    quitadasNoIntervalo: settled.length,
+    atualizacoes: updates.length,
+    duracaoMs: Date.now() - billingStartedAt,
+  });
 
   await assertRunActive(runId);
   const { persistBillingSyncPayload } = await import("@/routes/api/public/billing-sync-callback");

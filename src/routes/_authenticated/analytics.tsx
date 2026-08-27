@@ -41,7 +41,7 @@ import {
   groupByEndosso,
   runSeries,
 } from "@/lib/audit/derive";
-import { formatBRL, formatCompact, formatInt, formatPct, formatUSD, relativeTime } from "@/lib/format";
+import { formatCompact, formatInt, formatPct, formatUSD, relativeTime } from "@/lib/format";
 import { REPASSE_RULES } from "@/lib/analytics/repasse-rules";
 import { DateRangeFilter } from "@/components/analytics/date-range-filter";
 import {
@@ -76,10 +76,7 @@ function AnalyticsPage() {
   const { targets } = useKpiTargets();
 
   const ops = opsQ.data ?? null;
-  const monthlyReinc = useMemo(
-    () => (ops?.monthlyReincidencia ?? []),
-    [ops],
-  );
+  const monthlyReinc = useMemo(() => ops?.monthlyReincidencia ?? [], [ops]);
   const yearCur = ops?.yearCur ?? null;
   const yearPrev = ops?.yearPrev ?? null;
   const ytdLabel = ops?.ytdLabel ?? "";
@@ -88,14 +85,11 @@ function AnalyticsPage() {
   // Redução = queda dos críticos do ano anterior para o atual (base: ano anterior).
   const reducaoIncidentes =
     yearCur && yearPrev && yearPrev.criticosYtd > 0
-      ? Math.round(
-          ((yearPrev.criticosYtd - yearCur.criticosYtd) / yearPrev.criticosYtd) * 1000,
-        ) / 10
+      ? Math.round(((yearPrev.criticosYtd - yearCur.criticosYtd) / yearPrev.criticosYtd) * 1000) /
+        10
       : null;
 
-
-  const reincMensalAtual =
-    monthlyReinc.length > 0 ? monthlyReinc[monthlyReinc.length - 1] : null;
+  const reincMensalAtual = monthlyReinc.length > 0 ? monthlyReinc[monthlyReinc.length - 1] : null;
 
   const [range, setRange] = useState<DateRangeState>(DEFAULT_RANGE);
   const bounds = useMemo(() => resolveRange(range), [range]);
@@ -104,7 +98,13 @@ function AnalyticsPage() {
   const latestRaw = latestQ.data ?? null;
   const historyRaw = historyQ.data ?? [];
   const policies = policiesQ.data ?? [];
-  const aggregatesRaw = aggregatesQ.data ?? { findingsByVigencia: [], revenueByMonth: [], policyPremiums: [], issuancesByMonth: [], repasseByMonth: [] };
+  const aggregatesRaw = aggregatesQ.data ?? {
+    findingsByVigencia: [],
+    revenueByMonth: [],
+    policyPremiums: [],
+    issuancesByMonth: [],
+    repasseByMonth: [],
+  };
 
   const history = useMemo(
     () =>
@@ -144,7 +144,10 @@ function AnalyticsPage() {
     [aggregatesRaw.issuancesByMonth, bounds],
   );
   const totalApolices = useMemo(() => issuances.reduce((s, r) => s + r.apolices, 0), [issuances]);
-  const totalEndossos = useMemo(() => issuances.reduce((s, r) => s + r.endossosTotal, 0), [issuances]);
+  const totalEndossos = useMemo(
+    () => issuances.reduce((s, r) => s + r.endossosTotal, 0),
+    [issuances],
+  );
   const totalUsd = useMemo(() => revenue.reduce((s, r) => s + r.usd, 0), [revenue]);
   const repasseTotals = useMemo(
     () =>
@@ -161,6 +164,20 @@ function AnalyticsPage() {
     [repasse],
   );
   const repasseAvg = repasse.length > 0 ? repasseTotals.excelsiorLiquido / repasse.length : 0;
+  const paidActiveYear = useMemo(() => {
+    const now = new Date();
+    const year = yearCur?.year ?? now.getUTCFullYear();
+    const currentMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+    return aggregatesRaw.repasseByMonth
+      .filter((row) => row.month.startsWith(`${year}-`) && row.month <= currentMonth)
+      .reduce(
+        (total, row) => ({
+          bruto: total.bruto + row.bruto,
+          premioDireto: total.premioDireto + row.premioDireto,
+        }),
+        { bruto: 0, premioDireto: 0 },
+      );
+  }, [aggregatesRaw.repasseByMonth, yearCur?.year]);
   const repasseMax = useMemo(() => {
     const peak = repasse.reduce(
       (m, r) => Math.max(m, r.carregamentoExcelsior + r.premioDireto, r.excelsiorLiquido),
@@ -171,8 +188,6 @@ function AnalyticsPage() {
     return Math.ceil((peak * 1.12) / step) * step;
   }, [repasse]);
   const heatmap = useMemo(() => buildHeatmap(latest, history, 12), [latest, history]);
-
-
 
   // Distribuição por nº de endossos
   const endorsementsDist = useMemo(() => {
@@ -203,7 +218,10 @@ function AnalyticsPage() {
       { title: "Top 10 tipos de erro", has: errorTypes.length > 0 },
       { title: "Findings por mês de vigência", has: monthly.length > 0 },
       { title: "Receita Excelsior (USD)", has: repasse.length > 0 },
-      { title: "Heatmap · tipo de erro × runs", has: heatmap.rows.length > 0 && heatmap.runs.length > 0 },
+      {
+        title: "Heatmap · tipo de erro × runs",
+        has: heatmap.rows.length > 0 && heatmap.runs.length > 0,
+      },
       { title: "Apólices mais problemáticas", has: apoliceRank.length > 0 },
       { title: "Top endossos com inconsistências", has: endossoRank.length > 0 },
       { title: "Carteira por nº de endossos", has: endorsementsDist.length > 0 },
@@ -230,7 +248,6 @@ function AnalyticsPage() {
   const hiddenCharts = chartPrefs.hideEmptyCharts
     ? charts.filter((c) => !c.has).map((c) => c.title)
     : [];
-
 
   const chartsRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState<"none" | "report" | "charts">("none");
@@ -282,7 +299,8 @@ function AnalyticsPage() {
             </span>
           </div>
           <p className="page-subtitle">
-            Inteligência estratégica sobre carteira, runs de auditoria, severidade e eficiência operacional.
+            Inteligência estratégica sobre carteira, runs de auditoria, severidade e eficiência
+            operacional.
             {history.length > 0 && (
               <>
                 {" · "}
@@ -367,7 +385,7 @@ function AnalyticsPage() {
             <Kpi
               label="Receita acumulada Excelsior (USD)"
               value={formatUSD(repasseTotals.excelsiorLiquido, { maximumFractionDigits: 0 })}
-              hint={`${repasse.length} meses · média ${formatUSD(repasseAvg, { maximumFractionDigits: 0 })}/mês`}
+              hint={`Quitação total + emissão ativa · ${repasse.length} competências · média ${formatUSD(repasseAvg, { maximumFractionDigits: 0 })}/mês`}
               tone="success"
             />
           </div>
@@ -402,7 +420,11 @@ function AnalyticsPage() {
               value={formatUSD(repasse.length ? repasse[repasse.length - 1].excelsiorLiquido : 0, {
                 maximumFractionDigits: 0,
               })}
-              hint={repasse.length ? repasse[repasse.length - 1].label : "sem dados"}
+              hint={
+                repasse.length
+                  ? `${repasse[repasse.length - 1].label} · competência de emissão`
+                  : "sem dados"
+              }
               tone="success"
             />
           </div>
@@ -434,9 +456,9 @@ function AnalyticsPage() {
           <div className="panel bg-surface/60 overflow-x-auto">
             {(ops?.resolutionTime.byTipo.length ?? 0) === 0 ? (
               <div className="px-4 py-6 text-[12.5px] text-muted-foreground">
-                Nenhuma inconsistência foi resolvida ainda. Marque um achado como
-                “Resolvido” na auditoria — ou deixe que ele saia da próxima execução — para
-                alimentar este indicador.
+                Nenhuma inconsistência foi resolvida ainda. Marque um achado como “Resolvido” na
+                auditoria — ou deixe que ele saia da próxima execução — para alimentar este
+                indicador.
               </div>
             ) : (
               <table className="data-table text-[12.5px]">
@@ -475,7 +497,11 @@ function AnalyticsPage() {
             <Kpi
               label="Reincidência consolidada"
               value={formatPct(reincMensalAtual?.reincidenciaPct ?? 0, 1)}
-              hint={reincMensalAtual ? `${reincMensalAtual.label} · média 3m ${formatPct(reincMensalAtual.mm3, 1)}` : "sem dados"}
+              hint={
+                reincMensalAtual
+                  ? `${reincMensalAtual.label} · média 3m ${formatPct(reincMensalAtual.mm3, 1)}`
+                  : "sem dados"
+              }
               tone="warning"
               target={`meta ≤ ${targets.reincidenciaMaxPct}%`}
               status={statusMax(reincMensalAtual?.reincidenciaPct ?? 0, targets.reincidenciaMaxPct)}
@@ -516,7 +542,7 @@ function AnalyticsPage() {
             subtitle={
               ytdLabel
                 ? `Comparação do acumulado até ${ytdLabel} contra o mesmo período do ano anterior`
-                : "Crescimento da carteira, redução de incidentes e prêmio consolidado"
+                : "Crescimento da carteira, redução de incidentes e prêmio pago ativo"
             }
           />
           <div className="bento">
@@ -556,26 +582,23 @@ function AnalyticsPage() {
               }
             />
             <Kpi
-              label="Prêmio emitido no ano (USD)"
-              value={formatUSD(yearCur?.premioEmitidoYtdUsd ?? 0, { maximumFractionDigits: 0 })}
+              label="Prêmio pago e ativo no ano (USD)"
+              value={formatUSD(paidActiveYear.bruto, { maximumFractionDigits: 0 })}
               hint={
                 yearCur
-                  ? `${yearCur.year} até ${ytdLabel} · prêmio direto ${formatUSD(yearCur.premioDiretoYtdUsd, { maximumFractionDigits: 0 })}`
+                  ? `${yearCur.year} até ${ytdLabel} · prêmio direto ${formatUSD(paidActiveYear.premioDireto, { maximumFractionDigits: 0 })}`
                   : "sem dados"
               }
               tone="success"
             />
           </div>
 
-
-
-
-
           <div ref={chartsRef} className="space-y-6">
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
               <ChartCard
                 className="lg:col-span-2"
-                title="Tendência de runs" empty={!hasData["Tendência de runs"]}
+                title="Tendência de runs"
+                empty={!hasData["Tendência de runs"]}
                 subtitle="Aprovados vs reprovados nas últimas 12 auditorias"
               >
                 <div className="h-[210px] sm:h-[280px]">
@@ -591,18 +614,38 @@ function AnalyticsPage() {
                           <stop offset="100%" stopColor="var(--destructive)" stopOpacity={0} />
                         </linearGradient>
                       </defs>
-                      <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                      <CartesianGrid
+                        stroke="var(--border)"
+                        strokeDasharray="3 3"
+                        vertical={false}
+                      />
                       <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={11} />
                       <YAxis stroke="var(--muted-foreground)" fontSize={11} />
                       <Tooltip {...tooltipProps} />
-                      <Area type="monotone" dataKey="approved" stackId="1" stroke="var(--success)" fill="url(#gApr)" />
-                      <Area type="monotone" dataKey="rejected" stackId="1" stroke="var(--destructive)" fill="url(#gRej)" />
+                      <Area
+                        type="monotone"
+                        dataKey="approved"
+                        stackId="1"
+                        stroke="var(--success)"
+                        fill="url(#gApr)"
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="rejected"
+                        stackId="1"
+                        stroke="var(--destructive)"
+                        fill="url(#gRej)"
+                      />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>
               </ChartCard>
 
-              <ChartCard title="Severidade" empty={!hasData["Severidade"]} subtitle="Distribuição na última auditoria">
+              <ChartCard
+                title="Severidade"
+                empty={!hasData["Severidade"]}
+                subtitle="Distribuição na última auditoria"
+              >
                 <div className="h-[170px] sm:h-[200px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
@@ -618,11 +661,7 @@ function AnalyticsPage() {
                         paddingAngle={3}
                         stroke="none"
                       >
-                        {[
-                          "var(--destructive)",
-                          "var(--warning)",
-                          "var(--info)",
-                        ].map((c, i) => (
+                        {["var(--destructive)", "var(--warning)", "var(--info)"].map((c, i) => (
                           <Cell key={i} fill={c} />
                         ))}
                       </Pie>
@@ -635,25 +674,57 @@ function AnalyticsPage() {
             </div>
 
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
-              <ChartCard title="Conformidade ao longo do tempo" empty={!hasData["Conformidade ao longo do tempo"]} subtitle="% aprovado por run">
+              <ChartCard
+                title="Conformidade ao longo do tempo"
+                empty={!hasData["Conformidade ao longo do tempo"]}
+                subtitle="% aprovado por run"
+              >
                 <div className="h-[170px] sm:h-[220px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={series.map((s) => ({ ...s, conf: s.total ? (s.approved / s.total) * 100 : 0 }))}>
-                      <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                    <LineChart
+                      data={series.map((s) => ({
+                        ...s,
+                        conf: s.total ? (s.approved / s.total) * 100 : 0,
+                      }))}
+                    >
+                      <CartesianGrid
+                        stroke="var(--border)"
+                        strokeDasharray="3 3"
+                        vertical={false}
+                      />
                       <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={11} />
-                      <YAxis stroke="var(--muted-foreground)" fontSize={11} domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
+                      <YAxis
+                        stroke="var(--muted-foreground)"
+                        fontSize={11}
+                        domain={[0, 100]}
+                        tickFormatter={(v) => `${v}%`}
+                      />
                       <Tooltip {...tooltipProps} formatter={(v) => formatPct(Number(v), 1)} />
-                      <Line type="monotone" dataKey="conf" stroke="var(--primary)" strokeWidth={2} dot={{ fill: "var(--primary)", r: 3 }} />
+                      <Line
+                        type="monotone"
+                        dataKey="conf"
+                        stroke="var(--primary)"
+                        strokeWidth={2}
+                        dot={{ fill: "var(--primary)", r: 3 }}
+                      />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
               </ChartCard>
 
-              <ChartCard title="Volume processado" empty={!hasData["Volume processado"]} subtitle="Apólices auditadas por run">
+              <ChartCard
+                title="Volume processado"
+                empty={!hasData["Volume processado"]}
+                subtitle="Apólices auditadas por run"
+              >
                 <div className="h-[170px] sm:h-[220px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={series}>
-                      <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                      <CartesianGrid
+                        stroke="var(--border)"
+                        strokeDasharray="3 3"
+                        vertical={false}
+                      />
                       <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={11} />
                       <YAxis stroke="var(--muted-foreground)" fontSize={11} />
                       <Tooltip {...tooltipProps} />
@@ -665,14 +736,22 @@ function AnalyticsPage() {
             </div>
 
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
-              <ChartCard title="Top 10 tipos de erro" empty={!hasData["Top 10 tipos de erro"]} subtitle="Última auditoria">
+              <ChartCard
+                title="Top 10 tipos de erro"
+                empty={!hasData["Top 10 tipos de erro"]}
+                subtitle="Última auditoria"
+              >
                 {errorTypes.length === 0 ? (
                   <EmptyMsg text="Nenhum tipo de erro nesta run." />
                 ) : (
                   <div className="h-[230px] sm:h-[300px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={errorTypes} layout="vertical" margin={{ left: 8, right: 16 }}>
-                        <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" horizontal={false} />
+                        <CartesianGrid
+                          stroke="var(--border)"
+                          strokeDasharray="3 3"
+                          horizontal={false}
+                        />
                         <XAxis type="number" stroke="var(--muted-foreground)" fontSize={11} />
                         <YAxis
                           type="category"
@@ -690,14 +769,22 @@ function AnalyticsPage() {
                 )}
               </ChartCard>
 
-              <ChartCard title="Findings por mês de vigência" empty={!hasData["Findings por mês de vigência"]} subtitle="Distribuição temporal das inconsistências">
+              <ChartCard
+                title="Findings por mês de vigência"
+                empty={!hasData["Findings por mês de vigência"]}
+                subtitle="Distribuição temporal das inconsistências"
+              >
                 {monthly.length === 0 ? (
                   <EmptyMsg text="Sem datas de vigência nos findings." />
                 ) : (
                   <div className="h-[230px] sm:h-[300px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={monthly}>
-                        <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                        <CartesianGrid
+                          stroke="var(--border)"
+                          strokeDasharray="3 3"
+                          vertical={false}
+                        />
                         <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={10} />
                         <YAxis stroke="var(--muted-foreground)" fontSize={11} />
                         <Tooltip {...tooltipProps} />
@@ -710,15 +797,19 @@ function AnalyticsPage() {
             </div>
 
             <ChartCard
-              title="Receita Excelsior (USD) por mês de pagamento" empty={!hasData["Receita Excelsior (USD)"]}
-              subtitle={`Total Repasse = Carregamento (US$ 8.333,33) + Prêmio Direto (40% líquido IOF) − PIS/COFINS (4,65% × comissões Olé+Nomad) · espelha o Mapa de Repasses · Total: ${formatUSD(repasseTotals.excelsiorLiquido, { maximumFractionDigits: 0 })} · Média/mês: ${formatUSD(repasseAvg, { maximumFractionDigits: 0 })} · ${repasse.length} meses`}
+              title="Dinheiro pago e repasse Excelsior (USD) por mês"
+              empty={!hasData["Receita Excelsior (USD)"]}
+              subtitle={`Competência pelo mês de emissão · somente documentos ativos com quitação total · Total Repasse = Carregamento + Prêmio Direto + PIS/COFINS, conforme o Mapa de Repasses · Total: ${formatUSD(repasseTotals.excelsiorLiquido, { maximumFractionDigits: 0 })} · Média/mês: ${formatUSD(repasseAvg, { maximumFractionDigits: 0 })} · ${repasse.length} competências`}
             >
               {repasse.length === 0 ? (
-                <EmptyMsg text="Sem prêmios pagos sincronizados." />
+                <EmptyMsg text="Sem documentos pagos e ativos sincronizados." />
               ) : (
                 <div className="h-[370px] sm:h-[440px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={repasse} margin={{ top: 36, right: 24, left: 8, bottom: 8 }}>
+                    <ComposedChart
+                      data={repasse}
+                      margin={{ top: 36, right: 24, left: 8, bottom: 8 }}
+                    >
                       <defs>
                         <linearGradient id="gCarregamento" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor="var(--primary)" stopOpacity={1} />
@@ -733,7 +824,11 @@ function AnalyticsPage() {
                           <stop offset="100%" stopColor="var(--primary)" stopOpacity={1} />
                         </linearGradient>
                       </defs>
-                      <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                      <CartesianGrid
+                        stroke="var(--border)"
+                        strokeDasharray="3 3"
+                        vertical={false}
+                      />
                       <XAxis
                         dataKey="label"
                         stroke="var(--muted-foreground)"
@@ -776,7 +871,6 @@ function AnalyticsPage() {
                           dy: -6,
                           dx: -6,
                         }}
-
                       />
                       <Bar
                         dataKey="carregamentoExcelsior"
@@ -789,9 +883,18 @@ function AnalyticsPage() {
                       />
                       <Bar
                         dataKey="premioDireto"
-                        name="Prêmio Direto (40%)"
+                        name="Prêmio Direto"
                         stackId="rec"
                         fill="url(#gPremioDireto)"
+                        maxBarSize={44}
+                        isAnimationActive
+                        animationDuration={900}
+                      />
+                      <Bar
+                        dataKey="pisCofins"
+                        name="PIS/COFINS do repasse"
+                        stackId="rec"
+                        fill="var(--warning)"
                         radius={[6, 6, 0, 0]}
                         maxBarSize={44}
                         isAnimationActive
@@ -800,10 +903,15 @@ function AnalyticsPage() {
                       <Line
                         type="monotone"
                         dataKey="excelsiorLiquido"
-                        name="Total Excelsior (líq. PIS/COFINS)"
+                        name="Total do Repasse à Excelsior"
                         stroke="url(#gLiquido)"
                         strokeWidth={3}
-                        dot={{ fill: "var(--info)", r: 4, strokeWidth: 2, stroke: "var(--surface)" }}
+                        dot={{
+                          fill: "var(--info)",
+                          r: 4,
+                          strokeWidth: 2,
+                          stroke: "var(--surface)",
+                        }}
                         activeDot={{ r: 7 }}
                         isAnimationActive
                         animationDuration={1200}
@@ -822,13 +930,11 @@ function AnalyticsPage() {
                   </ResponsiveContainer>
                 </div>
               )}
-
             </ChartCard>
 
-
-
             <ChartCard
-              title="Heatmap · tipo de erro × runs" empty={!hasData["Heatmap · tipo de erro × runs"]}
+              title="Heatmap · tipo de erro × runs"
+              empty={!hasData["Heatmap · tipo de erro × runs"]}
               subtitle="Intensidade de inconsistências por tipo nas últimas runs"
             >
               <Heatmap runs={heatmap.runs} rows={heatmap.rows} />
@@ -836,7 +942,8 @@ function AnalyticsPage() {
 
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               <ChartCard
-                title="Apólices mais problemáticas" empty={!hasData["Apólices mais problemáticas"]}
+                title="Apólices mais problemáticas"
+                empty={!hasData["Apólices mais problemáticas"]}
                 subtitle={`Top ${apoliceRank.length} por nº de inconsistências`}
               >
                 {apoliceRank.length === 0 ? (
@@ -887,7 +994,8 @@ function AnalyticsPage() {
               </ChartCard>
 
               <ChartCard
-                title="Top endossos com inconsistências" empty={!hasData["Top endossos com inconsistências"]}
+                title="Top endossos com inconsistências"
+                empty={!hasData["Top endossos com inconsistências"]}
                 subtitle="Endossos que mais acumulam findings"
               >
                 {endossoRank.length === 0 ? (
@@ -928,7 +1036,8 @@ function AnalyticsPage() {
 
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               <ChartCard
-                title="Carteira por nº de endossos" empty={!hasData["Carteira por nº de endossos"]}
+                title="Carteira por nº de endossos"
+                empty={!hasData["Carteira por nº de endossos"]}
                 subtitle="Quantas alterações cada apólice acumulou"
               >
                 {endorsementsDist.length === 0 ? (
@@ -937,7 +1046,11 @@ function AnalyticsPage() {
                   <div className="h-[190px] sm:h-[260px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={endorsementsDist}>
-                        <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                        <CartesianGrid
+                          stroke="var(--border)"
+                          strokeDasharray="3 3"
+                          vertical={false}
+                        />
                         <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={11} />
                         <YAxis stroke="var(--muted-foreground)" fontSize={11} />
                         <Tooltip {...tooltipProps} />
@@ -949,7 +1062,8 @@ function AnalyticsPage() {
               </ChartCard>
 
               <ChartCard
-                title="Apólices emitidas por mês" empty={!hasData["Apólices emitidas por mês"]}
+                title="Apólices emitidas por mês"
+                empty={!hasData["Apólices emitidas por mês"]}
                 subtitle={`${formatInt(totalApolices)} apólices em ${issuances.filter((i) => i.apolices > 0).length} meses`}
               >
                 {issuances.length === 0 ? (
@@ -958,11 +1072,24 @@ function AnalyticsPage() {
                   <div className="h-[190px] sm:h-[260px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={issuances}>
-                        <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                        <CartesianGrid
+                          stroke="var(--border)"
+                          strokeDasharray="3 3"
+                          vertical={false}
+                        />
                         <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={10} />
-                        <YAxis stroke="var(--muted-foreground)" fontSize={11} allowDecimals={false} />
+                        <YAxis
+                          stroke="var(--muted-foreground)"
+                          fontSize={11}
+                          allowDecimals={false}
+                        />
                         <Tooltip {...tooltipProps} formatter={(v) => formatInt(Number(v))} />
-                        <Bar dataKey="apolices" name="Apólices" fill="var(--primary)" radius={[4, 4, 0, 0]} />
+                        <Bar
+                          dataKey="apolices"
+                          name="Apólices"
+                          fill="var(--primary)"
+                          radius={[4, 4, 0, 0]}
+                        />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -972,7 +1099,8 @@ function AnalyticsPage() {
 
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               <ChartCard
-                title="Endossos emitidos por mês" empty={!hasData["Endossos emitidos por mês"]}
+                title="Endossos emitidos por mês"
+                empty={!hasData["Endossos emitidos por mês"]}
                 subtitle={`${formatInt(totalEndossos)} endossos em ${issuances.filter((i) => i.endossosTotal > 0).length} meses`}
               >
                 {issuances.length === 0 ? (
@@ -981,11 +1109,24 @@ function AnalyticsPage() {
                   <div className="h-[190px] sm:h-[260px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={issuances}>
-                        <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                        <CartesianGrid
+                          stroke="var(--border)"
+                          strokeDasharray="3 3"
+                          vertical={false}
+                        />
                         <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={10} />
-                        <YAxis stroke="var(--muted-foreground)" fontSize={11} allowDecimals={false} />
+                        <YAxis
+                          stroke="var(--muted-foreground)"
+                          fontSize={11}
+                          allowDecimals={false}
+                        />
                         <Tooltip {...tooltipProps} formatter={(v) => formatInt(Number(v))} />
-                        <Bar dataKey="endossosTotal" name="Endossos" fill="var(--warning)" radius={[4, 4, 0, 0]} />
+                        <Bar
+                          dataKey="endossosTotal"
+                          name="Endossos"
+                          fill="var(--warning)"
+                          radius={[4, 4, 0, 0]}
+                        />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -993,7 +1134,8 @@ function AnalyticsPage() {
               </ChartCard>
 
               <ChartCard
-                title="Emissões por mês e por tipo" empty={!hasData["Emissões por mês e por tipo"]}
+                title="Emissões por mês e por tipo"
+                empty={!hasData["Emissões por mês e por tipo"]}
                 subtitle="Apólices e endossos (A, B, C, D) lado a lado"
               >
                 {issuances.length === 0 ? (
@@ -1002,16 +1144,45 @@ function AnalyticsPage() {
                   <div className="h-[190px] sm:h-[260px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={issuances}>
-                        <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                        <CartesianGrid
+                          stroke="var(--border)"
+                          strokeDasharray="3 3"
+                          vertical={false}
+                        />
                         <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={10} />
-                        <YAxis stroke="var(--muted-foreground)" fontSize={11} allowDecimals={false} />
+                        <YAxis
+                          stroke="var(--muted-foreground)"
+                          fontSize={11}
+                          allowDecimals={false}
+                        />
                         <Tooltip {...tooltipProps} formatter={(v) => formatInt(Number(v))} />
                         <Legend wrapperStyle={{ fontSize: 11 }} />
-                        <Bar dataKey="apolices" name="Apólice" stackId="emi" fill="var(--primary)" />
+                        <Bar
+                          dataKey="apolices"
+                          name="Apólice"
+                          stackId="emi"
+                          fill="var(--primary)"
+                        />
                         <Bar dataKey="endossoA" name="Endosso A" stackId="emi" fill="var(--info)" />
-                        <Bar dataKey="endossoB" name="Endosso B" stackId="emi" fill="var(--success)" />
-                        <Bar dataKey="endossoC" name="Endosso C" stackId="emi" fill="var(--warning)" />
-                        <Bar dataKey="endossoD" name="Endosso D" stackId="emi" fill="var(--destructive)" radius={[4, 4, 0, 0]} />
+                        <Bar
+                          dataKey="endossoB"
+                          name="Endosso B"
+                          stackId="emi"
+                          fill="var(--success)"
+                        />
+                        <Bar
+                          dataKey="endossoC"
+                          name="Endosso C"
+                          stackId="emi"
+                          fill="var(--warning)"
+                        />
+                        <Bar
+                          dataKey="endossoD"
+                          name="Endosso D"
+                          stackId="emi"
+                          fill="var(--destructive)"
+                          radius={[4, 4, 0, 0]}
+                        />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -1024,7 +1195,9 @@ function AnalyticsPage() {
             <div className="flex items-start gap-2 rounded-lg border border-dashed border-border bg-surface/40 px-3 py-2 text-[11.5px] text-muted-foreground">
               <EyeOff className="h-3.5 w-3.5 mt-0.5 shrink-0" />
               <span>
-                {hiddenCharts.length === 1 ? "1 gráfico oculto" : `${hiddenCharts.length} gráficos ocultos`}{" "}
+                {hiddenCharts.length === 1
+                  ? "1 gráfico oculto"
+                  : `${hiddenCharts.length} gráficos ocultos`}{" "}
                 por falta de informação relevante: {hiddenCharts.join(", ")}.{" "}
                 <Link to="/configuracoes" className="underline hover:text-foreground">
                   Ajustar em Configurações
@@ -1034,7 +1207,6 @@ function AnalyticsPage() {
             </div>
           )}
         </>
-
       )}
     </div>
   );
@@ -1053,7 +1225,9 @@ const tooltipProps = {
 function SectionTitle({ title, subtitle }: { title: string; subtitle?: string }) {
   return (
     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 pt-1">
-      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-foreground">{title}</h2>
+      <h2 className="text-[13px] font-semibold uppercase tracking-wider text-foreground">
+        {title}
+      </h2>
       {subtitle && <span className="text-[11px] text-muted-foreground">{subtitle}</span>}
     </div>
   );
@@ -1096,10 +1270,10 @@ function Kpi({
     tone === "success"
       ? "text-success"
       : tone === "warning"
-      ? "text-warning"
-      : tone === "destructive"
-      ? "text-destructive"
-      : "text-foreground";
+        ? "text-warning"
+        : tone === "destructive"
+          ? "text-destructive"
+          : "text-foreground";
 
   const showDelta = delta !== undefined && Number.isFinite(delta) && Math.abs(delta) >= 0.05;
   const positive = invertDelta ? (delta ?? 0) < 0 : (delta ?? 0) > 0;
@@ -1108,12 +1282,12 @@ function Kpi({
       <div className="text-[10.5px] uppercase tracking-wider text-muted-foreground font-medium">
         {label}
       </div>
-      <div className={`mt-1.5 text-[18px] sm:text-[22px] font-semibold tabular-nums ${toneClass}`}>{value}</div>
+      <div className={`mt-1.5 text-[18px] sm:text-[22px] font-semibold tabular-nums ${toneClass}`}>
+        {value}
+      </div>
       <div className="mt-1 flex items-center gap-2 text-[11px]">
         {showDelta && (
-          <span
-            className={`font-mono ${positive ? "text-success" : "text-destructive"}`}
-          >
+          <span className={`font-mono ${positive ? "text-success" : "text-destructive"}`}>
             {(delta ?? 0) > 0 ? "▲" : "▼"} {Math.abs(delta ?? 0).toFixed(1)}
             {deltaSuffix}
           </span>
@@ -1122,7 +1296,9 @@ function Kpi({
       </div>
       {(target || status) && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
-          {target && <span className="text-[10px] font-mono text-muted-foreground/90">{target}</span>}
+          {target && (
+            <span className="text-[10px] font-mono text-muted-foreground/90">{target}</span>
+          )}
           {status && (
             <span
               className={`rounded border px-1.5 py-px text-[9.5px] font-semibold uppercase tracking-wide ${KPI_STATUS_STYLE[status]}`}
@@ -1135,7 +1311,6 @@ function Kpi({
     </div>
   );
 }
-
 
 function ChartCard({
   title,
@@ -1155,11 +1330,7 @@ function ChartCard({
   if (empty && prefs.hideEmptyCharts) return null;
 
   return (
-    <div
-      data-export="chart"
-      data-title={title}
-      className={`panel p-5 ${className ?? ""}`}
-    >
+    <div data-export="chart" data-title={title} className={`panel p-5 ${className ?? ""}`}>
       <div className="mb-4">
         <div className="text-[13px] font-semibold">{title}</div>
         {subtitle && <div className="text-[11px] text-muted-foreground">{subtitle}</div>}
@@ -1259,7 +1430,13 @@ function EmptyMsg({ text }: { text: string }) {
   );
 }
 
-function RepasseTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: Record<string, number> & { label: string } }> }) {
+function RepasseTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: Record<string, number> & { label: string } }>;
+}) {
   if (!active || !payload || payload.length === 0) return null;
   const d = payload[0].payload;
   const row = (label: string, value: number, tone?: string) => (
@@ -1274,14 +1451,25 @@ function RepasseTooltip({ active, payload }: { active?: boolean; payload?: Array
     <div className="rounded-lg border border-border bg-surface/95 backdrop-blur p-3 shadow-elevated min-w-[260px]">
       <div className="text-[12px] font-semibold mb-2">{d.label}</div>
       <div className="space-y-1">
-        {row("Prêmio Total Pago", d.premioTotalPago, "text-muted-foreground")}
+        {row("Prêmio Total Pago · Ativos", d.premioTotalPago, "text-muted-foreground")}
         {row("(−) IOF (0,38%)", -d.iof, "text-muted-foreground")}
         {row("(=) Prêmio Líquido IOF", d.premioLiquidoIof, "text-muted-foreground")}
         <div className="h-px bg-border my-1.5" />
-        {row("Carregamento Excelsior", d.carregamentoExcelsior)}
-        {row("Prêmio Direto (40%)", d.premioDireto, "text-success")}
-        {row("Comissões Olé+Nomad (55%)", d.comissoesOle, "text-muted-foreground")}
+        {row("(−) Remuneração Olé (35%)", -d.remuneracaoOle, "text-muted-foreground")}
+        {row("(−) Custo de aquisição (20%)", -d.custoAquisicao, "text-muted-foreground")}
+        {row("(=) Total de comissões (55%)", d.comissoesOle, "text-muted-foreground")}
         {row("(−) PIS/COFINS (4,65%)", -d.pisCofins, "text-destructive")}
+        {row("(=) Total retenção Olé", d.totalRetencaoOle, "text-muted-foreground")}
+        <div className="h-px bg-border my-1.5" />
+        {row("(−) Fee Excelsior (5%)", -d.feeExcelsior, "text-muted-foreground")}
+        {row("(=) Fixo suplementar", d.fixoSuplementar, "text-muted-foreground")}
+        {row("(=) Carregamento Excelsior", d.carregamentoExcelsior)}
+        <div className="h-px bg-border my-1.5" />
+        {row("(+) Retido corretores", d.premioRetidoCorretores, "text-muted-foreground")}
+        {row("(=) Prêmio Direto", d.premioDireto, "text-success")}
+        {row("Retido Excelsior (10%)", d.premioRetidoExcelsior, "text-muted-foreground")}
+        {row("Cedido Munich RE (90%)", d.premioCedidoMunich, "text-muted-foreground")}
+        {row("(+) PIS/COFINS no repasse", d.pisCofins, "text-warning")}
         <div className="h-px bg-border my-1.5" />
         {row("Total Repasse Excelsior", d.excelsiorLiquido, "text-info font-semibold")}
       </div>

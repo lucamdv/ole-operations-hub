@@ -11,7 +11,7 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:static",
-    "test:static": "node --test tests/architecture.test.mjs tests/motor-sync.test.mjs",
+    "test:static": "node --test tests/architecture.test.mjs tests/motor-sync.test.mjs tests/analytics-paid-active.test.mjs tests/repasse-rules.test.mjs",
     "test:smoke": "node --test tests/smoke.test.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

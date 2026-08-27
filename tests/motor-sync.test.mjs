@@ -8,6 +8,7 @@ import {
   extractBasePolicies,
   normalizeBillingResponse,
   normalizeEmissionDocument,
+  planBillingRefresh,
   selectMissingEndorsementDocuments,
   selectBillingDocumentsToRefresh,
 } from "../src/lib/excelsior/motor-sync.core.ts";
@@ -91,6 +92,82 @@ test("delta de cobrança consulta documentos novos e os que saíram de Aberta + 
   );
 
   assert.deepEqual(new Set(documents), new Set(["999999000001", "777777000003"]));
+});
+
+test("cobrança aproveita lotes completos e não reconsulta documento já quitado", () => {
+  const plan = planBillingRefresh(
+    [
+      {
+        numero_documento: "123456000000",
+        numero_parcela: "1",
+        status_pagamento: "Aberta",
+        situacao_emissao: "Ativa",
+      },
+      {
+        numero_documento: "999999000001",
+        numero_parcela: "1",
+        status_pagamento: "Aberta",
+        situacao_emissao: "Ativa",
+      },
+    ],
+    {
+      parcelas: [
+        {
+          numero_documento: "123456000000",
+          numero_parcela: "1",
+          situacao_quitacao: "Aberta",
+          situacao_emissao: "Ativa",
+        },
+        {
+          numero_documento: "777777000003",
+          numero_parcela: "2",
+          situacao_quitacao: "Aberta",
+          situacao_emissao: "Ativa",
+        },
+      ],
+    },
+    {
+      parcelas: [
+        {
+          numero_documento: "999999000001",
+          numero_parcela: "1",
+          situacao_quitacao: "Total",
+        },
+      ],
+    },
+  );
+
+  assert.deepEqual(
+    plan.directOpenItems.map((item) => item.numero_documento),
+    ["777777000003"],
+  );
+  assert.deepEqual(plan.detailDocuments, []);
+});
+
+test("cobrança mantém consulta individual quando o lote não identifica a parcela", () => {
+  const plan = planBillingRefresh(
+    [
+      {
+        numero_documento: "999999000001",
+        numero_parcela: "1",
+        status_pagamento: "Aberta",
+        situacao_emissao: "Ativa",
+      },
+    ],
+    {
+      parcelas: [
+        {
+          numero_documento: "777777000003",
+          situacao_quitacao: "Aberta",
+          situacao_emissao: "Ativa",
+        },
+      ],
+    },
+    { parcelas: [] },
+  );
+
+  assert.deepEqual(new Set(plan.detailDocuments), new Set(["999999000001", "777777000003"]));
+  assert.deepEqual(plan.directOpenItems, []);
 });
 
 test("preserva parcelas distintas e a atualização total mais recente vence por identidade", () => {

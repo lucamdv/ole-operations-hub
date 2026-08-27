@@ -66,6 +66,31 @@ export function billingDocumentNumber(value: unknown): string | null {
   return document === null ? null : normalizedText(document) || null;
 }
 
+/**
+ * Identidade estável que permite persistir uma parcela vinda da listagem em
+ * lote sem precisar consultar novamente o mesmo documento.
+ */
+export function billingInstallmentIdentity(value: unknown): string | null {
+  if (!isJsonRecord(value)) return null;
+  const explicit = firstValue(value, [
+    "id_parcela",
+    "parcela_id",
+    "idParcela",
+    "codigo_parcela",
+    "numero_parcela",
+    "sequencial_parcela",
+    "numeroParcela",
+    "parcela",
+    "parcela_numero",
+  ]);
+  if (explicit !== null) return normalizedText(explicit) || null;
+
+  const proposal = firstValue(value, ["numero_proposta"]);
+  const dueDate = firstValue(value, ["data_vencimento"]);
+  if (proposal === null || dueDate === null) return null;
+  return `${normalizedText(proposal)}@${normalizedText(dueDate)}`;
+}
+
 export function policyDocumentNumber(item: JsonRecord): string | null {
   const document = firstValue(item, [
     "numero_documento",
@@ -212,6 +237,60 @@ export function selectBillingDocumentsToRefresh(currentOpen: unknown[], remoteOp
     if (!remote.has(document)) documents.add(document);
   }
   return [...documents];
+}
+
+export interface BillingRefreshPlan {
+  /** Itens completos que a listagem de abertas já permite persistir. */
+  directOpenItems: JsonRecord[];
+  /** Únicos documentos que ainda exigem o endpoint individual. */
+  detailDocuments: string[];
+}
+
+/**
+ * Reduz o N+1 da cobrança sem sacrificar a identidade das parcelas:
+ * - documentos novos com parcela identificável usam a própria lista em lote;
+ * - documentos que saíram das abertas e aparecem nas quitadas já estão cobertos;
+ * - somente respostas incompletas e mudanças não explicadas pedem detalhe.
+ */
+export function planBillingRefresh(
+  currentOpen: unknown[],
+  remoteOpen: unknown,
+  remoteSettled: unknown,
+): BillingRefreshPlan {
+  const openByDocument = new Map<string, JsonRecord[]>();
+  for (const item of flattenApiItems(remoteOpen)) {
+    const document = billingDocumentNumber(item);
+    if (!document) continue;
+    const group = openByDocument.get(document);
+    if (group) group.push(item);
+    else openByDocument.set(document, [item]);
+  }
+
+  const settledDocuments = new Set<string>();
+  for (const item of flattenApiItems(remoteSettled)) {
+    const document = billingDocumentNumber(item);
+    if (document) settledDocuments.add(document);
+  }
+
+  const directOpenItems: JsonRecord[] = [];
+  const detailDocuments = new Set<string>();
+  for (const document of selectBillingDocumentsToRefresh(currentOpen, remoteOpen)) {
+    const openItems = openByDocument.get(document);
+    if (openItems?.length) {
+      if (openItems.every((item) => billingInstallmentIdentity(item) !== null)) {
+        directOpenItems.push(...openItems);
+      } else {
+        detailDocuments.add(document);
+      }
+      continue;
+    }
+
+    // A listagem Total já contém a atualização que fez o documento sair das
+    // abertas. Consultamos o detalhe apenas para outras causas, como cancelamento.
+    if (!settledDocuments.has(document)) detailDocuments.add(document);
+  }
+
+  return { directOpenItems, detailDocuments: [...detailDocuments] };
 }
 
 export function normalizeBillingResponse(
