@@ -9,7 +9,13 @@ import {
 import { formatDateTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { NATUREZA_PREMIO_LABEL, TIPO_PESSOA_LABEL } from "@/lib/excelsior/codes";
-import { billingTagInfo, type BillingRecord, type BillingTag } from "@/lib/billing/status";
+import {
+  billingInstallmentLabel,
+  billingTagInfo,
+  normalizeBillingEndosso,
+  type BillingRecord,
+  type BillingTag,
+} from "@/lib/billing/status";
 import {
   BillingFilters,
   matchSituacao,
@@ -162,10 +168,7 @@ export function EndossoBadge({
   size?: "sm" | "md";
 }) {
   const { label, className } = badgeStylesFor(tipo, tipoEndosso);
-  const sizeCls =
-    size === "sm"
-      ? "px-1.5 py-0.5 text-[10px]"
-      : "px-2 py-0.5 text-[10.5px]";
+  const sizeCls = size === "sm" ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[10.5px]";
   return (
     <span
       className={cn(
@@ -175,9 +178,7 @@ export function EndossoBadge({
       )}
     >
       {label}
-      {sequencial && tipo === "ENDOSSO" && (
-        <span className="ml-1 opacity-70">· {sequencial}</span>
-      )}
+      {sequencial && tipo === "ENDOSSO" && <span className="ml-1 opacity-70">· {sequencial}</span>}
     </span>
   );
 }
@@ -259,7 +260,6 @@ const MOTIVO_ENDOSSO_LABEL: Record<string, string> = {
   SUBSTITUICAO: "Substituição",
   REATIVACAO: "Reativação",
 };
-
 
 /** Cores por natureza do motivo — destaca alterações vs. correções. */
 function motivoTone(codigo: string | null): string {
@@ -454,19 +454,13 @@ export function DatasCard({ datas }: { datas: DatasInfo }) {
 export function PartesList({ partes }: { partes: ParteInfo[] }) {
   if (partes.length === 0)
     return (
-      <div className="panel p-5 text-[12px] text-muted-foreground">
-        Nenhuma parte registrada.
-      </div>
+      <div className="panel p-5 text-[12px] text-muted-foreground">Nenhuma parte registrada.</div>
     );
   return (
     <div className="panel">
       <Accordion type="multiple" className="divide-y divide-border">
         {partes.map((p) => (
-          <AccordionItem
-            key={p.id}
-            value={p.id}
-            className="border-b-0 px-4 first:pt-0 last:pb-0"
-          >
+          <AccordionItem key={p.id} value={p.id} className="border-b-0 px-4 first:pt-0 last:pb-0">
             <AccordionTrigger className="hover:no-underline">
               <div className="flex items-center gap-3 min-w-0 text-left">
                 <span className="font-mono text-[10.5px] px-1.5 py-0.5 rounded bg-primary/10 text-primary shrink-0">
@@ -544,17 +538,13 @@ export function PartesList({ partes }: { partes: ParteInfo[] }) {
                         <Field label="Tipo" value={e.tipo} />
                         <Field
                           label="Logradouro"
-                          value={
-                            [e.logradouro, e.numero].filter(Boolean).join(", ") || null
-                          }
+                          value={[e.logradouro, e.numero].filter(Boolean).join(", ") || null}
                         />
                         <Field label="Complemento" value={e.complemento} />
                         <Field label="Bairro" value={e.bairro} />
                         <Field
                           label="Cidade / UF"
-                          value={
-                            e.cidade ? `${e.cidade}${e.estado ? ` / ${e.estado}` : ""}` : null
-                          }
+                          value={e.cidade ? `${e.cidade}${e.estado ? ` / ${e.estado}` : ""}` : null}
                         />
                         <Field label="CEP" value={fmtCEP(e.cep)} mono />
                       </div>
@@ -666,9 +656,7 @@ function CoberturaCard({ c }: { c: CoberturaInfo }) {
                       {NATUREZA_PREMIO_LABEL[l.natureza] ?? l.natureza}
                     </td>
                     <td className="px-2 py-1.5 font-mono text-muted-foreground">{l.tipo}</td>
-                    <td className="px-2 py-1.5 text-right font-mono">
-                      {fmtNum(l.valor, l.moeda)}
-                    </td>
+                    <td className="px-2 py-1.5 text-right font-mono">{fmtNum(l.valor, l.moeda)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -682,11 +670,7 @@ function CoberturaCard({ c }: { c: CoberturaInfo }) {
 
 export function ItensCoberturas({ itens }: { itens: ItemInfo[] }) {
   if (itens.length === 0)
-    return (
-      <div className="panel p-5 text-[12px] text-muted-foreground">
-        Nenhum item segurado.
-      </div>
-    );
+    return <div className="panel p-5 text-[12px] text-muted-foreground">Nenhum item segurado.</div>;
   return (
     <div className="space-y-4">
       {itens.map((it, i) => (
@@ -731,12 +715,9 @@ export function ItensCoberturas({ itens }: { itens: ItemInfo[] }) {
 export function PagamentoCard({ pagamento }: { pagamento: PagamentoInfo }) {
   if (pagamento.parcelas.length === 0)
     return (
-      <div className="panel p-5 text-[12px] text-muted-foreground">
-        Sem parcelas registradas.
-      </div>
+      <div className="panel p-5 text-[12px] text-muted-foreground">Sem parcelas registradas.</div>
     );
-  const moeda =
-    pagamento.parcelas.find((p) => p.moeda)?.moeda ?? "BRL";
+  const moeda = pagamento.parcelas.find((p) => p.moeda)?.moeda ?? "BRL";
   const totalMoeda = pagamento.parcelas.reduce((acc, p) => acc + (p.valor ?? 0), 0);
   return (
     <div className="panel overflow-hidden">
@@ -897,10 +878,10 @@ export function CobrancaCard({
         <Field label="Status do pagamento" value={statusPagamentoLabel(record.status_pagamento)} />
         <Field label="Situação da emissão" value={record.situacao_emissao || "—"} />
         <Field label="Nº da proposta" value={record.numero_proposta ?? "—"} mono />
-        <Field label="Parcela" value={record.numero_parcela} mono />
+        <Field label="Parcela" value={billingInstallmentLabel(record.numero_parcela)} mono />
         <Field label="Vencimento" value={fmtDateOnly(record.data_vencimento)} mono />
         <Field label="Quitação" value={fmtDate(record.data_quitacao)} mono />
-        <Field label="Endosso" value={record.numero_endosso} mono />
+        <Field label="Endosso" value={normalizeBillingEndosso(record.numero_endosso)} mono />
       </div>
     </div>
   );
@@ -956,8 +937,12 @@ export function CobrancasList({ rows: allRows }: { rows: BillingRecord[] }) {
           key={`${r.numero_apolice}-${r.numero_endosso}-${r.numero_parcela}`}
           className="grid grid-cols-12 items-center px-4 py-2.5 border-b border-border/40 last:border-0 text-[12px]"
         >
-          <div className="col-span-2 font-mono text-muted-foreground">{r.numero_endosso}</div>
-          <div className="col-span-1 font-mono text-muted-foreground">{r.numero_parcela}</div>
+          <div className="col-span-2 font-mono text-muted-foreground">
+            {normalizeBillingEndosso(r.numero_endosso)}
+          </div>
+          <div className="col-span-1 font-mono text-muted-foreground">
+            {billingInstallmentLabel(r.numero_parcela)}
+          </div>
           <div className="col-span-2 font-mono text-[11.5px] text-muted-foreground truncate">
             {r.numero_proposta ?? "—"}
           </div>

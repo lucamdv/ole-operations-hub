@@ -153,7 +153,9 @@ export const getPolicies = createServerFn({ method: "GET" })
       return {
         id: p.id,
         numero_apolice: p.numero_apolice,
-        numero_endosso_atual: ultimoNum ?? p.numero_endosso_atual,
+        numero_endosso_atual:
+          ultimoNum ??
+          (p.numero_endosso_atual ? normalizeEndossoNum(p.numero_endosso_atual) : null),
         premio_liquido: valor,
         premio_moeda: moeda,
         endorsements_count: endos.length,

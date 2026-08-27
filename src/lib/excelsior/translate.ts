@@ -1,4 +1,4 @@
-import { sistemaOrigemLabel } from "./codes";
+import { sistemaOrigemLabel } from "./codes.ts";
 
 // ====== Tipos do retorno do parser (o que os componentes consomem) ======
 export type TipoEndosso = "A" | "B" | "C";
@@ -31,7 +31,6 @@ export interface MotivoEndossoInfo {
   numeroEndossoCancelado: string | null;
   pagamento: string | null;
 }
-
 
 export interface DadosGerais {
   numeroPropostaSeguradora: string | null;
@@ -278,7 +277,10 @@ export function unwrapProposta(input: unknown): {
 }
 
 /** Apólice termina em 000000; endosso tem sequencial > 0 nos últimos 6 dígitos. */
-export function parseDocumento(numero: string, tipoEndosso: TipoEndosso | null = null): DocumentoInfo {
+export function parseDocumento(
+  numero: string,
+  tipoEndosso: TipoEndosso | null = null,
+): DocumentoInfo {
   const seq = numero.slice(-6);
   const base = numero.slice(0, -6) + "000000";
   const tipo: "APOLICE" | "ENDOSSO" = seq === "000000" ? "APOLICE" : "ENDOSSO";
@@ -291,18 +293,18 @@ export function parseDocumento(numero: string, tipoEndosso: TipoEndosso | null =
   };
 }
 
-
 /** Normaliza o numero_endosso que pode vir como "0", "2" ou "000002". */
 export function normalizeEndossoNum(raw: string): string {
   const digits = raw.replace(/\D/g, "");
   if (!digits) return "000000";
-  return digits.padStart(6, "0");
+  return digits.slice(-6).padStart(6, "0");
 }
 
 // ====== Parsers ======
 function parseDados(p: Obj, env: Obj | null): DadosGerais {
   return {
-    numeroPropostaSeguradora: asStr(p.numero_proposta_seguradora) ?? asStr(env?.numero_apolice_seguradora ?? null),
+    numeroPropostaSeguradora:
+      asStr(p.numero_proposta_seguradora) ?? asStr(env?.numero_apolice_seguradora ?? null),
     idPropostaOrigem: asStr(p.id_proposta_origem),
     idProduto: asStr(p.id_produto),
     idProdutoOrigem: asStr(p.id_produto_origem),
@@ -439,7 +441,7 @@ function parseItens(p: Obj): ItemInfo[] {
 
 function parsePagamento(p: Obj): PagamentoInfo {
   const pg = isObj(p.pagamento) ? (p.pagamento as Obj) : {};
-  const parcelas: ParcelaInfo[] = asArr(pg.parcelas)
+  const parsedParcelas: ParcelaInfo[] = asArr(pg.parcelas)
     .filter(isObj)
     .map((parc) => {
       const comp = asArr(parc.composicao_premio_parcela).filter(isObj);
@@ -455,6 +457,25 @@ function parsePagamento(p: Obj): PagamentoInfo {
         agenteCobrador: asStr(parc.agente_cobrador),
       };
     });
+  // O MOTOR pode repetir a mesma parcela no payload consolidado. Quando há
+  // sequencial, ele é a identidade oficial; sem sequencial, removemos somente
+  // cópias exatamente iguais para não colapsar parcelas legítimas.
+  const byIdentity = new Map<string, ParcelaInfo>();
+  for (const parcela of parsedParcelas) {
+    const identity =
+      parcela.numero !== null
+        ? `numero:${parcela.numero}`
+        : [
+            "dados",
+            parcela.vencimento ?? "",
+            parcela.valor ?? "",
+            parcela.valorBRL ?? "",
+            parcela.moeda ?? "",
+            parcela.agenteCobrador ?? "",
+          ].join(":");
+    byIdentity.set(identity, parcela);
+  }
+  const parcelas = [...byIdentity.values()];
   const totalBRL = parcelas.reduce((acc, p) => acc + (p.valorBRL ?? 0), 0);
   return { parcelas, totalBRL };
 }
@@ -480,7 +501,10 @@ function parseLimiteApolice(p: Obj): LimiteApoliceInfo | null {
   };
 }
 
-function parseCancelamento(proposta: Obj, tipoEndosso: TipoEndosso | null): CancelamentoInfo | null {
+function parseCancelamento(
+  proposta: Obj,
+  tipoEndosso: TipoEndosso | null,
+): CancelamentoInfo | null {
   if (tipoEndosso !== "B" && tipoEndosso !== "C") return null;
   const motivo = asStr(proposta.motivo_endosso);
   const descricao = asStr(proposta.descricao_motivo_endosso);
@@ -570,10 +594,8 @@ export function computePremioTotal(input: unknown): { valor: number; moeda: stri
   return { valor: total, moeda: moeda ?? "BRL" };
 }
 
-
 /** Compat. */
 export const computePremioLiquido = computePremioTotal;
 export function computePremioLiquidoBRL(input: unknown): number {
   return computePremioTotal(input).valor;
 }
-

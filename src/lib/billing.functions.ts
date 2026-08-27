@@ -1,9 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import type { BillingRecord } from "@/lib/billing/status";
+import { dedupeBillingRecords, type BillingRecord } from "@/lib/billing/status";
 
 const COLS =
-  "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_quitacao, data_vencimento";
+  "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_quitacao, data_vencimento, updated_at";
 
 /** Parcelas de cobrança de uma apólice. */
 export const getPolicyBilling = createServerFn({ method: "GET" })
@@ -17,7 +17,7 @@ export const getPolicyBilling = createServerFn({ method: "GET" })
       .order("numero_endosso", { ascending: true })
       .order("numero_parcela", { ascending: true });
     if (error) throw new Error(error.message);
-    return (rows ?? []) as BillingRecord[];
+    return dedupeBillingRecords((rows ?? []) as BillingRecord[]);
   });
 
 /** Todas as cobranças — usado para mostrar a tag vigente na listagem da carteira. */
@@ -30,5 +30,5 @@ export const getBillingIndex = createServerFn({ method: "GET" })
       .order("numero_endosso", { ascending: true })
       .order("numero_parcela", { ascending: true });
     if (error) throw new Error(error.message);
-    return (rows ?? []) as BillingRecord[];
+    return dedupeBillingRecords((rows ?? []) as BillingRecord[]);
   });

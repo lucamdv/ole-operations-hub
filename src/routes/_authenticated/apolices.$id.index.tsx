@@ -104,11 +104,7 @@ export default function ApoliceDetail() {
               }
             />
             <HeaderFact label="Endossos" value={String(policy.endorsements.length)} />
-            <HeaderFact
-              label="Produto"
-              value={t.dadosGerais.idProduto ?? "—"}
-              mono
-            />
+            <HeaderFact label="Produto" value={t.dadosGerais.idProduto ?? "—"} mono />
             <HeaderFact
               label="Sincronizada"
               value={relativeTime(policy.last_sync_at ?? policy.updated_at)}
@@ -164,7 +160,7 @@ export default function ApoliceDetail() {
         <div className="panel overflow-hidden">
           <div className="grid grid-cols-12 px-4 py-2.5 text-[10.5px] uppercase tracking-wider text-muted-foreground bg-surface-2/60 border-b border-border">
             <div className="col-span-2">#</div>
-            <div className="col-span-7">Identificador</div>
+            <div className="col-span-7">Sequencial</div>
             <div className="col-span-2 text-right">Prêmio total</div>
             <div className="col-span-1 text-right">→</div>
           </div>
@@ -194,7 +190,7 @@ export default function ApoliceDetail() {
                     size="sm"
                   />
                   <span className="font-mono text-[11.5px] text-muted-foreground truncate">
-                    {policy.numero_apolice.slice(0, -6) + seq}
+                    {seq}
                   </span>
                 </div>
                 <div className="col-span-2 text-right font-mono text-[12px]">
@@ -235,9 +231,7 @@ function HeaderFact({
       >
         {value}
       </div>
-      {hint && (
-        <div className="text-[10.5px] font-mono text-muted-foreground mt-0.5">{hint}</div>
-      )}
+      {hint && <div className="text-[10.5px] font-mono text-muted-foreground mt-0.5">{hint}</div>}
     </div>
   );
 }
