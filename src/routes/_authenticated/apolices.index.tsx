@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { memo, useMemo, useState } from "react";
-import { Check, FileText, RefreshCw, Search, X } from "lucide-react";
+import { Check, FileText, LoaderCircle, RefreshCw, Search, X } from "lucide-react";
 import {
   usePolicies,
   useLatestPolicySync,
@@ -41,17 +41,10 @@ function LegIndicator({ label, status }: { label: string; status: LegStatus | nu
     >
       {done ? (
         <Check className="h-3 w-3" />
+      ) : failed || cancelled ? (
+        <X className="h-3 w-3" />
       ) : (
-        <span
-          className={cn(
-            "inline-block h-1.5 w-1.5 rounded-full",
-            failed
-              ? "bg-destructive"
-              : cancelled
-                ? "bg-muted-foreground"
-                : "bg-warning animate-pulse",
-          )}
-        />
+        <LoaderCircle className="h-3 w-3 animate-spin" />
       )}
       {label}
     </span>
@@ -88,6 +81,7 @@ function ApolicesPage() {
   const {
     mutate: runSync,
     isRunning,
+    isCheckingSync,
     emissoes,
     cobrancas,
     cancel: cancelSync,
@@ -134,8 +128,8 @@ function ApolicesPage() {
     return sorted;
   }, [policies, q, tags, situacao, sort, billingInfo]);
 
-
   const synced = !!lastSync?.finished_at;
+  const syncLocked = isRunning || isCheckingSync;
 
   return (
     <div className="space-y-8">
@@ -147,18 +141,23 @@ function ApolicesPage() {
             <span
               className={cn(
                 "inline-block h-1.5 w-1.5 rounded-full",
-                synced ? "bg-emerald-500" : isRunning ? "bg-warning animate-pulse" : "bg-muted-foreground/50",
+                isRunning
+                  ? "bg-warning animate-pulse"
+                  : synced
+                    ? "bg-emerald-500"
+                    : "bg-muted-foreground/50",
               )}
             />
             <span>
-              <span className="text-foreground font-medium">{policies?.length ?? 0}</span> apólices na carteira
+              <span className="text-foreground font-medium">{policies?.length ?? 0}</span> apólices
+              na carteira
             </span>
             <span className="text-border">•</span>
             <span>
-              {lastSync?.finished_at
-                ? `última sincronização ${relativeTime(lastSync.finished_at)}`
-                : lastSync?.status === "running"
-                  ? "sincronização em andamento"
+              {isRunning || lastSync?.status === "running"
+                ? "sincronização em andamento"
+                : lastSync?.finished_at
+                  ? `última sincronização ${relativeTime(lastSync.finished_at)}`
                   : "ainda não sincronizada"}
             </span>
           </p>
@@ -168,11 +167,15 @@ function ApolicesPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => runSync()}
-              disabled={isRunning}
+              disabled={syncLocked}
               className="inline-flex items-center gap-2 h-10 px-4 rounded-lg bg-primary text-primary-foreground text-[12.5px] font-semibold shadow-lg shadow-primary/10 hover:bg-primary/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <RefreshCw className={cn("h-3.5 w-3.5", isRunning && "animate-spin")} />
-              {isRunning ? "Sincronizando…" : "Sincronizar carteira"}
+              {isCheckingSync
+                ? "Verificando…"
+                : isRunning
+                  ? "Sincronizando…"
+                  : "Sincronizar carteira"}
             </button>
             {isRunning && (
               <button
@@ -192,7 +195,6 @@ function ApolicesPage() {
             </div>
           )}
         </div>
-
       </div>
 
       {/* Search */}
@@ -232,7 +234,6 @@ function ApolicesPage() {
           {filtered.length} de {policies?.length ?? 0}
         </span>
       </div>
-
 
       {/* Table */}
       <div>

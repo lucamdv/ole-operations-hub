@@ -1,0 +1,258 @@
+import { flattenApiItems, isJsonRecord, type JsonRecord } from "./motor-sync.core";
+
+const DEFAULT_API_BASE_URL = "https://api.sistemaexcelsior.com.br";
+const DEFAULT_CONTRACTS_BASE_URL = "https://servicos-excelsior-prod.azure-api.net";
+
+interface MotorClientConfig {
+  username: string;
+  password: string;
+  apiBaseUrl: string;
+  contractsBaseUrl: string;
+  systemId: string;
+  requestTimeoutMs: number;
+}
+
+function positiveInteger(value: string | undefined, fallback: number) {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function secureBaseUrl(value: string | undefined, fallback: string, variableName: string) {
+  const url = new URL(value || fallback);
+  if (url.protocol !== "https:") {
+    throw new Error(`${variableName} deve usar HTTPS.`);
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+export function getExcelsiorMotorConfig(): MotorClientConfig {
+  const username = process.env.EXCELSIOR_API_USERNAME?.trim();
+  const password = process.env.EXCELSIOR_API_PASSWORD;
+  const missing = [
+    ...(!username ? ["EXCELSIOR_API_USERNAME"] : []),
+    ...(!password ? ["EXCELSIOR_API_PASSWORD"] : []),
+  ];
+  if (missing.length > 0) {
+    throw new Error(`Credenciais da API Excelsior não configuradas: ${missing.join(", ")}.`);
+  }
+
+  return {
+    username: username!,
+    password: password!,
+    apiBaseUrl: secureBaseUrl(
+      process.env.EXCELSIOR_API_BASE_URL,
+      DEFAULT_API_BASE_URL,
+      "EXCELSIOR_API_BASE_URL",
+    ),
+    contractsBaseUrl: secureBaseUrl(
+      process.env.EXCELSIOR_CONTRACTS_BASE_URL,
+      DEFAULT_CONTRACTS_BASE_URL,
+      "EXCELSIOR_CONTRACTS_BASE_URL",
+    ),
+    systemId: process.env.EXCELSIOR_SYSTEM_ID?.trim() || "1009",
+    requestTimeoutMs: positiveInteger(process.env.EXCELSIOR_REQUEST_TIMEOUT_MS, 30_000),
+  };
+}
+
+export function isExcelsiorMotorConfigured() {
+  return !!(process.env.EXCELSIOR_API_USERNAME?.trim() && process.env.EXCELSIOR_API_PASSWORD);
+}
+
+class ExcelsiorApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "ExcelsiorApiError";
+  }
+}
+
+function retryDelay(response: Response | null, attempt: number) {
+  const retryAfter = response?.headers.get("retry-after");
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds)) return Math.min(seconds * 1_000, 10_000);
+  }
+  return Math.min(400 * 2 ** attempt, 3_000);
+}
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export class ExcelsiorMotorClient {
+  private token: string | null = null;
+  private loginPromise: Promise<string> | null = null;
+
+  constructor(private readonly config = getExcelsiorMotorConfig()) {}
+
+  private async requestJson(
+    label: string,
+    url: URL,
+    init: RequestInit,
+    attempts = 3,
+  ): Promise<unknown> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      let response: Response | null = null;
+      try {
+        response = await fetch(url, {
+          ...init,
+          headers: { Accept: "application/json", ...init.headers },
+          signal: AbortSignal.timeout(this.config.requestTimeoutMs),
+        });
+        if (response.ok) {
+          const text = await response.text();
+          if (!text.trim()) return {};
+          try {
+            return JSON.parse(text) as unknown;
+          } catch {
+            throw new ExcelsiorApiError(`${label}: resposta JSON inválida.`, response.status);
+          }
+        }
+
+        const retryable = response.status === 429 || response.status >= 500;
+        if (!retryable || attempt === attempts - 1) {
+          throw new ExcelsiorApiError(
+            `${label}: API retornou HTTP ${response.status}.`,
+            response.status,
+          );
+        }
+      } catch (error) {
+        lastError = error;
+        if (error instanceof ExcelsiorApiError && error.status < 500 && error.status !== 429) {
+          throw error;
+        }
+        if (attempt === attempts - 1) break;
+      }
+      await delay(retryDelay(response, attempt));
+    }
+
+    if (lastError instanceof Error) throw lastError;
+    throw new Error(`${label}: falha de rede.`);
+  }
+
+  private async login(force = false) {
+    if (!force && this.token) return this.token;
+    if (!force && this.loginPromise) return this.loginPromise;
+
+    this.loginPromise = (async () => {
+      const response = await this.requestJson(
+        "Autenticação Excelsior",
+        new URL("/v1/login", this.config.apiBaseUrl),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            usuario: this.config.username,
+            senha: this.config.password,
+          }),
+        },
+        2,
+      );
+      const token = isJsonRecord(response) ? response.token : null;
+      if (typeof token !== "string" || !token.trim()) {
+        throw new Error("Autenticação Excelsior: token ausente na resposta.");
+      }
+      this.token = token;
+      return token;
+    })();
+
+    try {
+      return await this.loginPromise;
+    } finally {
+      this.loginPromise = null;
+    }
+  }
+
+  private async authorizedRequest(
+    label: string,
+    url: URL,
+    init: RequestInit = {},
+  ): Promise<unknown> {
+    let token = await this.login();
+    try {
+      return await this.requestJson(label, url, {
+        ...init,
+        headers: { ...init.headers, Authorization: `Bearer ${token}` },
+      });
+    } catch (error) {
+      if (!(error instanceof ExcelsiorApiError) || error.status !== 401) throw error;
+      token = await this.login(true);
+      return this.requestJson(label, url, {
+        ...init,
+        headers: { ...init.headers, Authorization: `Bearer ${token}` },
+      });
+    }
+  }
+
+  async listPolicies() {
+    const url = new URL("/backoffice/ro/emissao/", this.config.apiBaseUrl);
+    url.searchParams.set("sistema", this.config.systemId);
+    return this.authorizedRequest("Listagem de apólices", url);
+  }
+
+  async getContract(policyNumber: string): Promise<JsonRecord> {
+    const url = new URL(
+      `/backoffice/ro/contratos/${encodeURIComponent(policyNumber)}`,
+      this.config.contractsBaseUrl,
+    );
+    const response = await this.authorizedRequest("Consulta de contrato", url);
+    const responseIsContract =
+      isJsonRecord(response) &&
+      ["ultimo_endosso", "numero_ultimo_endosso", "ultimoEndosso", "numero_apolice"].some(
+        (key) => response[key] !== undefined,
+      );
+    const item = responseIsContract
+      ? response
+      : Array.isArray(response) && isJsonRecord(response[0])
+        ? response[0]
+        : flattenApiItems(response)[0];
+    if (!item) throw new Error(`Contrato ${policyNumber}: resposta vazia.`);
+    return item;
+  }
+
+  async getIssuanceDocument(documentNumber: string) {
+    const url = new URL(
+      `/backoffice/ro/emissao/${encodeURIComponent(documentNumber)}`,
+      this.config.apiBaseUrl,
+    );
+    // A prova estática fornecida validou este recurso por GET. Além de expressar
+    // corretamente uma leitura, evita repetir o POST sem corpo do workflow legado.
+    const response = await this.authorizedRequest("Consulta de emissão", url, { method: "GET" });
+    return Array.isArray(response) && response.length === 1 ? response[0] : response;
+  }
+
+  async listOpenBilling() {
+    const url = new URL("/backoffice/cobranca/parcelas/", this.config.apiBaseUrl);
+    url.searchParams.set("tipo", "Emissao");
+    url.searchParams.set("quitacao", "Aberta");
+    url.searchParams.set("situacao", "Ativo");
+    url.searchParams.set("sistemaorigem", this.config.systemId);
+    return this.authorizedRequest("Listagem de parcelas abertas", url);
+  }
+
+  async getBillingDocument(documentNumber: string) {
+    const url = new URL(
+      `/backoffice/cobranca/parcelas/${encodeURIComponent(documentNumber)}/1`,
+      this.config.apiBaseUrl,
+    );
+    return this.authorizedRequest("Consulta individual de cobrança", url);
+  }
+
+  async listSettledBilling(start: string, end: string) {
+    const url = new URL("/backoffice/cobranca/parcelas/", this.config.apiBaseUrl);
+    url.searchParams.set("tipo", "Emissao");
+    url.searchParams.set("inicio", start);
+    url.searchParams.set("fim", end);
+    url.searchParams.set("quitacao", "Total");
+    url.searchParams.set("sistemaorigem", this.config.systemId);
+    return this.authorizedRequest("Listagem de parcelas quitadas", url);
+  }
+
+  async testConnection() {
+    const response = await this.listPolicies();
+    return { reachable: true, records: flattenApiItems(response).length };
+  }
+}

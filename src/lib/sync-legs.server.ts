@@ -10,6 +10,13 @@ export async function markSyncLeg(
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const now = new Date().toISOString();
 
+  const { data: current } = await supabaseAdmin
+    .from("policy_sync_runs")
+    .select("status")
+    .eq("id", runId)
+    .maybeSingle();
+  if ((current as { status: string } | null)?.status === "cancelled") return;
+
   const patch: Record<string, unknown> = {
     [`${leg}_status`]: outcome.status,
     [`${leg}_finished_at`]: now,
@@ -22,16 +29,23 @@ export async function markSyncLeg(
   }
   if (outcome.errorMessage) patch.error_message = outcome.errorMessage.slice(0, 500);
 
-  await supabaseAdmin.from("policy_sync_runs").update(patch as never).eq("id", runId);
+  await supabaseAdmin
+    .from("policy_sync_runs")
+    .update(patch as never)
+    .eq("id", runId)
+    .neq("status", "cancelled");
 
   const { data: row } = await supabaseAdmin
     .from("policy_sync_runs")
     .select("status, emissoes_status, cobrancas_status, created_at")
     .eq("id", runId)
     .maybeSingle();
-  const r = row as
-    | { status: string; emissoes_status: string; cobrancas_status: string; created_at: string }
-    | null;
+  const r = row as {
+    status: string;
+    emissoes_status: string;
+    cobrancas_status: string;
+    created_at: string;
+  } | null;
   if (!r || r.status === "cancelled") return;
 
   const done = (s: string) => s === "success" || s === "error";

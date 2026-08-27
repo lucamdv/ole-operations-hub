@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { runPolicySyncImpl } from "@/lib/policies.functions";
+import { runPolicySyncImpl } from "@/lib/policy-sync-runner.server";
 
 /**
  * Endpoint público chamado pelo pg_cron (e outros agendadores) para

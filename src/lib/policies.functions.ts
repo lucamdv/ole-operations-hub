@@ -1,10 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
-import { resolveWebhookUrl, type WebhookMode } from "@/lib/webhook-mode";
+import type { WebhookMode } from "@/lib/webhook-mode";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
-
-// URL do webhook MOTOR OLÉ. DEVE ser configurada via secret N8N_MOTOR_POLICIES_URL
-// (use a URL de produção /webhook/..., não /webhook-test/...).
 
 export interface PolicyListItem {
   id: string;
@@ -54,201 +51,20 @@ export interface PolicySyncStatus {
   cobrancas_total: number;
 }
 
-
-// Implementação interna (sem auth). Usada tanto pela serverFn protegida quanto
-// pelo hook público /api/public/hooks/policy-sync (que já valida shared-secret).
-export async function runPolicySyncImpl(webhookMode?: WebhookMode | null) {
-  const rawUrl = process.env.N8N_MOTOR_POLICIES_URL;
-  const url = rawUrl ? resolveWebhookUrl(rawUrl, webhookMode) : rawUrl;
-  if (!url) {
-    throw new Error(
-      "Secret N8N_MOTOR_POLICIES_URL ainda não configurada. Cole a URL do webhook do MOTOR OLÉ.",
-    );
-  }
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-
-  const syncStartedAt = new Date();
-  // A consulta de parcelas quitadas é incremental. Usamos a última perna de
-  // cobrança concluída com sucesso para não criar lacunas depois de uma falha.
-  // Na primeira execução, fazemos um lookback conservador de sete dias.
-  let billingWindowStart = new Date(syncStartedAt.getTime() - 7 * 24 * 60 * 60 * 1_000);
-  try {
-    const { data: previousBillingRun, error: previousBillingErr } = await supabaseAdmin
-      .from("policy_sync_runs")
-      .select("cobrancas_finished_at")
-      .eq("cobrancas_status", "success")
-      .not("cobrancas_finished_at", "is", null)
-      .order("cobrancas_finished_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (previousBillingErr) throw previousBillingErr;
-    const previousFinishedAt = (previousBillingRun as { cobrancas_finished_at: string | null } | null)
-      ?.cobrancas_finished_at;
-    if (previousFinishedAt) {
-      const parsed = new Date(previousFinishedAt);
-      if (!Number.isNaN(parsed.getTime())) billingWindowStart = parsed;
-    }
-  } catch (err) {
-    console.error("[policy-sync] falha ao calcular janela incremental de cobranças", err);
-  }
-
-  const billingWindow = {
-    inicio: billingWindowStart.toISOString().slice(0, 10),
-    fim: syncStartedAt.toISOString().slice(0, 10),
-    inicio_iso: billingWindowStart.toISOString(),
-    fim_iso: syncStartedAt.toISOString(),
-  };
-
-  const { data: runRow, error: insertErr } = await supabaseAdmin
-    .from("policy_sync_runs")
-    .insert({ status: "running" } as never)
-    .select("id")
-    .single();
-
-  if (insertErr || !runRow) {
-    throw new Error("Falha ao criar run: " + (insertErr?.message ?? "sem id"));
-  }
-  const runId = (runRow as { id: string }).id;
-
-  const base =
-    process.env.PUBLIC_APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
-  if (!base) throw new Error("PUBLIC_APP_URL não configurada e nenhuma URL da Vercel disponível.");
-  const normalizedBase = /^https?:\/\//.test(base) ? base : `https://${base}`;
-  const origin = normalizedBase.replace(/\/$/, "");
-  const callbackUrl = `${origin}/api/public/policy-sync-callback?run_id=${runId}`;
-  const callbackUrlCobrancas = `${origin}/api/public/billing-sync-callback?run_id=${runId}`;
-
-  // Mapa { numero_apolice: maior_sequencial_de_endosso } para o motor devolver
-  // apenas os endossos novos (sincronização incremental).
-  const ultimosEndossos: Record<string, number> = {};
-  try {
-    const { data: pols } = await supabaseAdmin
-      .from("policies")
-      .select("numero_apolice, numero_endosso_atual, endorsements(numero_endosso)");
-    for (const p of (pols ?? []) as Array<{
-      numero_apolice: string;
-      numero_endosso_atual: string | null;
-      endorsements: Array<{ numero_endosso: string }> | null;
-    }>) {
-      const nums = (p.endorsements ?? [])
-        .map((e) => parseInt(String(e.numero_endosso).replace(/\D/g, ""), 10))
-        .filter((n) => Number.isFinite(n));
-      const fromHead = p.numero_endosso_atual
-        ? parseInt(p.numero_endosso_atual.replace(/\D/g, ""), 10)
-        : NaN;
-      if (Number.isFinite(fromHead)) nums.push(fromHead);
-      ultimosEndossos[p.numero_apolice] = nums.length > 0 ? Math.max(...nums) : 0;
-    }
-  } catch (err) {
-    console.error("[policy-sync] falha ao montar ultimos_endossos_plataforma", err);
-  }
-
-  // Documentos ainda pendentes de cobrança: emissão Ativa + pagamento Aberto.
-  // Identificador = 24 primeiros dígitos da apólice + sequencial do endosso (6).
-  const documentosPendentes: string[] = [];
-  const parcelasPendentes: Array<{
-    numero_documento: string;
-    numero_parcela: string;
-    id_parcela: string | null;
-    numero_proposta: string | null;
-    data_vencimento: string | null;
-    status_pagamento: string;
-    situacao_emissao: string;
-  }> = [];
-  try {
-    const { data: billing } = await supabaseAdmin
-      .from("policy_billing")
-      .select(
-        "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, data_vencimento, status_pagamento, situacao_emissao",
-      );
-    const seen = new Set<string>();
-    for (const b of (billing ?? []) as Array<{
-      numero_apolice: string;
-      numero_endosso: string;
-      numero_parcela: string;
-      id_parcela_seguradora: string | null;
-      numero_proposta: string | null;
-      data_vencimento: string | null;
-      status_pagamento: string | null;
-      situacao_emissao: string | null;
-    }>) {
-      const pago = (b.status_pagamento ?? "").trim().toLowerCase();
-      const situacao = (b.situacao_emissao ?? "").trim().toLowerCase();
-      if (!pago.startsWith("abert") || !situacao.startsWith("ativ")) continue;
-      const seq = String(b.numero_endosso).replace(/\D/g, "").slice(-6).padStart(6, "0");
-      const doc = b.numero_apolice.slice(0, -6) + seq;
-      parcelasPendentes.push({
-        numero_documento: doc,
-        numero_parcela: b.numero_parcela,
-        id_parcela: b.id_parcela_seguradora,
-        numero_proposta: b.numero_proposta,
-        data_vencimento: b.data_vencimento,
-        status_pagamento: b.status_pagamento ?? "Aberta",
-        situacao_emissao: b.situacao_emissao ?? "Ativa",
-      });
-      if (!seen.has(doc)) {
-        seen.add(doc);
-        documentosPendentes.push(doc);
-      }
-    }
-  } catch (err) {
-    console.error("[policy-sync] falha ao montar documentos_pendentes_cobranca", err);
-  }
-
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        run_id: runId,
-        callback_url_emissoes: callbackUrl,
-        callback_url_cobrancas: callbackUrlCobrancas,
-        // Compatibilidade com o fluxo antigo do n8n.
-        callback_url: callbackUrl,
-        trigger: "ole-copilot-policies",
-        at: new Date().toISOString(),
-        ultimos_endossos_plataforma: ultimosEndossos,
-        documentos_pendentes_cobranca: documentosPendentes,
-        parcelas_abertas_cobranca: parcelasPendentes,
-        cobrancas_inicio: billingWindow.inicio,
-        cobrancas_fim: billingWindow.fim,
-        cobrancas_inicio_iso: billingWindow.inicio_iso,
-        cobrancas_fim_iso: billingWindow.fim_iso,
-      }),
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      const msg =
-        res.status === 404 && url.includes("/webhook-test/")
-          ? 'Webhook n8n (modo teste) não está escutando. Clique em "Listen for test event" no n8n.'
-          : `MOTOR OLÉ retornou ${res.status}: ${body.slice(0, 200)}`;
-      await supabaseAdmin
-        .from("policy_sync_runs")
-        .update({ status: "error", error_message: msg, finished_at: new Date().toISOString() } as never)
-        .eq("id", runId);
-      throw new Error(msg);
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "Falha de rede";
-    await supabaseAdmin
-      .from("policy_sync_runs")
-      .update({ status: "error", error_message: msg, finished_at: new Date().toISOString() } as never)
-      .eq("id", runId);
-    throw new Error(`Não foi possível disparar a sincronização: ${msg}`);
-  }
-
-  return { runId, status: "running" as const };
+export interface LatestPolicySync extends PolicySyncStatus {
+  created_at: string;
 }
 
 export const runPolicySync = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d?: { mode?: WebhookMode }) => d ?? {})
-  .handler(async ({ data }) => runPolicySyncImpl(data.mode));
+  .handler(async ({ data }) => {
+    const { runPolicySyncImpl } = await import("@/lib/policy-sync-runner.server");
+    return runPolicySyncImpl(data.mode);
+  });
 
-export const getPolicySyncStatus = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth])
+export const getPolicySyncStatus = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d: { runId: string }) => d)
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -286,74 +102,77 @@ export const cancelPolicySync = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
-export const getLatestPolicySync = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth]).handler(async () => {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data, error } = await supabaseAdmin
-    .from("policy_sync_runs")
-    .select("id, status, total_apolices, finished_at, created_at, error_message")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  return data as {
-    id: string;
-    status: string;
-    total_apolices: number;
-    finished_at: string | null;
-    created_at: string;
-    error_message: string | null;
-  } | null;
-});
+export const getLatestPolicySync = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async () => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await supabaseAdmin
+      .from("policy_sync_runs")
+      .select(
+        "id, status, total_apolices, error_message, duration_ms, finished_at, created_at, emissoes_status, emissoes_finished_at, cobrancas_status, cobrancas_finished_at, cobrancas_total",
+      )
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return data as LatestPolicySync | null;
+  });
 
-export const getPolicies = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth]).handler(async () => {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { findSeguradoNome, computePremioLiquido, normalizeEndossoNum } = await import(
-    "@/lib/excelsior/translate"
-  );
-  const { data, error } = await supabaseAdmin
-    .from("policies")
-    .select(
-      "id, numero_apolice, numero_endosso_atual, premio_liquido, proposta, updated_at, endorsements(numero_endosso, ordem)",
-    )
-    .order("updated_at", { ascending: false });
-  if (error) throw new Error(error.message);
-  return ((data ?? []) as Array<{
-    id: string;
-    numero_apolice: string;
-    numero_endosso_atual: string | null;
-    premio_liquido: number | string;
-    proposta: JsonObject | null;
-    updated_at: string;
-    endorsements: Array<{ numero_endosso: string; ordem: number }>;
-  }>).map((p) => {
-    const { valor, moeda } = computePremioLiquido(p.proposta ?? {});
-    const endos = p.endorsements ?? [];
-    // Último endosso = maior ordem (a apólice base tem ordem 0).
-    const ultimo = endos.reduce<{ numero_endosso: string; ordem: number } | null>(
-      (acc, e) => (acc && acc.ordem >= e.ordem ? acc : e),
-      null,
-    );
-    const ultimoNum = ultimo ? normalizeEndossoNum(ultimo.numero_endosso) : null;
-    return {
-      id: p.id,
-      numero_apolice: p.numero_apolice,
-      numero_endosso_atual: ultimoNum ?? p.numero_endosso_atual,
-      premio_liquido: valor,
-      premio_moeda: moeda,
-      endorsements_count: endos.length,
-      updated_at: p.updated_at,
-      segurado_nome: findSeguradoNome(p.proposta ?? {}),
-    };
-  }) as PolicyListItem[];
-});
+export const getPolicies = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async () => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { findSeguradoNome, computePremioLiquido, normalizeEndossoNum } =
+      await import("@/lib/excelsior/translate");
+    const { data, error } = await supabaseAdmin
+      .from("policies")
+      .select(
+        "id, numero_apolice, numero_endosso_atual, premio_liquido, proposta, updated_at, endorsements(numero_endosso, ordem)",
+      )
+      .order("updated_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (
+      (data ?? []) as Array<{
+        id: string;
+        numero_apolice: string;
+        numero_endosso_atual: string | null;
+        premio_liquido: number | string;
+        proposta: JsonObject | null;
+        updated_at: string;
+        endorsements: Array<{ numero_endosso: string; ordem: number }>;
+      }>
+    ).map((p) => {
+      const { valor, moeda } = computePremioLiquido(p.proposta ?? {});
+      const endos = p.endorsements ?? [];
+      // Último endosso = maior ordem (a apólice base tem ordem 0).
+      const ultimo = endos.reduce<{ numero_endosso: string; ordem: number } | null>(
+        (acc, e) => (acc && acc.ordem >= e.ordem ? acc : e),
+        null,
+      );
+      const ultimoNum = ultimo ? normalizeEndossoNum(ultimo.numero_endosso) : null;
+      return {
+        id: p.id,
+        numero_apolice: p.numero_apolice,
+        numero_endosso_atual: ultimoNum ?? p.numero_endosso_atual,
+        premio_liquido: valor,
+        premio_moeda: moeda,
+        endorsements_count: endos.length,
+        updated_at: p.updated_at,
+        segurado_nome: findSeguradoNome(p.proposta ?? {}),
+      };
+    }) as PolicyListItem[];
+  });
 
-export const getPolicyByNumero = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth])
+export const getPolicyByNumero = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d: { numero: string }) => d)
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data: p, error } = await supabaseAdmin
       .from("policies")
-      .select("id, numero_apolice, numero_endosso_atual, premio_liquido, proposta, updated_at, last_sync_run_id")
+      .select(
+        "id, numero_apolice, numero_endosso_atual, premio_liquido, proposta, updated_at, last_sync_run_id",
+      )
       .eq("numero_apolice", data.numero)
       .maybeSingle();
     if (error) throw new Error(error.message);
@@ -398,14 +217,16 @@ export const getPolicyByNumero = createServerFn({ method: "GET" }).middleware([r
       proposta: row.proposta ?? {},
       updated_at: row.updated_at,
       last_sync_at: lastSyncAt,
-      endorsements: ((endos ?? []) as Array<{
-        id: string;
-        numero_endosso: string;
-        premio_liquido: number | string;
-        ordem: number;
-        proposta: Record<string, unknown>;
-        created_at: string;
-      }>).map((e) => {
+      endorsements: (
+        (endos ?? []) as Array<{
+          id: string;
+          numero_endosso: string;
+          premio_liquido: number | string;
+          ordem: number;
+          proposta: Record<string, unknown>;
+          created_at: string;
+        }>
+      ).map((e) => {
         const pl = computePremioLiquido(e.proposta ?? {});
         return {
           id: e.id,
@@ -420,7 +241,8 @@ export const getPolicyByNumero = createServerFn({ method: "GET" }).middleware([r
     } as unknown as PolicyDetail;
   });
 
-export const getEndorsement = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth])
+export const getEndorsement = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d: { numero: string; endosso: string }) => d)
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
@@ -479,9 +301,5 @@ export const PolicySyncCallbackSchema = z.object({
   origem: z.string().optional(),
   total_apolices: z.coerce.number().optional(),
   total_endossos_novos: z.coerce.number().optional(),
-  dados: z
-    .array(z.record(z.string(), z.unknown()))
-    .optional()
-    .default([]),
+  dados: z.array(z.record(z.string(), z.unknown())).optional().default([]),
 });
-

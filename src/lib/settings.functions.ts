@@ -13,8 +13,9 @@ export interface IntegrationStatus {
   publicCallback?: string;
 }
 
-export const getIntegrationsStatus = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth]).handler(
-  async ({ context }): Promise<IntegrationStatus[]> => {
+export const getIntegrationsStatus = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<IntegrationStatus[]> => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
@@ -55,8 +56,10 @@ export const getIntegrationsStatus = createServerFn({ method: "GET" }).middlewar
     return [
       {
         id: "motor_policies",
-        label: "MOTOR OLÉ — Sincronização da Carteira",
-        configured: !!process.env.N8N_MOTOR_POLICIES_URL,
+        label: "MOTOR OLÉ — API direta da carteira",
+        configured: !!(
+          process.env.EXCELSIOR_API_USERNAME?.trim() && process.env.EXCELSIOR_API_PASSWORD
+        ),
         lastStatus: sync?.status ?? null,
         lastAt: sync?.finished_at ?? sync?.created_at ?? null,
         lastDetail:
@@ -91,8 +94,7 @@ export const getIntegrationsStatus = createServerFn({ method: "GET" }).middlewar
         publicCallback: `${base.replace(/\/$/, "")}/api/public/audit-callback`,
       },
     ];
-  },
-);
+  });
 
 async function pingWebhook(url: string | undefined, label: string) {
   if (!url) return { ok: false, status: 0, message: `${label}: secret não configurada` };
@@ -122,10 +124,23 @@ async function pingWebhook(url: string | undefined, label: string) {
 export const pingMotorPolicies = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d?: { mode?: WebhookMode }) => d ?? {})
-  .handler(async ({ context, data }) => {
+  .handler(async ({ context }) => {
     await assertAdmin(context);
-    const raw = process.env.N8N_MOTOR_POLICIES_URL;
-    return pingWebhook(raw ? resolveWebhookUrl(raw, data.mode) : raw, "MOTOR OLÉ");
+    try {
+      const { ExcelsiorMotorClient } = await import("@/lib/excelsior/motor-client.server");
+      const result = await new ExcelsiorMotorClient().testConnection();
+      return {
+        ok: true,
+        status: 200,
+        message: `MOTOR OLÉ: API autenticada · ${result.records} registro(s) acessível(is)`,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        status: 0,
+        message: `MOTOR OLÉ: ${error instanceof Error ? error.message : "falha de conexão"}`,
+      };
+    }
   });
 
 export const pingAuditWebhook = createServerFn({ method: "POST" })
@@ -144,16 +159,12 @@ export interface DataCounters {
   endorsements: number;
 }
 
-export const getDataCounters = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth]).handler(
-  async ({ context }): Promise<DataCounters> => {
+export const getDataCounters = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }): Promise<DataCounters> => {
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const tables = [
-      "audit_runs",
-      "audit_findings",
-      "policies",
-      "endorsements",
-    ] as const;
+    const tables = ["audit_runs", "audit_findings", "policies", "endorsements"] as const;
     const entries = await Promise.all(
       tables.map(async (t) => {
         const { count } = await supabaseAdmin.from(t).select("id", { count: "exact", head: true });
@@ -161,10 +172,10 @@ export const getDataCounters = createServerFn({ method: "GET" }).middleware([req
       }),
     );
     return Object.fromEntries(entries) as unknown as DataCounters;
-  },
-);
+  });
 
-export const purgeOldAudits = createServerFn({ method: "POST" }).middleware([requireSupabaseAuth])
+export const purgeOldAudits = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
   .inputValidator((d: { days?: number }) => d)
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
@@ -180,119 +191,122 @@ export const purgeOldAudits = createServerFn({ method: "POST" }).middleware([req
     return { ok: true, removed: count ?? 0, cutoff };
   });
 
-export const exportPoliciesCSV = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth]).handler(async ({ context }) => {
-  await assertAdmin(context);
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { translateProposta, computePremioTotal } = await import("@/lib/excelsior/translate");
-  const { csvDocument, csvNumber, csvDate, csvDateTime } = await import("@/lib/csv");
+export const exportPoliciesCSV = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await assertAdmin(context);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { translateProposta, computePremioTotal } = await import("@/lib/excelsior/translate");
+    const { csvDocument, csvNumber, csvDate, csvDateTime } = await import("@/lib/csv");
 
-  const PAGE = 1000;
+    const PAGE = 1000;
 
-  type PolicyRow = {
-    numero_apolice: string;
-    numero_endosso_atual: string | null;
-    proposta: Record<string, unknown> | null;
-    updated_at: string;
-  };
+    type PolicyRow = {
+      numero_apolice: string;
+      numero_endosso_atual: string | null;
+      proposta: Record<string, unknown> | null;
+      updated_at: string;
+    };
 
-  // Leitura paginada — a API limita o retorno por requisição.
-  const rows: PolicyRow[] = [];
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabaseAdmin
-      .from("policies")
-      .select("numero_apolice, numero_endosso_atual, proposta, updated_at")
-      .order("numero_apolice", { ascending: true })
-      .range(from, from + PAGE - 1);
-    if (error) throw new Error(error.message);
-    const batch = (data ?? []) as PolicyRow[];
-    rows.push(...batch);
-    if (batch.length < PAGE) break;
-  }
-
-  // Endossos por apólice: quantidade e maior sequencial (= endosso atual real).
-  const endorsementCount = new Map<string, number>();
-  const lastEndorsement = new Map<string, string>();
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabaseAdmin
-      .from("endorsements")
-      .select("numero_apolice, numero_endosso")
-      .range(from, from + PAGE - 1);
-    if (error) throw new Error(error.message);
-    const batch = (data ?? []) as Array<{ numero_apolice: string; numero_endosso: string }>;
-    for (const e of batch) {
-      endorsementCount.set(e.numero_apolice, (endorsementCount.get(e.numero_apolice) ?? 0) + 1);
-      const prev = lastEndorsement.get(e.numero_apolice);
-      if (!prev || e.numero_endosso > prev) lastEndorsement.set(e.numero_apolice, e.numero_endosso);
+    // Leitura paginada — a API limita o retorno por requisição.
+    const rows: PolicyRow[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabaseAdmin
+        .from("policies")
+        .select("numero_apolice, numero_endosso_atual, proposta, updated_at")
+        .order("numero_apolice", { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error(error.message);
+      const batch = (data ?? []) as PolicyRow[];
+      rows.push(...batch);
+      if (batch.length < PAGE) break;
     }
-    if (batch.length < PAGE) break;
-  }
 
+    // Endossos por apólice: quantidade e maior sequencial (= endosso atual real).
+    const endorsementCount = new Map<string, number>();
+    const lastEndorsement = new Map<string, string>();
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabaseAdmin
+        .from("endorsements")
+        .select("numero_apolice, numero_endosso")
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error(error.message);
+      const batch = (data ?? []) as Array<{ numero_apolice: string; numero_endosso: string }>;
+      for (const e of batch) {
+        endorsementCount.set(e.numero_apolice, (endorsementCount.get(e.numero_apolice) ?? 0) + 1);
+        const prev = lastEndorsement.get(e.numero_apolice);
+        if (!prev || e.numero_endosso > prev)
+          lastEndorsement.set(e.numero_apolice, e.numero_endosso);
+      }
+      if (batch.length < PAGE) break;
+    }
 
-  const header = [
-    "numero_apolice",
-    "endosso_atual",
-    "qtd_endossos",
-    "segurado",
-    "documento_segurado",
-    "corretor",
-    "grupo_susep",
-    "ramo_susep",
-    "tipo_apolice",
-    "inicio_vigencia",
-    "fim_vigencia",
-    "data_assinatura",
-    "premio_total",
-    "moeda",
-    "limite_maximo_apolice",
-    "moeda_limite",
-    "atualizado_em",
-  ];
+    const header = [
+      "numero_apolice",
+      "endosso_atual",
+      "qtd_endossos",
+      "segurado",
+      "documento_segurado",
+      "corretor",
+      "grupo_susep",
+      "ramo_susep",
+      "tipo_apolice",
+      "inicio_vigencia",
+      "fim_vigencia",
+      "data_assinatura",
+      "premio_total",
+      "moeda",
+      "limite_maximo_apolice",
+      "moeda_limite",
+      "atualizado_em",
+    ];
 
-  const out: unknown[][] = [header];
-  for (const r of rows) {
-    const t = translateProposta(r.proposta ?? {});
-    const segurado = t.partes.find((p) => p.papel === "SEGURADO");
-    const corretor = t.partes.find((p) => p.papel === "CORRETOR");
-    const { valor, moeda } = computePremioTotal(r.proposta ?? {});
-    out.push([
-      r.numero_apolice,
-      lastEndorsement.get(r.numero_apolice) ?? r.numero_endosso_atual ?? "",
-      endorsementCount.get(r.numero_apolice) ?? 0,
-      segurado?.nome ?? "",
-      segurado?.documentos?.[0]?.valor ?? "",
-      corretor?.nome ?? "",
-      t.dadosGerais.grupoSusep ?? "",
-      t.dadosGerais.ramoSusep ?? "",
-      t.dadosGerais.tipoApolice ?? "",
-      csvDate(t.datas.inicioVigencia),
-      csvDate(t.datas.fimVigencia),
-      csvDate(t.datas.assinatura),
-      csvNumber(valor),
-      moeda,
-      csvNumber(t.limiteApolice?.valor ?? null),
-      t.limiteApolice?.moeda ?? "",
-      csvDateTime(r.updated_at),
-    ]);
-  }
+    const out: unknown[][] = [header];
+    for (const r of rows) {
+      const t = translateProposta(r.proposta ?? {});
+      const segurado = t.partes.find((p) => p.papel === "SEGURADO");
+      const corretor = t.partes.find((p) => p.papel === "CORRETOR");
+      const { valor, moeda } = computePremioTotal(r.proposta ?? {});
+      out.push([
+        r.numero_apolice,
+        lastEndorsement.get(r.numero_apolice) ?? r.numero_endosso_atual ?? "",
+        endorsementCount.get(r.numero_apolice) ?? 0,
+        segurado?.nome ?? "",
+        segurado?.documentos?.[0]?.valor ?? "",
+        corretor?.nome ?? "",
+        t.dadosGerais.grupoSusep ?? "",
+        t.dadosGerais.ramoSusep ?? "",
+        t.dadosGerais.tipoApolice ?? "",
+        csvDate(t.datas.inicioVigencia),
+        csvDate(t.datas.fimVigencia),
+        csvDate(t.datas.assinatura),
+        csvNumber(valor),
+        moeda,
+        csvNumber(t.limiteApolice?.valor ?? null),
+        t.limiteApolice?.moeda ?? "",
+        csvDateTime(r.updated_at),
+      ]);
+    }
 
-  return { csv: csvDocument(out), count: rows.length };
-});
+    return { csv: csvDocument(out), count: rows.length };
+  });
 
-
-export const exportLatestAuditJSON = createServerFn({ method: "GET" }).middleware([requireSupabaseAuth]).handler(async ({ context }) => {
-  await assertAdmin(context);
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data: runs } = await supabaseAdmin
-    .from("audit_runs")
-    .select("*")
-    .eq("status", "success")
-    .order("created_at", { ascending: false })
-    .limit(1);
-  const run = (runs ?? [])[0] as { id: string } | undefined;
-  if (!run) return { json: null as string | null };
-  const { data: findings } = await supabaseAdmin
-    .from("audit_findings")
-    .select("*")
-    .eq("run_id", run.id);
-  return { json: JSON.stringify({ run, findings: findings ?? [] }, null, 2) };
-});
+export const exportLatestAuditJSON = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    await assertAdmin(context);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: runs } = await supabaseAdmin
+      .from("audit_runs")
+      .select("*")
+      .eq("status", "success")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    const run = (runs ?? [])[0] as { id: string } | undefined;
+    if (!run) return { json: null as string | null };
+    const { data: findings } = await supabaseAdmin
+      .from("audit_findings")
+      .select("*")
+      .eq("run_id", run.id);
+    return { json: JSON.stringify({ run, findings: findings ?? [] }, null, 2) };
+  });

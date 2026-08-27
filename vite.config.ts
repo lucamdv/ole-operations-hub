@@ -10,7 +10,13 @@ export default defineConfig({
   plugins: [
     tsConfigPaths(),
     tanstackStart(),
-    nitro(),
+    nitro({
+      vercel: {
+        functions: {
+          maxDuration: "max",
+        },
+      },
+    }),
     viteReact(),
     tailwindcss(),
     VitePWA({

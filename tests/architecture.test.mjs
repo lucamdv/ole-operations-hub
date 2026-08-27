@@ -11,12 +11,16 @@ test("Vercel não possui cron automático de 5 em 5 minutos", async () => {
   assert.equal(Object.hasOwn(config, "crons"), false);
 });
 
+test("Vercel mantém Fluid Compute e a duração máxima do plano", async () => {
+  const vercel = JSON.parse(await read("vercel.json"));
+  const vite = await read("vite.config.ts");
+  assert.equal(vercel.fluid, true);
+  assert.match(vite, /maxDuration:\s*"max"/);
+});
+
 test("uma falha em qualquer perna torna a sincronização geral um erro", async () => {
   const source = await read("src/lib/sync-legs.server.ts");
-  assert.match(
-    source,
-    /r\.emissoes_status === "error"\s*\|\|\s*r\.cobrancas_status === "error"/,
-  );
+  assert.match(source, /r\.emissoes_status === "error"\s*\|\|\s*r\.cobrancas_status === "error"/);
   assert.doesNotMatch(
     source,
     /r\.emissoes_status === "error"\s*&&\s*r\.cobrancas_status === "error"/,
@@ -25,11 +29,11 @@ test("uma falha em qualquer perna torna a sincronização geral um erro", async 
 
 test("Lovable não está presente nas dependências de runtime", async () => {
   const pkg = JSON.parse(await read("package.json"));
-  const names = [
-    ...Object.keys(pkg.dependencies ?? {}),
-    ...Object.keys(pkg.devDependencies ?? {}),
-  ];
-  assert.equal(names.some((name) => name.toLowerCase().includes("lovable")), false);
+  const names = [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.devDependencies ?? {})];
+  assert.equal(
+    names.some((name) => name.toLowerCase().includes("lovable")),
+    false,
+  );
 });
 
 test("service role do Supabase não é exposta como variável VITE", async () => {
@@ -74,4 +78,52 @@ test("scheduler permanece protegido mesmo sem cron da Vercel", async () => {
   assert.match(source, /process\.env\.CRON_SECRET/);
   assert.match(source, /process\.env\.SCHEDULER_HOOK_SECRET/);
   assert.match(source, /return json\(\{ ok: false, error: "unauthorized" \}, 401\)/);
+});
+
+test("sincronização da carteira não depende mais do webhook n8n", async () => {
+  const serverFn = await read("src/lib/policies.functions.ts");
+  const runner = await read("src/lib/policy-sync-runner.server.ts");
+  const envExample = await read(".env.example");
+  assert.doesNotMatch(`${serverFn}\n${runner}`, /N8N_MOTOR_POLICIES_URL/);
+  assert.doesNotMatch(envExample, /^N8N_MOTOR_POLICIES_URL=/m);
+  assert.match(runner, /executeDirectMotorSync/);
+});
+
+test("cliente do MOTOR mantém credenciais apenas no servidor e usa HTTPS", async () => {
+  const source = await read("src/lib/excelsior/motor-client.server.ts");
+  assert.match(source, /process\.env\.EXCELSIOR_API_USERNAME/);
+  assert.match(source, /process\.env\.EXCELSIOR_API_PASSWORD/);
+  assert.match(source, /https:\/\/api\.sistemaexcelsior\.com\.br/);
+  assert.match(source, /https:\/\/servicos-excelsior-prod\.azure-api\.net/);
+  assert.doesNotMatch(source, /N8N_/);
+});
+
+test("motor direto cobre emissões, contratos, cobrança aberta, individual e quitada", async () => {
+  const source = await read("src/lib/excelsior/motor-client.server.ts");
+  assert.match(source, /\/backoffice\/ro\/emissao\//);
+  assert.match(source, /\/backoffice\/ro\/contratos\//);
+  assert.match(source, /\/backoffice\/cobranca\/parcelas\//);
+  assert.match(source, /quitacao", "Aberta"/);
+  assert.match(source, /quitacao", "Total"/);
+  assert.match(source, /"Consulta de emissão", url, \{ method: "GET" \}/);
+});
+
+test("emissões consultam somente documentos ausentes na plataforma", async () => {
+  const source = await read("src/lib/excelsior/motor-sync.server.ts");
+  assert.match(source, /endorsements\(numero_endosso\)/);
+  assert.match(source, /selectMissingEndorsementDocuments/);
+  assert.doesNotMatch(source, /buildEndorsementDocumentNumbers\(/);
+});
+
+test("sincronização ativa é recuperada após F5 e possui trava contra concorrência", async () => {
+  const hook = await read("src/hooks/use-policies.ts");
+  const server = await read("src/lib/policy-sync-runner.server.ts");
+  const migration = await read("supabase/migrations/20260826190000_single_active_policy_sync.sql");
+  assert.match(hook, /latestFn\(\)/);
+  assert.match(hook, /row\.status === "running"/);
+  assert.match(hook, /setIsPolling\(true\)/);
+  assert.match(server, /\.eq\("status", "running"\)/);
+  assert.match(server, /reused: true/);
+  assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS policy_sync_runs_single_running/);
+  assert.match(migration, /WHERE status = 'running'/);
 });

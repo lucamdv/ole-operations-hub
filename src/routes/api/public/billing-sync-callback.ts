@@ -21,7 +21,7 @@ const ItemSchema = z
     numero_apolice: z.string().min(6).max(60).optional(),
     documento: z.string().min(6).max(60).optional(),
     numero_documento: z.string().min(6).max(60).optional(),
-    numero_endosso: z.union([z.string(), z.number()]).optional(),
+    numero_endosso: z.union([z.string(), z.number()]).nullish(),
     numero_parcela: z.union([z.string(), z.number()]).optional(),
     id_parcela: z.union([z.string(), z.number()]).nullish(),
     numero_proposta: z.union([z.string(), z.number()]).nullish(),
@@ -85,163 +85,189 @@ function toTimestamp(v: unknown): string | null {
   return d ? `${d}T00:00:00Z` : null;
 }
 
+async function handleBillingSyncCallback(
+  { request }: { request: Request },
+  trustedInternalCall = false,
+) {
+  // BILLING_CALLBACK_SECRET passa a ser o secret oficial. Durante a troca
+  // coordenada, o valor antigo da auditoria continua aceito sem interromper
+  // execuções que já estavam em andamento no n8n.
+  const acceptedSecrets = [
+    process.env.BILLING_CALLBACK_SECRET,
+    process.env.AUDIT_CALLBACK_SECRET,
+  ].filter((value): value is string => !!value);
+  const provided = request.headers.get("x-callback-secret");
+  if (!trustedInternalCall && (!provided || !acceptedSecrets.includes(provided))) {
+    return json({ error: "Unauthorized" }, 401);
+  }
+
+  const runId = new URL(request.url).searchParams.get("run_id");
+  if (!runId) return json({ error: "run_id obrigatório" }, 400);
+
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    return json({ error: "Invalid JSON" }, 400);
+  }
+
+  const candidate = flattenItems(raw);
+  const parsed = PayloadSchema.safeParse(candidate);
+  if (!parsed.success) {
+    const { markSyncLeg } = await import("@/lib/sync-legs.server");
+    await markSyncLeg(runId, "cobrancas", {
+      status: "error",
+      total: 0,
+      errorMessage: "Cobranças: payload inválido",
+    });
+    return json({ error: "Payload inválido", issues: parsed.error.issues }, 400);
+  }
+
+  type Row = {
+    numero_apolice: string;
+    numero_endosso: string;
+    numero_parcela: string;
+    id_parcela_seguradora: string | null;
+    numero_proposta: string | null;
+    status_pagamento: string;
+    situacao_emissao: string;
+    data_vencimento: string | null;
+    data_quitacao: string | null;
+    updated_at: string;
+  };
+
+  const byKey = new Map<string, Row>();
+  const invalidItems: Array<{ index: number; reason: string }> = [];
+  for (const [index, item] of parsed.data.entries()) {
+    const docRaw = item.numero_apolice ?? item.documento ?? item.numero_documento;
+    if (!docRaw) {
+      invalidItems.push({ index, reason: "documento ausente" });
+      continue;
+    }
+    const digits = String(docRaw).replace(/\D/g, "");
+    if (digits.length < 12) {
+      invalidItems.push({ index, reason: "documento inválido" });
+      continue;
+    }
+    const seq =
+      item.numero_endosso != null
+        ? String(item.numero_endosso).replace(/\D/g, "").slice(-6).padStart(6, "0")
+        : digits.slice(-6);
+    // A apólice é sempre gravada com sequencial 000000.
+    const apolice = digits.slice(0, -6) + "000000";
+    const rawItem = item as Record<string, unknown>;
+    const parcelaRaw = valueFrom(rawItem, [
+      "numero_parcela",
+      "parcela",
+      "sequencial_parcela",
+      "numeroParcela",
+      "parcela_numero",
+    ]);
+    const idParcela = identityText(
+      valueFrom(rawItem, ["id_parcela", "parcela_id", "idParcela", "codigo_parcela"]),
+    );
+    const numeroProposta = identityText(item.numero_proposta);
+    const dataVencimento = toDateOnly(item.data_vencimento);
+    // Proposta + vencimento é apenas fallback para APIs antigas que ainda
+    // não expõem um sequencial; nunca voltamos a agrupar só por endosso.
+    const numeroParcela =
+      identityText(parcelaRaw) ??
+      idParcela ??
+      (numeroProposta && dataVencimento ? `${numeroProposta}@${dataVencimento}` : null);
+    if (!numeroParcela) {
+      invalidItems.push({ index, reason: "identidade da parcela ausente" });
+      continue;
+    }
+    const row: Row = {
+      numero_apolice: apolice,
+      numero_endosso: seq,
+      numero_parcela: numeroParcela,
+      id_parcela_seguradora: idParcela,
+      numero_proposta: numeroProposta,
+      status_pagamento: (item.status_pagamento ?? "").trim() || "Aberta",
+      situacao_emissao: (item.situacao_emissao ?? "").trim() || "Ativa",
+      data_vencimento: dataVencimento,
+      data_quitacao: toTimestamp(item.data_quitacao),
+      updated_at: new Date().toISOString(),
+    };
+    byKey.set(`${apolice}#${seq}#${numeroParcela}`, row);
+  }
+
+  const rows = [...byKey.values()];
+  const { markSyncLeg } = await import("@/lib/sync-legs.server");
+
+  if (invalidItems.length > 0) {
+    await markSyncLeg(runId, "cobrancas", {
+      status: "error",
+      total: 0,
+      errorMessage: `Cobranças: ${invalidItems.length} parcela(s) sem identidade válida`,
+    });
+    return json(
+      {
+        error: "Existem parcelas sem documento ou identidade válida",
+        received: parsed.data.length,
+        invalid: invalidItems.slice(0, 50),
+      },
+      400,
+    );
+  }
+
+  if (rows.length === 0) {
+    await markSyncLeg(runId, "cobrancas", { status: "success", total: 0 });
+    return json({ ok: true, upserted: 0 });
+  }
+
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  let upserted = 0;
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = rows.slice(i, i + 500);
+    const { error } = await supabaseAdmin.from("policy_billing").upsert(chunk as never, {
+      onConflict: "numero_apolice,numero_endosso,numero_parcela",
+    });
+    if (error) {
+      console.error("[billing-sync-callback] upsert falhou", error.message);
+      await markSyncLeg(runId, "cobrancas", {
+        status: "error",
+        total: upserted,
+        errorMessage: `Cobranças: ${error.message}`,
+      });
+      return json({ error: error.message, upserted }, 500);
+    }
+    upserted += chunk.length;
+  }
+
+  await markSyncLeg(runId, "cobrancas", { status: "success", total: upserted });
+
+  return json({ ok: true, received: parsed.data.length, upserted });
+}
+
+/** Persiste parcelas sem uma chamada HTTP intermediária dentro da aplicação. */
+export async function persistBillingSyncPayload(runId: string, payload: unknown) {
+  const response = await handleBillingSyncCallback(
+    {
+      request: new Request(
+        `https://internal.invalid/api/public/billing-sync-callback?run_id=${encodeURIComponent(runId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      ),
+    },
+    true,
+  );
+  const body = (await response.json()) as Record<string, unknown>;
+  if (!response.ok) {
+    throw new Error(String(body.error ?? "Falha ao persistir cobranças."));
+  }
+  return body;
+}
+
 export const Route = createFileRoute("/api/public/billing-sync-callback")({
   server: {
     handlers: {
       OPTIONS: async () => new Response(null, { status: 204, headers: CORS }),
-
-      POST: async ({ request }) => {
-        // BILLING_CALLBACK_SECRET passa a ser o secret oficial. Durante a troca
-        // coordenada, o valor antigo da auditoria continua aceito sem interromper
-        // execuções que já estavam em andamento no n8n.
-        const acceptedSecrets = [
-          process.env.BILLING_CALLBACK_SECRET,
-          process.env.AUDIT_CALLBACK_SECRET,
-        ].filter((value): value is string => !!value);
-        const provided = request.headers.get("x-callback-secret");
-        if (!provided || !acceptedSecrets.includes(provided)) {
-          return json({ error: "Unauthorized" }, 401);
-        }
-
-        const runId = new URL(request.url).searchParams.get("run_id");
-        if (!runId) return json({ error: "run_id obrigatório" }, 400);
-
-        let raw: unknown;
-        try {
-          raw = await request.json();
-        } catch {
-          return json({ error: "Invalid JSON" }, 400);
-        }
-
-        const candidate = flattenItems(raw);
-        const parsed = PayloadSchema.safeParse(candidate);
-        if (!parsed.success) {
-          const { markSyncLeg } = await import("@/lib/sync-legs.server");
-          await markSyncLeg(runId, "cobrancas", {
-            status: "error",
-            total: 0,
-            errorMessage: "Cobranças: payload inválido",
-          });
-          return json({ error: "Payload inválido", issues: parsed.error.issues }, 400);
-        }
-
-        type Row = {
-          numero_apolice: string;
-          numero_endosso: string;
-          numero_parcela: string;
-          id_parcela_seguradora: string | null;
-          numero_proposta: string | null;
-          status_pagamento: string;
-          situacao_emissao: string;
-          data_vencimento: string | null;
-          data_quitacao: string | null;
-          updated_at: string;
-        };
-
-        const byKey = new Map<string, Row>();
-        const invalidItems: Array<{ index: number; reason: string }> = [];
-        for (const [index, item] of parsed.data.entries()) {
-          const docRaw = item.numero_apolice ?? item.documento ?? item.numero_documento;
-          if (!docRaw) {
-            invalidItems.push({ index, reason: "documento ausente" });
-            continue;
-          }
-          const digits = String(docRaw).replace(/\D/g, "");
-          if (digits.length < 12) {
-            invalidItems.push({ index, reason: "documento inválido" });
-            continue;
-          }
-          const seq =
-            item.numero_endosso != null
-              ? String(item.numero_endosso).replace(/\D/g, "").slice(-6).padStart(6, "0")
-              : digits.slice(-6);
-          // A apólice é sempre gravada com sequencial 000000.
-          const apolice = digits.slice(0, -6) + "000000";
-          const rawItem = item as Record<string, unknown>;
-          const parcelaRaw = valueFrom(rawItem, [
-            "numero_parcela",
-            "parcela",
-            "sequencial_parcela",
-            "numeroParcela",
-            "parcela_numero",
-          ]);
-          const idParcela = identityText(
-            valueFrom(rawItem, ["id_parcela", "parcela_id", "idParcela", "codigo_parcela"]),
-          );
-          const numeroProposta = identityText(item.numero_proposta);
-          const dataVencimento = toDateOnly(item.data_vencimento);
-          // Proposta + vencimento é apenas fallback para APIs antigas que ainda
-          // não expõem um sequencial; nunca voltamos a agrupar só por endosso.
-          const numeroParcela =
-            identityText(parcelaRaw) ??
-            idParcela ??
-            (numeroProposta && dataVencimento ? `${numeroProposta}@${dataVencimento}` : null);
-          if (!numeroParcela) {
-            invalidItems.push({ index, reason: "identidade da parcela ausente" });
-            continue;
-          }
-          const row: Row = {
-            numero_apolice: apolice,
-            numero_endosso: seq,
-            numero_parcela: numeroParcela,
-            id_parcela_seguradora: idParcela,
-            numero_proposta: numeroProposta,
-            status_pagamento: (item.status_pagamento ?? "").trim() || "Aberta",
-            situacao_emissao: (item.situacao_emissao ?? "").trim() || "Ativa",
-            data_vencimento: dataVencimento,
-            data_quitacao: toTimestamp(item.data_quitacao),
-            updated_at: new Date().toISOString(),
-          };
-          byKey.set(`${apolice}#${seq}#${numeroParcela}`, row);
-        }
-
-        const rows = [...byKey.values()];
-        const { markSyncLeg } = await import("@/lib/sync-legs.server");
-
-        if (invalidItems.length > 0) {
-          await markSyncLeg(runId, "cobrancas", {
-            status: "error",
-            total: 0,
-            errorMessage: `Cobranças: ${invalidItems.length} parcela(s) sem identidade válida`,
-          });
-          return json(
-            {
-              error: "Existem parcelas sem documento ou identidade válida",
-              received: parsed.data.length,
-              invalid: invalidItems.slice(0, 50),
-            },
-            400,
-          );
-        }
-
-        if (rows.length === 0) {
-          await markSyncLeg(runId, "cobrancas", { status: "success", total: 0 });
-          return json({ ok: true, upserted: 0 });
-        }
-
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-        let upserted = 0;
-        for (let i = 0; i < rows.length; i += 500) {
-          const chunk = rows.slice(i, i + 500);
-          const { error } = await supabaseAdmin.from("policy_billing").upsert(chunk as never, {
-            onConflict: "numero_apolice,numero_endosso,numero_parcela",
-          });
-          if (error) {
-            console.error("[billing-sync-callback] upsert falhou", error.message);
-            await markSyncLeg(runId, "cobrancas", {
-              status: "error",
-              total: upserted,
-              errorMessage: `Cobranças: ${error.message}`,
-            });
-            return json({ error: error.message, upserted }, 500);
-          }
-          upserted += chunk.length;
-        }
-
-        await markSyncLeg(runId, "cobrancas", { status: "success", total: upserted });
-
-        return json({ ok: true, received: parsed.data.length, upserted });
-      },
+      POST: (context) => handleBillingSyncCallback(context),
     },
   },
 });

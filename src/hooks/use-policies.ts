@@ -45,8 +45,7 @@ export function usePolicy(numero: string | undefined) {
 export function useEndorsementDetail(numero: string | undefined, endosso: string | undefined) {
   return useQuery({
     queryKey: ["policies", "endorsement", numero, endosso] as const,
-    queryFn: () =>
-      getEndorsement({ data: { numero: numero!, endosso: endosso! } }),
+    queryFn: () => getEndorsement({ data: { numero: numero!, endosso: endosso! } }),
     enabled: !!numero && !!endosso,
     staleTime: 30_000,
   });
@@ -54,18 +53,29 @@ export function useEndorsementDetail(numero: string | undefined, endosso: string
 
 export type LegStatus = "running" | "success" | "error" | "cancelled";
 
+function resolvedLegStatus(runStatus: string, legStatus: string | null | undefined): LegStatus {
+  if (legStatus && legStatus !== "running") return legStatus as LegStatus;
+  if (runStatus === "success" || runStatus === "error" || runStatus === "cancelled") {
+    return runStatus;
+  }
+  return "running";
+}
+
 export function useRunPolicySync() {
   const qc = useQueryClient();
   const fireFn = useServerFn(runPolicySync);
   const { mode } = useWebhookMode();
   const statusFn = useServerFn(getPolicySyncStatus);
   const cancelFn = useServerFn(cancelPolicySync);
+  const latestFn = useServerFn(getLatestPolicySync);
 
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [isPolling, setIsPolling] = useState(false);
+  const [isCheckingSync, setIsCheckingSync] = useState(true);
   const [emissoes, setEmissoes] = useState<LegStatus | null>(null);
   const [cobrancas, setCobrancas] = useState<LegStatus | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hydrationVersion = useRef(0);
 
   useEffect(
     () => () => {
@@ -83,12 +93,12 @@ export function useRunPolicySync() {
     setActiveRunId(null);
   };
 
-  const pollOnce = async (runId: string, startedAt: number) => {
+  const pollOnce = async (runId: string) => {
     try {
       const row = await statusFn({ data: { runId } });
       if (row) {
-        setEmissoes((row.emissoes_status ?? "running") as LegStatus);
-        setCobrancas((row.cobrancas_status ?? "running") as LegStatus);
+        setEmissoes(resolvedLegStatus(row.status, row.emissoes_status));
+        setCobrancas(resolvedLegStatus(row.status, row.cobrancas_status));
       }
       if (row?.status === "cancelled") {
         stopPolling();
@@ -116,26 +126,64 @@ export function useRunPolicySync() {
     } catch (err) {
       console.error("[poll] erro consultando status:", err);
     }
-    if (Date.now() - startedAt > 15 * 60_000) {
-      toast.error("Sincronização expirou", { description: "Sem resposta após 15 minutos." });
-      stopPolling();
-      return;
-    }
-    pollTimer.current = setTimeout(() => pollOnce(runId, startedAt), 3_000);
+    pollTimer.current = setTimeout(() => pollOnce(runId), 3_000);
   };
+
+  // Recupera o estado persistido da última run. Assim F5, troca de rota ou uma
+  // segunda aba não liberam o botão enquanto o backend continua trabalhando.
+  useEffect(() => {
+    const version = ++hydrationVersion.current;
+    setIsCheckingSync(true);
+    void latestFn()
+      .then((row) => {
+        if (hydrationVersion.current !== version) return;
+        if (!row) {
+          setEmissoes(null);
+          setCobrancas(null);
+          return;
+        }
+
+        setEmissoes(resolvedLegStatus(row.status, row.emissoes_status));
+        setCobrancas(resolvedLegStatus(row.status, row.cobrancas_status));
+        if (row.status === "running") {
+          setActiveRunId(row.id);
+          setIsPolling(true);
+          pollTimer.current = setTimeout(() => pollOnce(row.id), 0);
+        }
+      })
+      .catch((error) => {
+        console.error("[policy-sync] falha ao recuperar execução ativa", error);
+      })
+      .finally(() => {
+        if (hydrationVersion.current === version) setIsCheckingSync(false);
+      });
+
+    return () => {
+      hydrationVersion.current = version + 1;
+    };
+    // A recuperação deve acontecer uma única vez por montagem da tela.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const mutation = useMutation({
     mutationFn: () => fireFn({ data: { mode } }),
-    onSuccess: ({ runId }) => {
+    onMutate: () => {
+      setEmissoes("running");
+      setCobrancas("running");
+    },
+    onSuccess: ({ runId, reused }) => {
       setActiveRunId(runId);
       setIsPolling(true);
       setEmissoes("running");
       setCobrancas("running");
-      toast.info("Sincronização iniciada", { description: "Aguardando MOTOR OLÉ…" });
-      const startedAt = Date.now();
-      pollTimer.current = setTimeout(() => pollOnce(runId, startedAt), 3_000);
+      toast.info(reused ? "Sincronização já em andamento" : "Sincronização iniciada", {
+        description: "Consultando as APIs da Excelsior…",
+      });
+      pollTimer.current = setTimeout(() => pollOnce(runId), reused ? 0 : 1_000);
     },
     onError: (err: Error) => {
+      setEmissoes("error");
+      setCobrancas("error");
       toast.error("Falha ao disparar sincronização", { description: err.message });
     },
   });
@@ -159,6 +207,7 @@ export function useRunPolicySync() {
   return {
     ...mutation,
     isRunning: mutation.isPending || isPolling,
+    isCheckingSync,
     activeRunId,
     emissoes,
     cobrancas,

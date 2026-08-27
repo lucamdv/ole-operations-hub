@@ -1,7 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { CheckCircle2, XCircle, AlertCircle, Copy, Zap, ExternalLink, FlaskConical, Rocket } from "lucide-react";
+import {
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  Copy,
+  Zap,
+  ExternalLink,
+  FlaskConical,
+  Rocket,
+} from "lucide-react";
 import { toast } from "sonner";
 import {
   getIntegrationsStatus,
@@ -12,7 +21,6 @@ import {
 import { relativeTime } from "@/lib/format";
 import { useCurrentRole } from "@/hooks/use-current-role";
 import { useWebhookMode } from "@/hooks/use-webhook-mode";
-
 
 export function IntegracoesTab() {
   const fetchFn = useServerFn(getIntegrationsStatus);
@@ -56,17 +64,27 @@ export function IntegracoesTab() {
                 ) : (
                   <FlaskConical className="h-4 w-4 text-warning" />
                 )}
-                <div className="text-[13.5px] font-semibold">Modo do webhook (somente para você)</div>
+                <div className="text-[13.5px] font-semibold">
+                  Modo da auditoria (somente para você)
+                </div>
               </div>
               <p className="text-[12px] text-muted-foreground mt-1.5">
-                Com o modo de produção ativo, os disparos usam o caminho
-                <code className="mx-1 px-1 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">/webhook/</code>
+                Esta preferência vale apenas para o webhook do motor de auditoria. Em produção, os
+                disparos usam o caminho
+                <code className="mx-1 px-1 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
+                  /webhook/
+                </code>
                 do n8n. Desativado, usam
-                <code className="mx-1 px-1 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">/webhook-test/</code>
-                (exige “Listen for test event”). Essa preferência é salva apenas neste usuário/navegador e
-                não afeta os outros usuários nem os disparos automáticos.
+                <code className="mx-1 px-1 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
+                  /webhook-test/
+                </code>
+                (exige “Listen for test event”). Essa preferência é salva apenas neste
+                usuário/navegador e não afeta a sincronização direta da carteira, os outros usuários
+                nem os disparos automáticos.
               </p>
-              <div className={`text-[11.5px] mt-2 ${mode === "production" ? "text-success" : "text-warning"}`}>
+              <div
+                className={`text-[11.5px] mt-2 ${mode === "production" ? "text-success" : "text-warning"}`}
+              >
                 Atualmente: {mode === "production" ? "Produção" : "Teste"}
               </div>
             </div>
@@ -97,7 +115,6 @@ export function IntegracoesTab() {
         </div>
       )}
       {(data ?? []).map((it) => (
-
         <IntegrationCard
           key={it.id}
           item={it}
@@ -116,11 +133,19 @@ export function IntegracoesTab() {
         />
       ))}
       <p className="text-[11.5px] text-muted-foreground pt-2">
-        Os webhooks são gerenciados via secrets do backend. Para alterar URLs, atualize as variáveis
-        <code className="mx-1 px-1.5 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">N8N_MOTOR_POLICIES_URL</code>
+        A carteira usa a API Excelsior diretamente com as secrets
+        <code className="mx-1 px-1.5 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
+          EXCELSIOR_API_USERNAME
+        </code>
         e
-        <code className="mx-1 px-1.5 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">N8N_AUDIT_WEBHOOK_URL</code>
-        no painel de backend.
+        <code className="mx-1 px-1.5 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
+          EXCELSIOR_API_PASSWORD
+        </code>
+        . A auditoria continua usando
+        <code className="mx-1 px-1.5 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
+          N8N_AUDIT_WEBHOOK_URL
+        </code>
+        no backend.
       </p>
     </div>
   );
@@ -142,8 +167,16 @@ function IntegrationCard({
     : item.lastStatus === "error"
       ? { Icon: AlertCircle, color: "text-destructive", label: "Erro na última execução" }
       : item.lastStatus === "success" || item.id === "audit_callback"
-        ? { Icon: CheckCircle2, color: "text-success", label: item.id === "audit_callback" ? "Pronto" : "Operacional" }
-        : { Icon: AlertCircle, color: "text-warning", label: item.lastStatus ?? "Aguardando primeiro evento" };
+        ? {
+            Icon: CheckCircle2,
+            color: "text-success",
+            label: item.id === "audit_callback" ? "Pronto" : "Operacional",
+          }
+        : {
+            Icon: AlertCircle,
+            color: "text-warning",
+            label: item.lastStatus ?? "Aguardando primeiro evento",
+          };
 
   return (
     <div className="panel p-4">
