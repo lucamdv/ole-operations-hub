@@ -93,9 +93,17 @@ test("cliente do MOTOR mantém credenciais apenas no servidor e usa HTTPS", asyn
   const source = await read("src/lib/excelsior/motor-client.server.ts");
   assert.match(source, /process\.env\.EXCELSIOR_API_USERNAME/);
   assert.match(source, /process\.env\.EXCELSIOR_API_PASSWORD/);
-  assert.match(source, /https:\/\/api\.sistemaexcelsior\.com\.br/);
   assert.match(source, /https:\/\/servicos-excelsior-prod\.azure-api\.net/);
   assert.doesNotMatch(source, /N8N_/);
+});
+
+test("motor usa o host direto da Excelsior em todas as chamadas", async () => {
+  const source = await read("src/lib/excelsior/motor-client.server.ts");
+  assert.doesNotMatch(source, /DEFAULT_API_BASE_URL/);
+  assert.doesNotMatch(source, /this\.config\.apiBaseUrl/);
+  assert.doesNotMatch(source, /this\.config\.contractsBaseUrl/);
+  assert.equal((source.match(/this\.config\.servicesBaseUrl/g) ?? []).length, 7);
+  assert.match(source, /EXCELSIOR_SERVICES_BASE_URL/);
 });
 
 test("motor direto cobre emissões, contratos, cobrança aberta, individual e quitada", async () => {

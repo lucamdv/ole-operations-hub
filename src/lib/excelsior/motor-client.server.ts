@@ -1,13 +1,15 @@
 import { flattenApiItems, isJsonRecord, type JsonRecord } from "./motor-sync.core";
 
-const DEFAULT_API_BASE_URL = "https://api.sistemaexcelsior.com.br";
-const DEFAULT_CONTRACTS_BASE_URL = "https://servicos-excelsior-prod.azure-api.net";
+// The public api.sistemaexcelsior.com.br hostname is protected by Cloudflare and
+// rejects requests coming from Vercel with HTTP 403. The Azure hostname reaches
+// the same Excelsior services directly and exposes every MOTOR endpoint used
+// below, so all server-to-server traffic must use it.
+const DEFAULT_SERVICES_BASE_URL = "https://servicos-excelsior-prod.azure-api.net";
 
 interface MotorClientConfig {
   username: string;
   password: string;
-  apiBaseUrl: string;
-  contractsBaseUrl: string;
+  servicesBaseUrl: string;
   systemId: string;
   requestTimeoutMs: number;
 }
@@ -39,15 +41,13 @@ export function getExcelsiorMotorConfig(): MotorClientConfig {
   return {
     username: username!,
     password: password!,
-    apiBaseUrl: secureBaseUrl(
-      process.env.EXCELSIOR_API_BASE_URL,
-      DEFAULT_API_BASE_URL,
-      "EXCELSIOR_API_BASE_URL",
-    ),
-    contractsBaseUrl: secureBaseUrl(
-      process.env.EXCELSIOR_CONTRACTS_BASE_URL,
-      DEFAULT_CONTRACTS_BASE_URL,
-      "EXCELSIOR_CONTRACTS_BASE_URL",
+    // EXCELSIOR_CONTRACTS_BASE_URL is kept as a backwards-compatible alias so
+    // the production deployment starts using the direct host without an env
+    // migration. EXCELSIOR_SERVICES_BASE_URL is the canonical name going forward.
+    servicesBaseUrl: secureBaseUrl(
+      process.env.EXCELSIOR_SERVICES_BASE_URL ?? process.env.EXCELSIOR_CONTRACTS_BASE_URL,
+      DEFAULT_SERVICES_BASE_URL,
+      "EXCELSIOR_SERVICES_BASE_URL",
     ),
     systemId: process.env.EXCELSIOR_SYSTEM_ID?.trim() || "1009",
     requestTimeoutMs: positiveInteger(process.env.EXCELSIOR_REQUEST_TIMEOUT_MS, 30_000),
@@ -79,6 +79,28 @@ function retryDelay(response: Response | null, attempt: number) {
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function responseErrorDetail(response: Response) {
+  const cloudflare = response.headers.get("server")?.toLowerCase() === "cloudflare";
+  const text = await response.text();
+  try {
+    const body = JSON.parse(text) as unknown;
+    if (isJsonRecord(body)) {
+      const direct = body.mensagem ?? body.message;
+      if (typeof direct === "string" && direct.trim()) return direct.trim().slice(0, 240);
+      if (Array.isArray(body.erros)) {
+        const messages = body.erros
+          .filter(isJsonRecord)
+          .map((item) => item.mensagem ?? item.message)
+          .filter((item): item is string => typeof item === "string" && !!item.trim());
+        if (messages.length > 0) return messages.join("; ").slice(0, 240);
+      }
+    }
+  } catch {
+    // HTML/proxy error pages are intentionally not propagated to the UI.
+  }
+  return cloudflare ? "requisição bloqueada pelo Cloudflare" : null;
 }
 
 export class ExcelsiorMotorClient {
@@ -114,8 +136,9 @@ export class ExcelsiorMotorClient {
 
         const retryable = response.status === 429 || response.status >= 500;
         if (!retryable || attempt === attempts - 1) {
+          const detail = await responseErrorDetail(response);
           throw new ExcelsiorApiError(
-            `${label}: API retornou HTTP ${response.status}.`,
+            `${label}: API retornou HTTP ${response.status}${detail ? ` (${detail})` : ""}.`,
             response.status,
           );
         }
@@ -140,7 +163,7 @@ export class ExcelsiorMotorClient {
     this.loginPromise = (async () => {
       const response = await this.requestJson(
         "Autenticação Excelsior",
-        new URL("/v1/login", this.config.apiBaseUrl),
+        new URL("/v1/login", this.config.servicesBaseUrl),
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -188,7 +211,7 @@ export class ExcelsiorMotorClient {
   }
 
   async listPolicies() {
-    const url = new URL("/backoffice/ro/emissao/", this.config.apiBaseUrl);
+    const url = new URL("/backoffice/ro/emissao/", this.config.servicesBaseUrl);
     url.searchParams.set("sistema", this.config.systemId);
     return this.authorizedRequest("Listagem de apólices", url);
   }
@@ -196,7 +219,7 @@ export class ExcelsiorMotorClient {
   async getContract(policyNumber: string): Promise<JsonRecord> {
     const url = new URL(
       `/backoffice/ro/contratos/${encodeURIComponent(policyNumber)}`,
-      this.config.contractsBaseUrl,
+      this.config.servicesBaseUrl,
     );
     const response = await this.authorizedRequest("Consulta de contrato", url);
     const responseIsContract =
@@ -216,7 +239,7 @@ export class ExcelsiorMotorClient {
   async getIssuanceDocument(documentNumber: string) {
     const url = new URL(
       `/backoffice/ro/emissao/${encodeURIComponent(documentNumber)}`,
-      this.config.apiBaseUrl,
+      this.config.servicesBaseUrl,
     );
     // A prova estática fornecida validou este recurso por GET. Além de expressar
     // corretamente uma leitura, evita repetir o POST sem corpo do workflow legado.
@@ -225,7 +248,7 @@ export class ExcelsiorMotorClient {
   }
 
   async listOpenBilling() {
-    const url = new URL("/backoffice/cobranca/parcelas/", this.config.apiBaseUrl);
+    const url = new URL("/backoffice/cobranca/parcelas/", this.config.servicesBaseUrl);
     url.searchParams.set("tipo", "Emissao");
     url.searchParams.set("quitacao", "Aberta");
     url.searchParams.set("situacao", "Ativo");
@@ -236,13 +259,13 @@ export class ExcelsiorMotorClient {
   async getBillingDocument(documentNumber: string) {
     const url = new URL(
       `/backoffice/cobranca/parcelas/${encodeURIComponent(documentNumber)}/1`,
-      this.config.apiBaseUrl,
+      this.config.servicesBaseUrl,
     );
     return this.authorizedRequest("Consulta individual de cobrança", url);
   }
 
   async listSettledBilling(start: string, end: string) {
-    const url = new URL("/backoffice/cobranca/parcelas/", this.config.apiBaseUrl);
+    const url = new URL("/backoffice/cobranca/parcelas/", this.config.servicesBaseUrl);
     url.searchParams.set("tipo", "Emissao");
     url.searchParams.set("inicio", start);
     url.searchParams.set("fim", end);
