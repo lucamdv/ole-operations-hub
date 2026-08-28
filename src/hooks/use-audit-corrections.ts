@@ -2,12 +2,15 @@ import { useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { requestAuditCorrection } from "@/lib/audit-corrections.functions";
+import { useWebhookMode } from "@/hooks/use-webhook-mode";
 
 export function useRequestAuditCorrection() {
   const requestFn = useServerFn(requestAuditCorrection);
+  const { mode } = useWebhookMode();
 
   return useMutation({
-    mutationFn: (input: { run_id: string; finding_ids: string[] }) => requestFn({ data: input }),
+    mutationFn: (input: { run_id: string; finding_ids: string[] }) =>
+      requestFn({ data: { ...input, mode } }),
     onSuccess: (result) => {
       toast.success("Correção solicitada ao n8n", {
         description: `${result.policies} apólice(s) · ${result.occurrences} ocorrência(s). A conclusão será confirmada pela próxima auditoria.`,

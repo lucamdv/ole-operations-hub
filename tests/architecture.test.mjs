@@ -95,6 +95,7 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
   const incidentDetail = await read("src/components/alertas/incident-detail.tsx");
   const findingsDialog = await read("src/components/audit/findings-list-dialog.tsx");
   const serverFn = await read("src/lib/audit-corrections.functions.ts");
+  const correctionHook = await read("src/hooks/use-audit-corrections.ts");
   const payload = await read("src/lib/audit/correction-payload.ts");
   const envExample = await read(".env.example");
 
@@ -108,6 +109,10 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
   assert.doesNotMatch(alertPage, /useResolveFinding/);
 
   assert.match(serverFn, /process\.env\.N8N_CORRECTION_WEBHOOK_URL/);
+  assert.match(serverFn, /resolveWebhookUrl\(rawWebhookUrl, data\.mode\)/);
+  assert.match(serverFn, /modo teste/);
+  assert.match(correctionHook, /useWebhookMode/);
+  assert.match(correctionHook, /data: \{ \.\.\.input, mode \}/);
   assert.match(serverFn, /\.eq\("run_id", data\.run_id\)/);
   assert.match(serverFn, /\.in\("id", findingIds\)/);
   assert.doesNotMatch(serverFn, /resolveFinding|audit_resolutions/);

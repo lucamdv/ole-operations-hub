@@ -2,10 +2,12 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import type { AuditFindingRow } from "@/lib/audit/types";
+import { resolveWebhookUrl } from "@/lib/webhook-mode";
 
 const RequestCorrectionSchema = z.object({
   run_id: z.string().uuid(),
   finding_ids: z.array(z.string().uuid()).min(1).max(500),
+  mode: z.enum(["test", "production"]).optional(),
 });
 
 export const requestAuditCorrection = createServerFn({ method: "POST" })
@@ -14,10 +16,11 @@ export const requestAuditCorrection = createServerFn({ method: "POST" })
     RequestCorrectionSchema.parse(value),
   )
   .handler(async ({ data, context }) => {
-    const webhookUrl = process.env.N8N_CORRECTION_WEBHOOK_URL?.trim();
-    if (!webhookUrl) {
+    const rawWebhookUrl = process.env.N8N_CORRECTION_WEBHOOK_URL?.trim();
+    if (!rawWebhookUrl) {
       throw new Error("Secret N8N_CORRECTION_WEBHOOK_URL não configurada no servidor.");
     }
+    const webhookUrl = resolveWebhookUrl(rawWebhookUrl, data.mode);
     let parsedWebhookUrl: URL;
     try {
       parsedWebhookUrl = new URL(webhookUrl);
@@ -79,6 +82,11 @@ export const requestAuditCorrection = createServerFn({ method: "POST" })
     }
 
     if (!response.ok) {
+      if (response.status === 404 && data.mode === "test") {
+        throw new Error(
+          'Webhook n8n (modo teste) não está escutando. Clique em "Listen for test event" no n8n.',
+        );
+      }
       throw new Error(`Webhook de correção retornou HTTP ${response.status}.`);
     }
 

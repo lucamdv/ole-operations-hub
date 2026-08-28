@@ -65,12 +65,12 @@ export function IntegracoesTab() {
                   <FlaskConical className="h-4 w-4 text-warning" />
                 )}
                 <div className="text-[13.5px] font-semibold">
-                  Modo da auditoria (somente para você)
+                  Modo dos webhooks n8n (somente para você)
                 </div>
               </div>
               <p className="text-[12px] text-muted-foreground mt-1.5">
-                Esta preferência vale apenas para o webhook do motor de auditoria. Em produção, os
-                disparos usam o caminho
+                Esta preferência vale para a auditoria, a extração de endossos e as solicitações de
+                correção dos alertas. Em produção, os disparos usam o caminho
                 <code className="mx-1 px-1 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
                   /webhook/
                 </code>
@@ -141,9 +141,13 @@ export function IntegracoesTab() {
         <code className="mx-1 px-1.5 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
           EXCELSIOR_API_PASSWORD
         </code>
-        . A auditoria continua usando
+        . A auditoria e a correção de alertas continuam usando, respectivamente,
         <code className="mx-1 px-1.5 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
           N8N_AUDIT_WEBHOOK_URL
+        </code>
+        e
+        <code className="mx-1 px-1.5 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
+          N8N_CORRECTION_WEBHOOK_URL
         </code>
         no backend.
       </p>

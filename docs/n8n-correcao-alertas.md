@@ -7,6 +7,11 @@ O endpoint pode responder sem corpo (`200`, `202` ou `204`). O Cockpit considera
 HTTP de recebimento; a correção só é concluída quando o mesmo erro não aparece na auditoria
 seguinte.
 
+A opção **Modo dos webhooks n8n** em Configurações também se aplica a este fluxo. Em Produção, o
+Cockpit usa o caminho `/webhook/` configurado no secret. Em Teste, troca somente o caminho para
+`/webhook-test/`, preservando o identificador do webhook; o n8n precisa estar em **Listen for test
+event**. Nenhum secret adicional é necessário.
+
 ## Exemplo de payload
 
 ```json
