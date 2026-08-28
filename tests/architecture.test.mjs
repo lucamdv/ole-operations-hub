@@ -117,7 +117,9 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
   assert.match(correctionHook, /data: \{ \.\.\.input, mode \}/);
   assert.match(serverFn, /\.eq\("run_id", data\.run_id\)/);
   assert.match(serverFn, /\.in\("id", findingIds\)/);
-  assert.doesNotMatch(serverFn, /resolveFinding|audit_resolutions/);
+  assert.doesNotMatch(serverFn, /resolveFinding|from\("audit_resolutions"\)\s*\.insert/);
+  assert.match(serverFn, /from\("audit_correction_responses"\)/);
+  assert.match(serverFn, /trackingRecorded/);
   assert.match(payload, /documento_problematico/);
   assert.match(payload, /relatorio_problema/);
   assert.match(payload, /campos_incorretos/);
@@ -153,6 +155,50 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
 
   assert.match(envExample, /^N8N_CORRECTION_WEBHOOK_URL=/m);
   assert.doesNotMatch(envExample, /^VITE_N8N_CORRECTION_WEBHOOK_URL=/m);
+});
+
+test("analytics exibe somente os KPIs definidos para cada cadência", async () => {
+  const analytics = await read("src/routes/_authenticated/analytics.tsx");
+  const operation = await read("src/routes/_authenticated/operacao.tsx");
+  const kpis = await read("src/lib/kpis/derive.ts");
+  const kpiServer = await read("src/lib/kpis.functions.ts");
+  const migration = await read(
+    "supabase/migrations/20260828210350_add_audit_correction_responses.sql",
+  );
+
+  for (const label of [
+    "Nº de inconsistências novas detectadas",
+    "Nº de ocorrências críticas em aberto",
+    "Tempo até a primeira resposta em ocorrência crítica",
+    "Taxa de reincidência (% ocorrências repetidas vs. novas)",
+    "% de ocorrências resolvidas dentro do SLA",
+    "Nº de contratos inadimplentes",
+    "Taxa de reincidência consolidada do mês",
+    "Crescimento da carteira Olé no ano (nº de contratos e prêmio emitido)",
+    "Redução ano a ano de incidentes críticos",
+  ]) {
+    assert.match(analytics, new RegExp(label.replace(/[()%]/g, "\\$&")));
+  }
+
+  for (const removed of [
+    "Auditadas (última run)",
+    "Risco operacional",
+    "Apólices reincidentes",
+    "Capacidade operacional",
+    "Emissões no último mês",
+    "Prêmio pago e ativo no ano",
+  ]) {
+    assert.doesNotMatch(analytics, new RegExp(removed.replace(/[()%]/g, "\\$&")));
+  }
+
+  assert.match(operation, /Tempo até a primeira resposta crítica/);
+  assert.doesNotMatch(operation, /Resolvidas no ciclo|Velocidade de resolução/);
+  assert.match(kpis, /businessHoursBetween/);
+  assert.match(kpis, /resolvidasDentroSlaPct/);
+  assert.match(kpiServer, /countDelinquentContracts/);
+  assert.match(migration, /CREATE TABLE public\.audit_correction_responses/);
+  assert.match(migration, /ENABLE ROW LEVEL SECURITY/);
+  assert.match(migration, /REVOKE ALL.*anon, authenticated/);
 });
 
 test("cliente do MOTOR mantém credenciais apenas no servidor e usa HTTPS", async () => {

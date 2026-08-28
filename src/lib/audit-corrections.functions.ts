@@ -10,6 +10,12 @@ const RequestCorrectionSchema = z.object({
   mode: z.enum(["test", "production"]).optional(),
 });
 
+function correctionIncidentKey(
+  finding: Pick<AuditFindingRow, "apolice" | "tipo_erro" | "endosso">,
+) {
+  return `${finding.apolice}||${finding.tipo_erro}||${(finding.endosso ?? "").trim()}`;
+}
+
 export const requestAuditCorrection = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .validator((value: z.infer<typeof RequestCorrectionSchema>) =>
@@ -61,11 +67,12 @@ export const requestAuditCorrection = createServerFn({ method: "POST" })
       throw new Error("Uma ou mais ocorrências não pertencem à auditoria selecionada.");
     }
 
+    const selectedFindings = (rows ?? []) as unknown as AuditFindingRow[];
     const { buildAuditCorrectionPayload } = await import("@/lib/audit/correction-payload");
     const payload = buildAuditCorrectionPayload({
       runId: data.run_id,
       requestedBy: context.userId,
-      findings: (rows ?? []) as unknown as AuditFindingRow[],
+      findings: selectedFindings,
     });
 
     let response: Response;
@@ -90,6 +97,95 @@ export const requestAuditCorrection = createServerFn({ method: "POST" })
       throw new Error(`Webhook de correção retornou HTTP ${response.status}.`);
     }
 
+    // Registra a primeira resposta operacional somente depois que o n8n aceita o pedido.
+    // Isso não resolve nem silencia o achado; a auditoria seguinte continua sendo a
+    // única confirmação de conclusão.
+    const policies = Array.from(new Set(selectedFindings.map((finding) => finding.apolice)));
+    const errorTypes = Array.from(new Set(selectedFindings.map((finding) => finding.tipo_erro)));
+    const [{ data: history, error: historyError }, { data: resolutions, error: resolutionError }] =
+      await Promise.all([
+        supabaseAdmin
+          .from("audit_findings")
+          .select("apolice, tipo_erro, endosso, created_at")
+          .in("apolice", policies)
+          .in("tipo_erro", errorTypes)
+          .order("created_at", { ascending: true }),
+        supabaseAdmin
+          .from("audit_resolutions")
+          .select("apolice, tipo_erro, endosso, reopened_at")
+          .in("apolice", policies)
+          .in("tipo_erro", errorTypes)
+          .not("reopened_at", "is", null),
+      ]);
+
+    let trackingRecorded = false;
+    if (historyError || resolutionError) {
+      console.error("Falha ao preparar o registro de primeira resposta", {
+        historyError: historyError?.message,
+        resolutionError: resolutionError?.message,
+      });
+    } else {
+      const reopenedAtByIncident = new Map<string, number>();
+      for (const resolution of (resolutions ?? []) as Array<{
+        apolice: string;
+        tipo_erro: string;
+        endosso: string | null;
+        reopened_at: string | null;
+      }>) {
+        if (!resolution.reopened_at) continue;
+        const key = correctionIncidentKey(resolution);
+        const timestamp = +new Date(resolution.reopened_at);
+        if (Number.isFinite(timestamp)) {
+          reopenedAtByIncident.set(key, Math.max(reopenedAtByIncident.get(key) ?? 0, timestamp));
+        }
+      }
+
+      const firstSeenByIncident = new Map<string, string>();
+      for (const finding of (history ?? []) as Array<{
+        apolice: string;
+        tipo_erro: string;
+        endosso: string | null;
+        created_at: string;
+      }>) {
+        const key = correctionIncidentKey(finding);
+        const createdAt = +new Date(finding.created_at);
+        if (createdAt < (reopenedAtByIncident.get(key) ?? 0)) continue;
+        if (!firstSeenByIncident.has(key)) firstSeenByIncident.set(key, finding.created_at);
+      }
+
+      const respondedAt = new Date().toISOString();
+      const responseRows = selectedFindings.map((finding) => {
+        const details = (finding.detalhes ?? {}) as unknown as Record<string, unknown>;
+        const rawLevel = details["nivel"];
+        const incidentKey = correctionIncidentKey(finding);
+        return {
+          incident_key: incidentKey,
+          finding_id: finding.id,
+          run_id: finding.run_id,
+          apolice: finding.apolice,
+          tipo_erro: finding.tipo_erro,
+          endosso: finding.endosso,
+          nivel: typeof rawLevel === "string" ? rawLevel : null,
+          detected_at: firstSeenByIncident.get(incidentKey) ?? finding.created_at,
+          responded_at: respondedAt,
+          requested_by: context.userId,
+          mode: data.mode ?? "production",
+        };
+      });
+      const { error: trackingError } = await supabaseAdmin
+        .from("audit_correction_responses")
+        .upsert(responseRows, {
+          onConflict: "incident_key,detected_at",
+          ignoreDuplicates: true,
+        });
+      trackingRecorded = !trackingError;
+      if (trackingError) {
+        console.error("Webhook aceito, mas a primeira resposta não foi registrada", {
+          message: trackingError.message,
+        });
+      }
+    }
+
     // O webhook confirma apenas o recebimento HTTP; não há payload de resposta.
     // A resolução continua sendo confirmada pela ausência do erro na auditoria seguinte.
     return {
@@ -97,5 +193,6 @@ export const requestAuditCorrection = createServerFn({ method: "POST" })
       policies: payload.total_apolices,
       occurrences: payload.total_ocorrencias,
       groups: payload.total_grupos_erros,
+      trackingRecorded,
     };
   });

@@ -4,12 +4,9 @@ import {
   AlertOctagon,
   CheckCircle2,
   Cpu,
-  FileText,
   Gauge,
   History,
   Radio,
-  ShieldCheck,
-  TimerReset,
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
@@ -20,7 +17,7 @@ import { useKpiTargets } from "@/hooks/use-kpi-targets";
 import { useOperationKpis } from "@/hooks/use-operation-kpis";
 import { useLatestPolicySync, usePolicies } from "@/hooks/use-policies";
 import { errorTypeBreakdown, normalizeFinding, severityOf } from "@/lib/audit/derive";
-import { formatDuracaoHoras, type ResolutionTimeStat } from "@/lib/audit/resolution-filter";
+import { formatDuracaoHoras } from "@/lib/audit/resolution-filter";
 import type { AuditHistoryItem } from "@/lib/audit/types";
 import { formatDateTime, formatInt, formatPct, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -62,8 +59,8 @@ function OperacaoPage() {
   const historyQ = useAuditHistory();
   const policiesQ = usePolicies();
   const syncQ = useLatestPolicySync();
-  const operationKpisQ = useOperationKpis();
   const { targets } = useKpiTargets();
+  const operationKpisQ = useOperationKpis(targets.resolucaoSlaHoras);
 
   const latest = latestQ.data ?? null;
   const history = historyQ.data ?? [];
@@ -84,20 +81,26 @@ function OperacaoPage() {
   const conformity = total > 0 ? (aprov / total) * 100 : 0;
   const daily = operationKpis?.daily ?? {
     runAt: null,
+    referenceDate: "",
     novas: 0,
     criticasAbertas: 0,
-    resolvidas: 0,
     mediaMovel: 0,
     desvioPct: 0,
+    primeiraRespostaCriticaHoras: null,
+    criticasRespondidas: 0,
   };
-  const resolution = operationKpis?.resolutionTime;
   const weekly = operationKpis?.weekly ?? {
     runs: 0,
     total: 0,
     repetidas: 0,
     novasUnicas: 0,
     reincidenciaPct: 0,
-    apolicesReincidentes: 0,
+    resolvidas: 0,
+    resolvidasDentroSla: 0,
+    resolvidasDentroSlaPct: null,
+    inadimplentes: 0,
+    inadimplentesSemanaAnterior: 0,
+    inadimplentesDelta: 0,
   };
 
   const healthSeries: HealthPoint[] = [...history]
@@ -120,11 +123,6 @@ function OperacaoPage() {
     0,
     Math.floor(Math.min(100, ...healthSeries.map((point) => point.conformity)) - 3),
   );
-  const resolutionTypes = [...(resolution?.byTipo ?? [])]
-    .filter((item) => item.mediaHoras > 0)
-    .sort((a, b) => b.mediaHoras - a.mediaHoras)
-    .slice(0, 5);
-  const maxResolutionHours = Math.max(1, ...resolutionTypes.map((item) => item.mediaHoras));
   const breakdown = errorTypeBreakdown(findings);
   const maxBucket = breakdown[0]?.count ?? 1;
 
@@ -197,13 +195,10 @@ function OperacaoPage() {
         </div>
       )}
 
-      {/* Indicadores essenciais movidos da Visão Geral */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
+      {/* KPIs diários */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {isLoading ? (
           <>
-            <Skeleton className="h-[88px] rounded-xl" />
-            <Skeleton className="h-[88px] rounded-xl" />
-            <Skeleton className="h-[88px] rounded-xl" />
             <Skeleton className="h-[88px] rounded-xl" />
             <Skeleton className="h-[88px] rounded-xl" />
             <Skeleton className="h-[88px] rounded-xl" />
@@ -211,57 +206,48 @@ function OperacaoPage() {
         ) : (
           <>
             <MetricTile
-              icon={FileText}
-              label="Carteira total"
-              value={formatInt(operationKpis?.carteiraTotal ?? policies.length)}
-              tone="default"
-              hint={`${formatInt(operationKpis?.contratosAtivos ?? 0)} contratos ativos`}
-            />
-            <MetricTile
-              icon={ShieldCheck}
-              label="Conformidade"
-              value={`${conformity.toFixed(1)}%`}
-              tone={conformity >= 99 ? "success" : conformity >= 95 ? "warning" : "destructive"}
-              hint={`${formatInt(reprov)} apólices com desvio`}
-            />
-            <MetricTile
               icon={Activity}
-              label="Novas inconsistências"
+              label="Nº de inconsistências novas detectadas"
               value={formatInt(daily.novas)}
               tone={daily.desvioPct > targets.picoDesvioPct ? "warning" : "info"}
-              hint={`média móvel ${formatInt(daily.mediaMovel)}`}
+              hint={`média móvel ${formatInt(daily.mediaMovel)} · desvio ${formatPct(daily.desvioPct)}`}
             />
             <MetricTile
               icon={AlertOctagon}
-              label="Críticas em aberto"
+              label="Nº de ocorrências críticas em aberto"
               value={formatInt(daily.criticasAbertas)}
               tone={daily.criticasAbertas > targets.criticasAbertasMax ? "destructive" : "warning"}
-              hint={`meta ≤ ${formatInt(targets.criticasAbertasMax)}`}
+              hint="meta: zerar até o fim do dia"
             />
             <MetricTile
               icon={CheckCircle2}
-              label="Resolvidas no ciclo"
-              value={formatInt(daily.resolvidas)}
-              tone="success"
-              hint={`${formatInt(operationKpis?.resolvidasManuais ?? 0)} manuais · ${formatInt(operationKpis?.resolvidasAuto ?? 0)} automáticas`}
-            />
-            <MetricTile
-              icon={TimerReset}
-              label="Tempo de resolução"
-              value={formatDuracaoHoras(resolution?.mediaHoras ?? 0)}
-              tone="info"
+              label="Tempo até a primeira resposta crítica"
+              value={
+                daily.primeiraRespostaCriticaHoras == null
+                  ? "—"
+                  : daily.primeiraRespostaCriticaHoras === 0
+                    ? "0min"
+                    : formatDuracaoHoras(daily.primeiraRespostaCriticaHoras)
+              }
+              tone={
+                daily.primeiraRespostaCriticaHoras == null
+                  ? "default"
+                  : daily.primeiraRespostaCriticaHoras < targets.primeiraRespostaCriticaMaxHoras
+                    ? "success"
+                    : "destructive"
+              }
               hint={
-                resolution?.totalResolvidas
-                  ? `${formatInt(resolution.totalResolvidas)} resoluções`
-                  : "sem histórico"
+                daily.criticasRespondidas > 0
+                  ? `${formatInt(daily.criticasRespondidas)} respondida(s) hoje · meta < ${targets.primeiraRespostaCriticaMaxHoras}h úteis`
+                  : "sem respostas críticas registradas hoje"
               }
             />
           </>
         )}
       </div>
 
-      {/* Tendência de saúde + capacidade de resolução */}
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1.65fr)_minmax(310px,0.75fr)] sm:gap-6">
+      {/* Tendência de saúde + KPIs semanais */}
+      <div>
         <section className="panel overflow-hidden">
           <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
             <div>
@@ -353,112 +339,33 @@ function OperacaoPage() {
 
           <div className="grid gap-px border-t border-border bg-border sm:grid-cols-3">
             <TrendStat
-              label="Reincidência · 7 dias"
+              label="Taxa de reincidência · 7 dias"
               value={formatPct(weekly.reincidenciaPct)}
-              hint={`meta ≤ ${targets.reincidenciaMaxPct}%`}
+              hint={`${formatInt(weekly.repetidas)} repetidas · ${formatInt(weekly.novasUnicas)} novas`}
               tone={weekly.reincidenciaPct > targets.reincidenciaMaxPct ? "destructive" : "success"}
             />
             <TrendStat
-              label="Achados recorrentes"
-              value={formatInt(weekly.repetidas)}
-              hint={`${formatInt(weekly.apolicesReincidentes)} apólices`}
-              tone={weekly.repetidas > 0 ? "warning" : "success"}
+              label="Resolvidas dentro do SLA"
+              value={
+                weekly.resolvidasDentroSlaPct == null
+                  ? "—"
+                  : formatPct(weekly.resolvidasDentroSlaPct)
+              }
+              hint={`${formatInt(weekly.resolvidasDentroSla)} de ${formatInt(weekly.resolvidas)} · SLA ${targets.resolucaoSlaHoras}h úteis`}
+              tone={
+                weekly.resolvidasDentroSlaPct == null
+                  ? "default"
+                  : weekly.resolvidasDentroSlaPct > targets.resolvidasSlaMinPct
+                    ? "success"
+                    : "destructive"
+              }
             />
             <TrendStat
-              label="Novos no período"
-              value={formatInt(weekly.novasUnicas)}
-              hint={`${formatInt(weekly.runs)} runs analisadas`}
-              tone="default"
+              label="Contratos inadimplentes"
+              value={formatInt(weekly.inadimplentes)}
+              hint={`${formatInt(weekly.inadimplentesSemanaAnterior)} há 7 dias · ${weekly.inadimplentesDelta > 0 ? "+" : ""}${formatInt(weekly.inadimplentesDelta)}`}
+              tone={weekly.inadimplentesDelta > 0 ? "destructive" : "success"}
             />
-          </div>
-        </section>
-
-        <section className="panel flex min-h-0 flex-col overflow-hidden">
-          <header className="border-b border-border px-5 py-4">
-            <div className="flex items-center gap-2 text-[13px] font-semibold">
-              <TimerReset className="h-4 w-4 text-info" /> Velocidade de resolução
-            </div>
-            <div className="mt-0.5 text-[11px] text-muted-foreground">
-              Da primeira detecção até o encerramento
-            </div>
-          </header>
-
-          <div className="flex-1 p-5">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-xl bg-surface-2/70 p-3.5">
-                <div className="metric-label">Média</div>
-                <div className="mt-2 text-[22px] font-semibold tabular-nums">
-                  {formatDuracaoHoras(resolution?.mediaHoras ?? 0)}
-                </div>
-              </div>
-              <div className="rounded-xl bg-surface-2/70 p-3.5">
-                <div className="metric-label">Mediana</div>
-                <div className="mt-2 text-[22px] font-semibold tabular-nums">
-                  {formatDuracaoHoras(resolution?.medianaHoras ?? 0)}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-5">
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <div>
-                  <div className="text-[11.5px] font-semibold">Gargalos por tipo</div>
-                  <div className="text-[10.5px] text-muted-foreground">
-                    Mais lentos para resolver
-                  </div>
-                </div>
-                <span className="text-[10.5px] font-mono text-muted-foreground">
-                  {formatInt(resolution?.totalResolvidas ?? 0)} resolvidas
-                </span>
-              </div>
-
-              {resolutionTypes.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-border px-3 py-7 text-center text-[11px] text-muted-foreground">
-                  O histórico aparecerá conforme os achados forem resolvidos.
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {resolutionTypes.map((item) => (
-                    <ResolutionTypeRow
-                      key={item.tipo_erro}
-                      item={item}
-                      maxHours={maxResolutionHours}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="border-t border-border px-5 py-3.5">
-            <div className="mb-2 flex items-center justify-between text-[10.5px] text-muted-foreground">
-              <span>Resoluções do ciclo</span>
-              <span className="font-mono">{formatInt(daily.resolvidas)} total</span>
-            </div>
-            <div className="flex h-1.5 overflow-hidden rounded-full bg-muted">
-              <div
-                className="bg-primary"
-                style={{
-                  width: `${daily.resolvidas > 0 ? ((operationKpis?.resolvidasManuais ?? 0) / daily.resolvidas) * 100 : 0}%`,
-                }}
-              />
-              <div
-                className="bg-success"
-                style={{
-                  width: `${daily.resolvidas > 0 ? ((operationKpis?.resolvidasAuto ?? 0) / daily.resolvidas) * 100 : 0}%`,
-                }}
-              />
-            </div>
-            <div className="mt-2 flex items-center gap-4 text-[10px] text-muted-foreground">
-              <Legend
-                dot="var(--primary)"
-                label={`${formatInt(operationKpis?.resolvidasManuais ?? 0)} manuais`}
-              />
-              <Legend
-                dot="var(--success)"
-                label={`${formatInt(operationKpis?.resolvidasAuto ?? 0)} automáticas`}
-              />
-            </div>
           </div>
         </section>
       </div>
@@ -699,27 +606,6 @@ function TrendStat({
   );
 }
 
-function ResolutionTypeRow({ item, maxHours }: { item: ResolutionTimeStat; maxHours: number }) {
-  return (
-    <div>
-      <div className="mb-1.5 flex items-center justify-between gap-3">
-        <span className="truncate text-[10.5px] font-medium" title={item.tipo_erro}>
-          {item.tipo_erro}
-        </span>
-        <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">
-          {formatDuracaoHoras(item.mediaHoras)} · {formatInt(item.resolvidas)}
-        </span>
-      </div>
-      <div className="h-1 overflow-hidden rounded-full bg-muted/70">
-        <div
-          className="h-full rounded-full bg-info/80"
-          style={{ width: `${Math.max(6, (item.mediaHoras / maxHours) * 100)}%` }}
-        />
-      </div>
-    </div>
-  );
-}
-
 function RunHistoryTable({ history }: { history: AuditHistoryItem[] }) {
   const rows = [...history]
     .sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
@@ -886,14 +772,6 @@ function MetricTile({
           {hint && <span>{hint}</span>}
         </div>
       )}
-    </div>
-  );
-}
-
-function Legend({ dot, label }: { dot: string; label: string }) {
-  return (
-    <div className="flex items-center gap-1.5 text-muted-foreground">
-      <span className="h-2 w-2 rounded-full" style={{ background: dot }} /> {label}
     </div>
   );
 }

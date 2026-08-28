@@ -8,20 +8,23 @@ export interface KpiTargets {
   reincidenciaMaxPct: number;
   /** Máximo de ocorrências críticas em aberto. */
   criticasAbertasMax: number;
-  /** Capacidade operacional atual em contratos ativos. */
-  capacidadeContratos: number;
   /** Desvio (%) acima da média móvel que caracteriza pico de novas inconsistências. */
   picoDesvioPct: number;
-  /** Crescimento anual mínimo esperado da carteira (%). */
-  crescimentoAnualMinPct: number;
+  /** Tempo máximo até a primeira resposta de uma ocorrência crítica, em horas úteis. */
+  primeiraRespostaCriticaMaxHoras: number;
+  /** Prazo padrão para resolver uma ocorrência, em horas úteis. */
+  resolucaoSlaHoras: number;
+  /** Percentual mínimo de resoluções que devem cumprir o SLA. */
+  resolvidasSlaMinPct: number;
 }
 
 export const DEFAULT_KPI_TARGETS: KpiTargets = {
   reincidenciaMaxPct: 15,
   criticasAbertasMax: 0,
-  capacidadeContratos: 100,
   picoDesvioPct: 30,
-  crescimentoAnualMinPct: 10,
+  primeiraRespostaCriticaMaxHoras: 4,
+  resolucaoSlaHoras: 24,
+  resolvidasSlaMinPct: 90,
 };
 
 /** Status por limite máximo: ok até o limite, warn até +50%, bad acima. */
@@ -31,17 +34,11 @@ export function statusMax(value: number, max: number): KpiStatus {
   return "bad";
 }
 
-/** Status por limite mínimo: ok a partir do alvo, warn até 20% abaixo, bad abaixo disso. */
-export function statusMin(value: number, min: number): KpiStatus {
-  if (value >= min) return "ok";
-  if (value >= min * 0.8) return "warn";
-  return "bad";
-}
-
 export interface FindingLite {
   run_id: string;
   apolice: string;
   tipo_erro: string;
+  endosso: string | null;
   nivel: string | null;
 }
 
@@ -50,26 +47,27 @@ export interface RunLite {
   at: string; // ISO
 }
 
-export const findingKey = (f: { apolice: string; tipo_erro: string }) =>
-  `${f.apolice}::${f.tipo_erro}`;
+export const findingKey = (f: { apolice: string; tipo_erro: string; endosso?: string | null }) =>
+  `${f.apolice}::${f.tipo_erro}::${(f.endosso ?? "").trim()}`;
 
 export const isCritical = (f: FindingLite) => (f.nivel ?? "").toUpperCase() === "ERRO";
 
 export interface DailyKpis {
   runAt: string | null;
-  /** Achados na run mais recente. */
+  /** Dia civil de referência em Fortaleza (YYYY-MM-DD). */
+  referenceDate: string;
+  /** Ocorrências que apareceram pela primeira vez no dia. */
   novas: number;
-  /** Achados de nível ERRO na run mais recente. */
+  /** Ocorrências de nível ERRO ainda presentes na run mais recente. */
   criticasAbertas: number;
-  /**
-   * Inconsistências resolvidas no ciclo. Preenchido a partir de audit_resolutions
-   * (manuais + automáticas) em kpis.functions.ts, não pelo diff entre runs.
-   */
-  resolvidas: number;
-  /** Média móvel de achados nas runs anteriores (até 5). */
+  /** Média móvel de novas ocorrências nos cinco dias de auditoria anteriores. */
   mediaMovel: number;
-  /** Desvio (%) da run atual sobre a média móvel. */
+  /** Desvio (%) do dia sobre a média móvel. */
   desvioPct: number;
+  /** Média do tempo útil até a primeira resposta das críticas respondidas no dia. */
+  primeiraRespostaCriticaHoras: number | null;
+  /** Quantidade de ocorrências críticas respondidas no dia. */
+  criticasRespondidas: number;
 }
 
 export interface WeeklyKpis {
@@ -78,7 +76,12 @@ export interface WeeklyKpis {
   repetidas: number;
   novasUnicas: number;
   reincidenciaPct: number;
-  apolicesReincidentes: number;
+  resolvidas: number;
+  resolvidasDentroSla: number;
+  resolvidasDentroSlaPct: number | null;
+  inadimplentes: number;
+  inadimplentesSemanaAnterior: number;
+  inadimplentesDelta: number;
 }
 
 export interface MonthlyReincidencia {
@@ -89,6 +92,8 @@ export interface MonthlyReincidencia {
   reincidenciaPct: number;
   /** Média móvel de 3 meses da reincidência. */
   mm3: number;
+  /** Variação da média móvel contra o mês anterior, em pontos percentuais. */
+  deltaMm3: number | null;
 }
 
 export interface YearlyPoint {
@@ -124,7 +129,7 @@ export function emptyYear(year: number): YearlyPoint {
 
 /** "MM-DD" da data de referência, usado para recortar o acumulado do ano (YTD). */
 export function ytdCutoff(ref = new Date()): string {
-  return ref.toISOString().slice(5, 10);
+  return fortalezaDateKey(ref).slice(5);
 }
 
 /** A data (YYYY-MM-DD) está dentro do acumulado até o corte MM-DD? */
@@ -138,6 +143,122 @@ export function yoyPct(current: number, previous: number): number | null {
   return Math.round(((current - previous) / previous) * 1000) / 10;
 }
 
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+const FORTALEZA_OFFSET_MS = -3 * HOUR_MS;
+
+/** Chave de data civil em America/Fortaleza (UTC-3, sem horário de verão). */
+export function fortalezaDateKey(value: string | number | Date = Date.now()): string {
+  const ms = value instanceof Date ? +value : typeof value === "number" ? value : +new Date(value);
+  if (!Number.isFinite(ms)) return "";
+  return new Date(ms + FORTALEZA_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/**
+ * Horas úteis entre dois instantes: segunda a sexta, 09h–18h, horário de Fortaleza.
+ * Feriados não entram no cálculo porque o sistema ainda não possui calendário corporativo.
+ */
+export function businessHoursBetween(from: string, to: string): number | null {
+  const fromMs = +new Date(from);
+  const toMs = +new Date(to);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs < fromMs) return null;
+
+  const localFrom = fromMs + FORTALEZA_OFFSET_MS;
+  const localTo = toMs + FORTALEZA_OFFSET_MS;
+  let day = Math.floor(localFrom / DAY_MS) * DAY_MS;
+  const lastDay = Math.floor(localTo / DAY_MS) * DAY_MS;
+  let totalMs = 0;
+
+  while (day <= lastDay) {
+    const weekday = new Date(day).getUTCDay();
+    if (weekday >= 1 && weekday <= 5) {
+      const workStartLocal = day + 9 * HOUR_MS;
+      const workEndLocal = day + 18 * HOUR_MS;
+      const overlapStart = Math.max(localFrom, workStartLocal);
+      const overlapEnd = Math.min(localTo, workEndLocal);
+      if (overlapEnd > overlapStart) totalMs += overlapEnd - overlapStart;
+    }
+    day += DAY_MS;
+  }
+
+  return Math.round((totalMs / HOUR_MS) * 10) / 10;
+}
+
+export interface CorrectionResponseLite {
+  nivel: string | null;
+  detected_at: string;
+  responded_at: string;
+}
+
+export interface ResolutionSlaLite {
+  first_seen_at: string | null;
+  resolved_at: string;
+  reopened_at: string | null;
+}
+
+export interface BillingSlaLite {
+  numero_apolice: string;
+  situacao_emissao: string;
+  data_vencimento: string | null;
+  data_quitacao: string | null;
+}
+
+export function deriveFirstCriticalResponse(
+  rows: CorrectionResponseLite[],
+  referenceDate: string,
+): { mediaHoras: number | null; respondidas: number } {
+  const hours = rows
+    .filter(
+      (row) =>
+        (row.nivel ?? "").trim().toUpperCase() === "ERRO" &&
+        fortalezaDateKey(row.responded_at) === referenceDate,
+    )
+    .map((row) => businessHoursBetween(row.detected_at, row.responded_at))
+    .filter((value): value is number => value !== null);
+
+  if (hours.length === 0) return { mediaHoras: null, respondidas: 0 };
+  return {
+    mediaHoras: Math.round((hours.reduce((sum, value) => sum + value, 0) / hours.length) * 10) / 10,
+    respondidas: hours.length,
+  };
+}
+
+export function deriveResolutionSla(
+  rows: ResolutionSlaLite[],
+  slaHours: number,
+  referenceAt = Date.now(),
+  days = 7,
+): { total: number; within: number; pct: number | null } {
+  const cutoff = referenceAt - days * DAY_MS;
+  const measurable = rows
+    .filter(
+      (row) =>
+        !row.reopened_at &&
+        row.first_seen_at &&
+        +new Date(row.resolved_at) >= cutoff &&
+        +new Date(row.resolved_at) <= referenceAt,
+    )
+    .map((row) => businessHoursBetween(row.first_seen_at!, row.resolved_at))
+    .filter((value): value is number => value !== null);
+  const within = measurable.filter((hours) => hours <= slaHours).length;
+  return {
+    total: measurable.length,
+    within,
+    pct: measurable.length > 0 ? Math.round((within / measurable.length) * 1000) / 10 : null,
+  };
+}
+
+export function countDelinquentContracts(rows: BillingSlaLite[], referenceAt = Date.now()): number {
+  const referenceDate = fortalezaDateKey(referenceAt);
+  const policies = new Set<string>();
+  for (const row of rows) {
+    if ((row.situacao_emissao ?? "").trim().toLowerCase().startsWith("cancel")) continue;
+    if (!row.data_vencimento || row.data_vencimento.slice(0, 10) >= referenceDate) continue;
+    if (row.data_quitacao && row.data_quitacao.slice(0, 10) <= referenceDate) continue;
+    policies.add(row.numero_apolice);
+  }
+  return policies.size;
+}
 
 function monthLabel(month: string): string {
   const [y, m] = month.split("-").map(Number);
@@ -148,27 +269,49 @@ function monthLabel(month: string): string {
 }
 
 /** runs em ordem crescente de data; findings de todas elas (já sem exceções). */
-export function deriveDaily(runsAsc: RunLite[], byRun: Map<string, FindingLite[]>): DailyKpis {
-  if (runsAsc.length === 0) {
-    return { runAt: null, novas: 0, criticasAbertas: 0, resolvidas: 0, mediaMovel: 0, desvioPct: 0 };
-  }
-  const current = runsAsc[runsAsc.length - 1];
-  const cur = byRun.get(current.id) ?? [];
+export function deriveDaily(
+  runsAsc: RunLite[],
+  byRun: Map<string, FindingLite[]>,
+  referenceAt = Date.now(),
+): DailyKpis {
+  const referenceDate = fortalezaDateKey(referenceAt);
+  const seen = new Set<string>();
+  const newByDay = new Map<string, Set<string>>();
 
-  const anteriores = runsAsc.slice(0, -1).slice(-5);
+  for (const run of runsAsc) {
+    const day = fortalezaDateKey(run.at);
+    const runKeys = new Set((byRun.get(run.id) ?? []).map(findingKey));
+    const dayKeys = newByDay.get(day) ?? new Set<string>();
+    for (const key of runKeys) {
+      if (!seen.has(key)) dayKeys.add(key);
+    }
+    newByDay.set(day, dayKeys);
+    for (const key of runKeys) seen.add(key);
+  }
+
+  const latest = runsAsc.at(-1) ?? null;
+  const latestFindings = latest ? (byRun.get(latest.id) ?? []) : [];
+  const previousDays = Array.from(newByDay.entries())
+    .filter(([day]) => day < referenceDate)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-5);
   const mediaMovel =
-    anteriores.length > 0
-      ? anteriores.reduce((s, r) => s + (byRun.get(r.id)?.length ?? 0), 0) / anteriores.length
+    previousDays.length > 0
+      ? previousDays.reduce((sum, [, keys]) => sum + keys.size, 0) / previousDays.length
       : 0;
-  const desvioPct = mediaMovel > 0 ? ((cur.length - mediaMovel) / mediaMovel) * 100 : 0;
+  const novas = newByDay.get(referenceDate)?.size ?? 0;
+  const desvioPct =
+    mediaMovel > 0 ? ((novas - mediaMovel) / mediaMovel) * 100 : novas > 0 ? 100 : 0;
 
   return {
-    runAt: current.at,
-    novas: cur.length,
-    criticasAbertas: cur.filter(isCritical).length,
-    resolvidas: 0,
+    runAt: latest?.at ?? null,
+    referenceDate,
+    novas,
+    criticasAbertas: new Set(latestFindings.filter(isCritical).map(findingKey)).size,
     mediaMovel: Math.round(mediaMovel * 10) / 10,
     desvioPct: Math.round(desvioPct * 10) / 10,
+    primeiraRespostaCriticaHoras: null,
+    criticasRespondidas: 0,
   };
 }
 
@@ -180,6 +323,7 @@ export function deriveWeekly(
   runsAsc: RunLite[],
   byRun: Map<string, FindingLite[]>,
   days = 7,
+  referenceAt?: number,
 ): WeeklyKpis {
   if (runsAsc.length === 0) {
     return {
@@ -188,35 +332,37 @@ export function deriveWeekly(
       repetidas: 0,
       novasUnicas: 0,
       reincidenciaPct: 0,
-      apolicesReincidentes: 0,
+      resolvidas: 0,
+      resolvidasDentroSla: 0,
+      resolvidasDentroSlaPct: null,
+      inadimplentes: 0,
+      inadimplentesSemanaAnterior: 0,
+      inadimplentesDelta: 0,
     };
   }
   const last = runsAsc[runsAsc.length - 1];
-  const cutoff = +new Date(last.at) - days * 86_400_000;
+  const reference = referenceAt ?? +new Date(last.at);
+  const cutoff = reference - days * 86_400_000;
   let window = runsAsc.filter((r) => +new Date(r.at) >= cutoff);
-  if (window.length === 0) window = [last];
+  if (window.length === 0 && referenceAt === undefined) window = [last];
   const windowIds = new Set(window.map((r) => r.id));
   const before = runsAsc.filter((r) => !windowIds.has(r.id));
 
   const historico = new Set<string>();
   for (const r of before) for (const f of byRun.get(r.id) ?? []) historico.add(findingKey(f));
 
-  const seen = new Set<string>();
-  const apolices = new Set<string>();
   let repetidas = 0;
   let novasUnicas = 0;
   for (const r of window) {
-    for (const f of byRun.get(r.id) ?? []) {
-      const key = findingKey(f);
-      if (seen.has(key)) continue;
-      seen.add(key);
+    const keysDaRun = new Set((byRun.get(r.id) ?? []).map(findingKey));
+    for (const key of keysDaRun) {
       if (historico.has(key)) {
         repetidas++;
-        apolices.add(f.apolice);
       } else {
         novasUnicas++;
       }
     }
+    for (const key of keysDaRun) historico.add(key);
   }
   const total = repetidas + novasUnicas;
   return {
@@ -225,7 +371,12 @@ export function deriveWeekly(
     repetidas,
     novasUnicas,
     reincidenciaPct: total > 0 ? Math.round((repetidas / total) * 1000) / 10 : 0,
-    apolicesReincidentes: apolices.size,
+    resolvidas: 0,
+    resolvidasDentroSla: 0,
+    resolvidasDentroSlaPct: null,
+    inadimplentes: 0,
+    inadimplentesSemanaAnterior: 0,
+    inadimplentesDelta: 0,
   };
 }
 
@@ -234,19 +385,15 @@ export function deriveMonthlyReincidencia(
   byRun: Map<string, FindingLite[]>,
 ): MonthlyReincidencia[] {
   const historico = new Set<string>();
-  const perMonth = new Map<string, { total: Set<string>; repetidas: Set<string> }>();
+  const perMonth = new Map<string, { total: number; repetidas: number }>();
 
   for (const r of runsAsc) {
-    const month = r.at.slice(0, 7);
-    const bucket = perMonth.get(month) ?? { total: new Set<string>(), repetidas: new Set<string>() };
-    const keysDaRun = new Set<string>();
-    for (const f of byRun.get(r.id) ?? []) {
-      const key = findingKey(f);
-      keysDaRun.add(key);
-      if (!bucket.total.has(key)) {
-        bucket.total.add(key);
-        if (historico.has(key)) bucket.repetidas.add(key);
-      }
+    const month = fortalezaDateKey(r.at).slice(0, 7);
+    const bucket = perMonth.get(month) ?? { total: 0, repetidas: 0 };
+    const keysDaRun = new Set((byRun.get(r.id) ?? []).map(findingKey));
+    for (const key of keysDaRun) {
+      bucket.total++;
+      if (historico.has(key)) bucket.repetidas++;
     }
     perMonth.set(month, bucket);
     for (const k of keysDaRun) historico.add(k);
@@ -254,8 +401,8 @@ export function deriveMonthlyReincidencia(
 
   const rows = Array.from(perMonth.entries())
     .map(([month, v]) => {
-      const total = v.total.size;
-      const repetidas = v.repetidas.size;
+      const total = v.total;
+      const repetidas = v.repetidas;
       return {
         month,
         label: monthLabel(month),
@@ -263,6 +410,7 @@ export function deriveMonthlyReincidencia(
         repetidas,
         reincidenciaPct: total > 0 ? Math.round((repetidas / total) * 1000) / 10 : 0,
         mm3: 0,
+        deltaMm3: null,
       };
     })
     .sort((a, b) => a.month.localeCompare(b.month));
@@ -270,6 +418,16 @@ export function deriveMonthlyReincidencia(
   return rows.map((r, i) => {
     const slice = rows.slice(Math.max(0, i - 2), i + 1);
     const mm3 = slice.reduce((s, x) => s + x.reincidenciaPct, 0) / slice.length;
-    return { ...r, mm3: Math.round(mm3 * 10) / 10 };
+    const roundedMm3 = Math.round(mm3 * 10) / 10;
+    const previousSlice = rows.slice(Math.max(0, i - 3), i);
+    const previousMm3 =
+      previousSlice.length > 0
+        ? previousSlice.reduce((sum, row) => sum + row.reincidenciaPct, 0) / previousSlice.length
+        : null;
+    return {
+      ...r,
+      mm3: roundedMm3,
+      deltaMm3: previousMm3 === null ? null : Math.round((roundedMm3 - previousMm3) * 10) / 10,
+    };
   });
 }

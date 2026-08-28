@@ -30,12 +30,11 @@ import { useChartPrefs } from "@/hooks/use-settings";
 import { useOperationKpis } from "@/hooks/use-operation-kpis";
 import { formatDuracaoHoras } from "@/lib/audit/resolution-filter";
 import { useKpiTargets } from "@/hooks/use-kpi-targets";
-import { statusMax, statusMin, yoyPct } from "@/lib/kpis/derive";
+import { statusMax, yoyPct } from "@/lib/kpis/derive";
 
 import {
   buildHeatmap,
   countBySeverity,
-  deriveKpis,
   errorTypeBreakdown,
   groupByApolice,
   groupByEndosso,
@@ -72,8 +71,8 @@ function AnalyticsPage() {
   const historyQ = useAuditHistory();
   const policiesQ = usePolicies();
   const aggregatesQ = useAnalyticsAggregates();
-  const opsQ = useOperationKpis();
   const { targets } = useKpiTargets();
+  const opsQ = useOperationKpis(targets.resolucaoSlaHoras);
 
   const ops = opsQ.data ?? null;
   const monthlyReinc = useMemo(() => ops?.monthlyReincidencia ?? [], [ops]);
@@ -82,6 +81,8 @@ function AnalyticsPage() {
   const ytdLabel = ops?.ytdLabel ?? "";
   const crescimentoCarteira =
     yearCur && yearPrev ? yoyPct(yearCur.contratosYtd, yearPrev.contratosYtd) : null;
+  const crescimentoPremio =
+    yearCur && yearPrev ? yoyPct(yearCur.premioEmitidoYtdUsd, yearPrev.premioEmitidoYtdUsd) : null;
   // Redução = queda dos críticos do ano anterior para o atual (base: ano anterior).
   const reducaoIncidentes =
     yearCur && yearPrev && yearPrev.criticosYtd > 0
@@ -120,7 +121,6 @@ function AnalyticsPage() {
     return withinRange(d, bounds) ? latestRaw : { ...latestRaw, findings: [] };
   }, [latestRaw, bounds, rangeActive]);
 
-  const kpis = useMemo(() => deriveKpis({ latest, history }), [latest, history]);
   const findings = latest?.findings ?? [];
   const sev = useMemo(() => countBySeverity(findings), [findings]);
   const series = useMemo(() => runSeries(history).slice(-12), [history]);
@@ -164,20 +164,6 @@ function AnalyticsPage() {
     [repasse],
   );
   const repasseAvg = repasse.length > 0 ? repasseTotals.excelsiorLiquido / repasse.length : 0;
-  const paidActiveYear = useMemo(() => {
-    const now = new Date();
-    const year = yearCur?.year ?? now.getUTCFullYear();
-    const currentMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-    return aggregatesRaw.repasseByMonth
-      .filter((row) => row.month.startsWith(`${year}-`) && row.month <= currentMonth)
-      .reduce(
-        (total, row) => ({
-          bruto: total.bruto + row.bruto,
-          premioDireto: total.premioDireto + row.premioDireto,
-        }),
-        { bruto: 0, premioDireto: 0 },
-      );
-  }, [aggregatesRaw.repasseByMonth, yearCur?.year]);
   const repasseMax = useMemo(() => {
     const peak = repasse.reduce(
       (m, r) => Math.max(m, r.carregamentoExcelsior + r.premioDireto, r.excelsiorLiquido),
@@ -345,193 +331,143 @@ function AnalyticsPage() {
         <EmptyState />
       ) : (
         <>
-          {/* KPI grid */}
+          {/* === KPIs diários (cadência 5.1) === */}
+          <SectionTitle
+            title="KPIs diários"
+            subtitle="Detecção, backlog crítico e velocidade da primeira resposta no dia"
+          />
           <div className="bento">
-            <Kpi label="Apólices na carteira" value={formatInt(policies.length)} />
             <Kpi
-              label="Auditadas (última run)"
-              value={formatInt(kpis?.audited ?? 0)}
-              delta={kpis?.deltaApproved}
-              deltaSuffix="%"
+              label="Nº de inconsistências novas detectadas"
+              value={formatInt(ops?.daily.novas ?? 0)}
+              hint={`média móvel: ${formatInt(ops?.daily.mediaMovel ?? 0)} · desvio ${formatPct(ops?.daily.desvioPct ?? 0, 1)}`}
+              tone={(ops?.daily.desvioPct ?? 0) > targets.picoDesvioPct ? "warning" : "success"}
+              target={`alerta acima de ${targets.picoDesvioPct}% da média móvel`}
+              status={statusMax(ops?.daily.desvioPct ?? 0, targets.picoDesvioPct)}
             />
             <Kpi
-              label="Conformidade"
-              value={formatPct(kpis?.approvedRate ?? 0, 1)}
-              delta={kpis ? -kpis.deltaRisk : undefined}
-              deltaSuffix=" pp"
-              tone="success"
+              label="Nº de ocorrências críticas em aberto"
+              value={formatInt(ops?.daily.criticasAbertas ?? 0)}
+              hint="backlog crítico da auditoria mais recente"
+              tone={(ops?.daily.criticasAbertas ?? 0) > 0 ? "destructive" : "success"}
+              target="meta: zerar até o fim do dia"
+              status={statusMax(ops?.daily.criticasAbertas ?? 0, targets.criticasAbertasMax)}
             />
             <Kpi
-              label="Risco operacional"
-              value={formatPct(kpis?.operationalRisk ?? 0, 1)}
-              delta={kpis?.deltaRisk}
-              deltaSuffix=" pp"
-              tone="warning"
-              invertDelta
-            />
-            <Kpi label="Erros críticos" value={formatInt(sev.erros)} tone="destructive" />
-            <Kpi label="Alertas" value={formatInt(sev.alertas)} tone="warning" />
-            <Kpi label="Tipos de erro únicos" value={formatInt(kpis?.uniqueErrorTypes ?? 0)} />
-            <Kpi
-              label="Apólices impactadas"
-              value={formatInt(kpis?.affectedPolicies ?? 0)}
-              hint={
-                policies.length > 0
-                  ? `${formatPct(((kpis?.affectedPolicies ?? 0) / policies.length) * 100, 1)} da carteira`
-                  : undefined
+              label="Tempo até a primeira resposta em ocorrência crítica"
+              value={
+                ops?.daily.primeiraRespostaCriticaHoras == null
+                  ? "—"
+                  : ops.daily.primeiraRespostaCriticaHoras === 0
+                    ? "0min"
+                    : formatDuracaoHoras(ops.daily.primeiraRespostaCriticaHoras)
               }
-              tone="destructive"
-            />
-            <Kpi
-              label="Receita acumulada Excelsior (USD)"
-              value={formatUSD(repasseTotals.excelsiorLiquido, { maximumFractionDigits: 0 })}
-              hint={`Quitação total + emissão ativa · ${repasse.length} competências · média ${formatUSD(repasseAvg, { maximumFractionDigits: 0 })}/mês`}
-              tone="success"
+              hint={
+                ops?.daily.criticasRespondidas
+                  ? `${formatInt(ops.daily.criticasRespondidas)} crítica(s) respondida(s) hoje`
+                  : "sem respostas críticas registradas hoje"
+              }
+              tone={
+                ops?.daily.primeiraRespostaCriticaHoras == null
+                  ? undefined
+                  : ops.daily.primeiraRespostaCriticaHoras < targets.primeiraRespostaCriticaMaxHoras
+                    ? "success"
+                    : "destructive"
+              }
+              target={`meta < ${targets.primeiraRespostaCriticaMaxHoras}h úteis`}
+              status={
+                ops?.daily.primeiraRespostaCriticaHoras == null
+                  ? undefined
+                  : ops.daily.primeiraRespostaCriticaHoras < targets.primeiraRespostaCriticaMaxHoras
+                    ? "ok"
+                    : "bad"
+              }
             />
           </div>
 
           {/* === KPIs semanais (cadência 5.2) === */}
           <SectionTitle
             title="KPIs semanais"
-            subtitle="Reincidência de inconsistências e volume de repasse nos últimos 7 dias de execução"
+            subtitle="Reincidência, disciplina de SLA e saúde financeira nos últimos 7 dias"
           />
           <div className="bento">
             <Kpi
-              label="Reincidência semanal"
+              label="Taxa de reincidência (% ocorrências repetidas vs. novas)"
               value={formatPct(ops?.weekly.reincidenciaPct ?? 0, 1)}
-              hint={`${formatInt(ops?.weekly.repetidas ?? 0)} de ${formatInt(ops?.weekly.total ?? 0)} achados`}
-              tone="warning"
-              target={`meta ≤ ${targets.reincidenciaMaxPct}%`}
+              hint={`${formatInt(ops?.weekly.repetidas ?? 0)} repetidas · ${formatInt(ops?.weekly.novasUnicas ?? 0)} novas`}
+              tone={
+                (ops?.weekly.reincidenciaPct ?? 0) > targets.reincidenciaMaxPct
+                  ? "destructive"
+                  : "success"
+              }
+              target={`alerta acima de ${targets.reincidenciaMaxPct}%`}
               status={statusMax(ops?.weekly.reincidenciaPct ?? 0, targets.reincidenciaMaxPct)}
             />
             <Kpi
-              label="Apólices reincidentes"
-              value={formatInt(ops?.weekly.apolicesReincidentes ?? 0)}
-              hint={`${formatInt(ops?.weekly.runs ?? 0)} run(s) na janela`}
-              tone="destructive"
-            />
-            <Kpi
-              label="Inconsistências novas"
-              value={formatInt(ops?.weekly.novasUnicas ?? 0)}
-              hint="Ocorrências inéditas na semana"
-            />
-            <Kpi
-              label="Repasse do último mês (USD)"
-              value={formatUSD(repasse.length ? repasse[repasse.length - 1].excelsiorLiquido : 0, {
-                maximumFractionDigits: 0,
-              })}
-              hint={
-                repasse.length
-                  ? `${repasse[repasse.length - 1].label} · competência de emissão`
-                  : "sem dados"
+              label="% de ocorrências resolvidas dentro do SLA"
+              value={
+                ops?.weekly.resolvidasDentroSlaPct == null
+                  ? "—"
+                  : formatPct(ops.weekly.resolvidasDentroSlaPct, 1)
               }
-              tone="success"
+              hint={
+                ops?.weekly.resolvidas
+                  ? `${formatInt(ops.weekly.resolvidasDentroSla)} de ${formatInt(ops.weekly.resolvidas)} resolvidas em até ${targets.resolucaoSlaHoras}h úteis`
+                  : "sem resoluções mensuráveis na semana"
+              }
+              tone={
+                ops?.weekly.resolvidasDentroSlaPct == null
+                  ? undefined
+                  : ops.weekly.resolvidasDentroSlaPct > targets.resolvidasSlaMinPct
+                    ? "success"
+                    : "destructive"
+              }
+              target={`meta > ${targets.resolvidasSlaMinPct}%`}
+              status={
+                ops?.weekly.resolvidasDentroSlaPct == null
+                  ? undefined
+                  : ops.weekly.resolvidasDentroSlaPct > targets.resolvidasSlaMinPct
+                    ? "ok"
+                    : "bad"
+              }
             />
-          </div>
-
-          {/* === Tempo de resolução por tipo de problema === */}
-          <SectionTitle
-            title="Tempo de resolução por tipo de problema"
-            subtitle="Da primeira detecção até a resolução (manual ou quando o erro deixa de aparecer)"
-          />
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Kpi
-              label="Inconsistências resolvidas"
-              value={formatInt(ops?.resolutionTime.totalResolvidas ?? 0)}
-              hint="Manuais + automáticas (exceções não contam)"
-              tone="success"
+              label="Nº de contratos inadimplentes"
+              value={formatInt(ops?.weekly.inadimplentes ?? 0)}
+              hint={`${formatInt(ops?.weekly.inadimplentesSemanaAnterior ?? 0)} há 7 dias · ${(ops?.weekly.inadimplentesDelta ?? 0) > 0 ? "+" : ""}${formatInt(ops?.weekly.inadimplentesDelta ?? 0)} na tendência`}
+              tone={(ops?.weekly.inadimplentesDelta ?? 0) > 0 ? "destructive" : "success"}
             />
-            <Kpi
-              label="Tempo médio de resolução"
-              value={formatDuracaoHoras(ops?.resolutionTime.mediaHoras ?? 0)}
-              hint="Média geral (primeira detecção → resolução)"
-              tone="success"
-            />
-            <Kpi
-              label="Tempo mediano"
-              value={formatDuracaoHoras(ops?.resolutionTime.medianaHoras ?? 0)}
-              hint="Metade das resoluções abaixo deste tempo"
-            />
-          </div>
-          <div className="panel bg-surface/60 overflow-x-auto">
-            {(ops?.resolutionTime.byTipo.length ?? 0) === 0 ? (
-              <div className="px-4 py-6 text-[12.5px] text-muted-foreground">
-                Nenhuma inconsistência foi confirmada como resolvida ainda. As conclusões são
-                registradas quando o erro deixa de aparecer na auditoria seguinte.
-              </div>
-            ) : (
-              <table className="data-table text-[12.5px]">
-                <thead className="bg-surface-2/60 text-[11px] uppercase tracking-wider text-muted-foreground">
-                  <tr>
-                    <th className="text-left px-4 py-2 font-medium">Tipo de problema</th>
-                    <th className="text-right px-4 py-2 font-medium">Resolvidas</th>
-                    <th className="text-right px-4 py-2 font-medium">Tempo médio</th>
-                    <th className="text-right px-4 py-2 font-medium">Mediana</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {(ops?.resolutionTime.byTipo ?? []).map((t) => (
-                    <tr key={t.tipo_erro}>
-                      <td className="px-4 py-2 text-foreground/90">{t.tipo_erro}</td>
-                      <td className="px-4 py-2 text-right font-mono">{formatInt(t.resolvidas)}</td>
-                      <td className="px-4 py-2 text-right font-mono text-info">
-                        {formatDuracaoHoras(t.mediaHoras)}
-                      </td>
-                      <td className="px-4 py-2 text-right font-mono text-muted-foreground">
-                        {formatDuracaoHoras(t.medianaHoras)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
           </div>
 
           {/* === KPIs mensais (cadência 5.3) === */}
           <SectionTitle
             title="KPIs mensais"
-            subtitle="Reincidência consolidada e capacidade operacional da carteira"
+            subtitle="Tendência estrutural da reincidência consolidada do mês"
           />
-          <div className="bento">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             <Kpi
-              label="Reincidência consolidada"
+              label="Taxa de reincidência consolidada do mês"
               value={formatPct(reincMensalAtual?.reincidenciaPct ?? 0, 1)}
               hint={
                 reincMensalAtual
-                  ? `${reincMensalAtual.label} · média 3m ${formatPct(reincMensalAtual.mm3, 1)}`
+                  ? `${reincMensalAtual.label} · média móvel 3m ${formatPct(reincMensalAtual.mm3, 1)}${reincMensalAtual.deltaMm3 == null ? "" : ` · ${reincMensalAtual.deltaMm3 > 0 ? "+" : ""}${reincMensalAtual.deltaMm3.toFixed(1)} pp`}`
                   : "sem dados"
               }
-              tone="warning"
-              target={`meta ≤ ${targets.reincidenciaMaxPct}%`}
-              status={statusMax(reincMensalAtual?.reincidenciaPct ?? 0, targets.reincidenciaMaxPct)}
-            />
-            <Kpi
-              label="Contratos ativos"
-              value={formatInt(ops?.contratosAtivos ?? 0)}
-              hint={`${formatInt(ops?.carteiraTotal ?? 0)} apólices registradas`}
-              tone="success"
-            />
-            <Kpi
-              label="Capacidade operacional"
-              value={formatPct(
-                targets.capacidadeContratos > 0
-                  ? ((ops?.contratosAtivos ?? 0) / targets.capacidadeContratos) * 100
-                  : 0,
-                1,
-              )}
-              hint={`Capacidade declarada: ${formatInt(targets.capacidadeContratos)} contratos`}
-              target={`meta ≤ 100%`}
-              status={statusMax(
-                targets.capacidadeContratos > 0
-                  ? ((ops?.contratosAtivos ?? 0) / targets.capacidadeContratos) * 100
-                  : 0,
-                100,
-              )}
-            />
-            <Kpi
-              label="Emissões no último mês"
-              value={formatInt(issuances.length ? issuances[issuances.length - 1].total : 0)}
-              hint={issuances.length ? issuances[issuances.length - 1].label : "sem dados"}
+              tone={
+                reincMensalAtual?.deltaMm3 == null
+                  ? undefined
+                  : reincMensalAtual.deltaMm3 > 0
+                    ? "destructive"
+                    : "success"
+              }
+              target="alerta se a média móvel de 3 meses subir"
+              status={
+                reincMensalAtual?.deltaMm3 == null
+                  ? undefined
+                  : reincMensalAtual.deltaMm3 > 0
+                    ? "bad"
+                    : "ok"
+              }
             />
           </div>
 
@@ -541,54 +477,48 @@ function AnalyticsPage() {
             subtitle={
               ytdLabel
                 ? `Comparação do acumulado até ${ytdLabel} contra o mesmo período do ano anterior`
-                : "Crescimento da carteira, redução de incidentes e prêmio pago ativo"
+                : "Crescimento da carteira, redução de incidentes e prêmio emitido"
             }
           />
           <div className="bento">
             <Kpi
-              label="Crescimento da carteira"
-              value={crescimentoCarteira === null ? "—" : formatPct(crescimentoCarteira, 1)}
+              label="Crescimento da carteira Olé no ano (nº de contratos e prêmio emitido)"
+              value={
+                crescimentoCarteira === null && crescimentoPremio === null
+                  ? "—"
+                  : `${crescimentoCarteira === null ? "—" : formatPct(crescimentoCarteira, 1)} contratos · ${crescimentoPremio === null ? "—" : formatPct(crescimentoPremio, 1)} prêmio`
+              }
               hint={
-                crescimentoCarteira === null || !yearCur || !yearPrev
+                !yearCur || !yearPrev
                   ? "histórico insuficiente"
-                  : `${yearPrev.year}: ${formatInt(yearPrev.contratosYtd)} → ${yearCur.year}: ${formatInt(yearCur.contratosYtd)} contratos (YTD ${ytdLabel})`
+                  : `${yearCur.year}: ${formatInt(yearCur.contratosYtd)} contratos · ${formatUSD(yearCur.premioEmitidoYtdUsd, { maximumFractionDigits: 0 })} emitidos (YTD ${ytdLabel})`
               }
-              tone="success"
-              target={`meta ≥ ${targets.crescimentoAnualMinPct}%`}
-              status={
-                crescimentoCarteira === null
+              tone={
+                crescimentoCarteira === null && crescimentoPremio === null
                   ? undefined
-                  : statusMin(crescimentoCarteira, targets.crescimentoAnualMinPct)
+                  : (crescimentoCarteira ?? 0) >= 0 && (crescimentoPremio ?? 0) >= 0
+                    ? "success"
+                    : "destructive"
               }
+              target="comparar com a meta comercial definida com a Olé"
             />
             <Kpi
-              label="Redução de incidentes"
+              label="Redução ano a ano de incidentes críticos"
               value={reducaoIncidentes === null ? "—" : formatPct(reducaoIncidentes, 1)}
               hint={
                 reducaoIncidentes === null || !yearCur || !yearPrev
                   ? "histórico insuficiente"
                   : `${formatInt(yearPrev.criticosYtd)} → ${formatInt(yearCur.criticosYtd)} críticos distintos (YTD ${ytdLabel})`
               }
-              tone={(reducaoIncidentes ?? 0) >= 0 ? "success" : "destructive"}
-            />
-            <Kpi
-              label="Contratos emitidos no ano"
-              value={formatInt(yearCur?.contratosYtd ?? 0)}
-              hint={
-                yearCur
-                  ? `${yearCur.year} até ${ytdLabel} · ${formatInt(yearCur.contratos)} no ano`
-                  : "sem dados"
+              tone={
+                reducaoIncidentes === null
+                  ? undefined
+                  : reducaoIncidentes > 0
+                    ? "success"
+                    : "destructive"
               }
-            />
-            <Kpi
-              label="Prêmio pago e ativo no ano (USD)"
-              value={formatUSD(paidActiveYear.bruto, { maximumFractionDigits: 0 })}
-              hint={
-                yearCur
-                  ? `${yearCur.year} até ${ytdLabel} · prêmio direto ${formatUSD(paidActiveYear.premioDireto, { maximumFractionDigits: 0 })}`
-                  : "sem dados"
-              }
-              tone="success"
+              target="meta: queda em relação ao ano anterior"
+              status={reducaoIncidentes === null ? undefined : reducaoIncidentes > 0 ? "ok" : "bad"}
             />
           </div>
 

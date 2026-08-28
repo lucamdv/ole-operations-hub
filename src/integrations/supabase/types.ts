@@ -14,6 +14,69 @@ export type Database = {
   }
   public: {
     Tables: {
+      audit_correction_responses: {
+        Row: {
+          apolice: string
+          created_at: string
+          detected_at: string
+          endosso: string | null
+          finding_id: string | null
+          id: string
+          incident_key: string
+          mode: string
+          nivel: string | null
+          requested_by: string | null
+          responded_at: string
+          run_id: string | null
+          tipo_erro: string
+        }
+        Insert: {
+          apolice: string
+          created_at?: string
+          detected_at: string
+          endosso?: string | null
+          finding_id?: string | null
+          id?: string
+          incident_key: string
+          mode?: string
+          nivel?: string | null
+          requested_by?: string | null
+          responded_at?: string
+          run_id?: string | null
+          tipo_erro: string
+        }
+        Update: {
+          apolice?: string
+          created_at?: string
+          detected_at?: string
+          endosso?: string | null
+          finding_id?: string | null
+          id?: string
+          incident_key?: string
+          mode?: string
+          nivel?: string | null
+          requested_by?: string | null
+          responded_at?: string
+          run_id?: string | null
+          tipo_erro?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_correction_responses_finding_id_fkey"
+            columns: ["finding_id"]
+            isOneToOne: false
+            referencedRelation: "audit_findings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_correction_responses_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "audit_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       audit_findings: {
         Row: {
           apolice: string
