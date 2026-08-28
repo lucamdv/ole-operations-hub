@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { CheckCircle2, ChevronRight, EyeOff, History, Repeat, RotateCcw } from "lucide-react";
+import { ChevronRight, EyeOff, History, Repeat, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
 import { URGENCY_LABEL, type Urgency } from "@/lib/audit/escalation";
@@ -12,7 +12,6 @@ export const IncidentRow = memo(function IncidentRow({
   selected,
   onToggleSelect,
   onOpen,
-  onResolve,
   onIgnore,
   onSetUrgency,
   onClearUrgency,
@@ -21,7 +20,6 @@ export const IncidentRow = memo(function IncidentRow({
   selected: boolean;
   onToggleSelect: (key: string) => void;
   onOpen: (item: AlertItem) => void;
-  onResolve: (item: AlertItem) => void;
   onIgnore: (item: AlertItem) => void;
   onSetUrgency: (item: AlertItem, u: Urgency) => void;
   onClearUrgency: (item: AlertItem) => void;
@@ -121,14 +119,6 @@ export const IncidentRow = memo(function IncidentRow({
               onSet={(u) => onSetUrgency(item, u)}
               onClear={() => onClearUrgency(item)}
             />
-            <button
-              onClick={() => onResolve(item)}
-              title="Marcar como resolvido"
-              className="inline-flex h-7 items-center gap-1 rounded-md border border-border bg-surface px-2 text-[11px] transition hover:border-success/60 hover:text-success"
-            >
-              <CheckCircle2 className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Resolver</span>
-            </button>
             <button
               onClick={() => onIgnore(item)}
               title="Registrar exceção"

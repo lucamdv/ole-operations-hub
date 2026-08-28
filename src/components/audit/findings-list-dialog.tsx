@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import {
   AlertTriangle,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Copy,
@@ -48,7 +47,6 @@ import {
 import { useAuditHistory } from "@/hooks/use-audit";
 import { useAddAuditIgnore, useAuditIgnores } from "@/hooks/use-audit-ignores";
 import { IgnoreReasonDialog } from "@/components/exceptions/ignore-reason-dialog";
-import { useResolveFinding } from "@/hooks/use-audit-resolutions";
 import type { AuditFindingRow, LatestAudit } from "@/lib/audit/types";
 import { formatDate, formatDateTime, formatInt } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -67,7 +65,6 @@ export function FindingsListDialog({
   const { data: history = [] } = useAuditHistory();
   const { data: ignores = [] } = useAuditIgnores();
   const addIgnore = useAddAuditIgnore();
-  const resolve = useResolveFinding();
   const [tipo, setTipo] = useState<string>("__all__");
   const [sev, setSev] = useState<Severity | "__all__">("__all__");
   const [view, setView] = useState<View>("agrupado");
@@ -82,15 +79,6 @@ export function FindingsListDialog({
     setPendingIgnore({ apolice, tipo_erro: tipo_erro ?? null });
   };
 
-  const handleResolve = (f: AuditFindingRow) => {
-    resolve.mutate({
-      apolice: f.apolice,
-      tipo_erro: f.tipo_erro,
-      endosso: f.endosso,
-      run_id: latest.run.id,
-    });
-  };
-
   const tipos = useMemo(
     () => Array.from(new Set(latest.findings.map((f) => f.tipo_erro))).sort(),
     [latest.findings],
@@ -103,7 +91,8 @@ export function FindingsListDialog({
       if (sev !== "__all__" && severityOf(f) !== sev) return false;
       if (term) {
         const n = normalizeFinding(f);
-        const hay = `${f.apolice} ${f.tipo_erro} ${n.motivo} ${n.detalhe} ${n.endosso ?? ""}`.toLowerCase();
+        const hay =
+          `${f.apolice} ${f.tipo_erro} ${n.motivo} ${n.detalhe} ${n.endosso ?? ""}`.toLowerCase();
         if (!hay.includes(term)) return false;
       }
       return true;
@@ -124,7 +113,9 @@ export function FindingsListDialog({
 
   const copyAll = () => {
     const lines: string[] = [];
-    lines.push(`Relatório Consolidado de Auditoria — ${formatDateTime(latest.run.data_auditoria ?? latest.run.created_at)}`);
+    lines.push(
+      `Relatório Consolidado de Auditoria — ${formatDateTime(latest.run.data_auditoria ?? latest.run.created_at)}`,
+    );
     lines.push(
       `✅ ${latest.run.aprovados} OK | ⚠️ ${latest.run.reprovados} Intervenções Necessárias`,
     );
@@ -135,7 +126,9 @@ export function FindingsListDialog({
         const icon = severityOf(f) === "erro" ? "🔴" : "⚠️";
         const nrm = normalizeFinding(f);
         const detalhe = nrm.motivo || nrm.detalhe || "";
-        lines.push(`  ${icon} ${f.tipo_erro}${nrm.endosso ? ` (end. ${nrm.endosso})` : ""} — ${detalhe}`);
+        lines.push(
+          `  ${icon} ${f.tipo_erro}${nrm.endosso ? ` (end. ${nrm.endosso})` : ""} — ${detalhe}`,
+        );
       }
     }
     copy(lines.join("\n"), "Relatório copiado");
@@ -156,7 +149,10 @@ export function FindingsListDialog({
           </DialogTitle>
           <div className="flex flex-wrap items-center gap-2 mt-2 text-[12px]">
             <span className="text-muted-foreground">
-              Data: <span className="font-mono text-foreground">{formatDateTime(latest.run.data_auditoria ?? latest.run.created_at)}</span>
+              Data:{" "}
+              <span className="font-mono text-foreground">
+                {formatDateTime(latest.run.data_auditoria ?? latest.run.created_at)}
+              </span>
             </span>
             <span className="text-muted-foreground/40">·</span>
             <Chip tone="success">✅ {formatInt(latest.run.aprovados)} OK</Chip>
@@ -197,7 +193,9 @@ export function FindingsListDialog({
             <SelectContent>
               <SelectItem value="__all__">Todos os tipos</SelectItem>
               {tipos.map((t) => (
-                <SelectItem key={t} value={t}>{t}</SelectItem>
+                <SelectItem key={t} value={t}>
+                  {t}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -208,7 +206,9 @@ export function FindingsListDialog({
               onClick={() => setView("agrupado")}
               className={cn(
                 "px-2.5 h-full text-[11.5px] font-medium flex items-center gap-1.5 transition",
-                view === "agrupado" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted/40",
+                view === "agrupado"
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:bg-muted/40",
               )}
             >
               <LayoutList className="h-3.5 w-3.5" /> Agrupado
@@ -218,7 +218,9 @@ export function FindingsListDialog({
               onClick={() => setView("tabela")}
               className={cn(
                 "px-2.5 h-full text-[11.5px] font-medium flex items-center gap-1.5 transition border-l border-border",
-                view === "tabela" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted/40",
+                view === "tabela"
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:bg-muted/40",
               )}
             >
               <TableIcon className="h-3.5 w-3.5" /> Tabela
@@ -227,10 +229,20 @@ export function FindingsListDialog({
 
           {view === "agrupado" && grouped.length > 0 && (
             <>
-              <Button size="sm" variant="ghost" className="h-9 text-[11.5px]" onClick={() => toggleAll(false)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-9 text-[11.5px]"
+                onClick={() => toggleAll(false)}
+              >
                 Expandir
               </Button>
-              <Button size="sm" variant="ghost" className="h-9 text-[11.5px]" onClick={() => toggleAll(true)}>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-9 text-[11.5px]"
+                onClick={() => toggleAll(true)}
+              >
                 Recolher
               </Button>
             </>
@@ -238,10 +250,15 @@ export function FindingsListDialog({
           <Button size="sm" variant="outline" className="gap-1.5" onClick={copyAll}>
             <Copy className="h-3.5 w-3.5" /> Copiar tudo
           </Button>
-          <Button size="sm" variant="outline" onClick={async () => {
-            const { exportAuditPdf } = await import("@/lib/audit/export-pdf");
-            exportAuditPdf(latest, history);
-          }} className="gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={async () => {
+              const { exportAuditPdf } = await import("@/lib/audit/export-pdf");
+              exportAuditPdf(latest, history);
+            }}
+            className="gap-1.5"
+          >
             <FileDown className="h-4 w-4" /> Exportar PDF
           </Button>
         </div>
@@ -265,15 +282,9 @@ export function FindingsListDialog({
               onToggle={(k) => setCollapsed((s) => ({ ...s, [k]: !s[k] }))}
               onCopy={copy}
               onIgnore={handleIgnore}
-              onResolve={handleResolve}
             />
           ) : (
-            <TableView
-              findings={filtered}
-              onCopy={copy}
-              onIgnore={handleIgnore}
-              onResolve={handleResolve}
-            />
+            <TableView findings={filtered} onCopy={copy} onIgnore={handleIgnore} />
           )}
         </div>
 
@@ -336,14 +347,12 @@ function GroupedView({
   onToggle,
   onCopy,
   onIgnore,
-  onResolve,
 }: {
   groups: ReturnType<typeof groupByApolice>;
   collapsed: Record<string, boolean>;
   onToggle: (apolice: string) => void;
   onCopy: (txt: string, msg?: string) => void;
   onIgnore: (apolice: string, tipo_erro?: string) => void;
-  onResolve: (f: AuditFindingRow) => void;
 }) {
   if (groups.length === 0) {
     return (
@@ -365,12 +374,20 @@ function GroupedView({
                 onClick={() => onToggle(g.apolice)}
                 className="mt-0.5 text-muted-foreground hover:text-foreground transition"
               >
-                {isCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                {isCollapsed ? (
+                  <ChevronRight className="h-4 w-4" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" />
+                )}
               </button>
               <div className="flex-1 min-w-0">
                 <div className="flex items-baseline gap-2 flex-wrap">
-                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">🔍 Apólice</span>
-                  <span className="font-mono text-[13px] text-foreground break-all">{g.apolice}</span>
+                  <span className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                    🔍 Apólice
+                  </span>
+                  <span className="font-mono text-[13px] text-foreground break-all">
+                    {g.apolice}
+                  </span>
                   <button
                     type="button"
                     onClick={() => onCopy(g.apolice, "Apólice copiada")}
@@ -407,7 +424,7 @@ function GroupedView({
             {!isCollapsed && (
               <ul className="px-5 py-3 space-y-2.5">
                 {g.findings.map((f) => (
-                  <FindingBullet key={f.id} f={f} onIgnore={onIgnore} onResolve={onResolve} />
+                  <FindingBullet key={f.id} f={f} onIgnore={onIgnore} />
                 ))}
               </ul>
             )}
@@ -421,11 +438,9 @@ function GroupedView({
 function FindingBullet({
   f,
   onIgnore,
-  onResolve,
 }: {
   f: AuditFindingRow;
   onIgnore: (apolice: string, tipo_erro?: string) => void;
-  onResolve: (f: AuditFindingRow) => void;
 }) {
   const sev = severityOf(f);
   const Icon = sev === "erro" ? XCircle : AlertTriangle;
@@ -471,30 +486,28 @@ function FindingBullet({
           >
             <EyeOff className="h-3 w-3" /> Ignorar
           </button>
-          <button
-            type="button"
-            onClick={() => onResolve(f)}
-            className="inline-flex items-center gap-1 text-[10.5px] text-success/80 hover:text-success opacity-80 hover:opacity-100 transition"
-            title="Marcar como resolvido (alimenta os KPIs de resolução)"
-          >
-            <CheckCircle2 className="h-3 w-3" /> Resolvido
-          </button>
         </div>
 
         {n.motivo && (
           <div className="mt-1 text-[12.5px]">
-            <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground/70 mr-1.5">Motivo:</span>
+            <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground/70 mr-1.5">
+              Motivo:
+            </span>
             <span className="text-foreground/90">{n.motivo}</span>
           </div>
         )}
         {n.detalhe && n.detalhe !== n.motivo && (
           <div className="mt-0.5 text-[12px]">
-            <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground/70 mr-1.5">Detalhe:</span>
+            <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground/70 mr-1.5">
+              Detalhe:
+            </span>
             <span className="text-muted-foreground">{n.detalhe}</span>
           </div>
         )}
         {!n.motivo && !n.detalhe && (
-          <div className="mt-1 text-[12px] text-muted-foreground italic">Sem mensagem adicional.</div>
+          <div className="mt-1 text-[12px] text-muted-foreground italic">
+            Sem mensagem adicional.
+          </div>
         )}
 
         {(f.data_inicio || f.data_fim) && (
@@ -514,12 +527,10 @@ function TableView({
   findings,
   onCopy,
   onIgnore,
-  onResolve,
 }: {
   findings: AuditFindingRow[];
   onCopy: (txt: string, msg?: string) => void;
   onIgnore: (apolice: string, tipo_erro?: string) => void;
-  onResolve: (f: AuditFindingRow) => void;
 }) {
   return (
     <Table>
@@ -566,8 +577,12 @@ function TableView({
                 </div>
               </TableCell>
               <TableCell className="text-[12px] align-top">{f.tipo_erro}</TableCell>
-              <TableCell className="text-[12px] font-mono align-top">{normalizeFinding(f).endosso ?? "—"}</TableCell>
-              <TableCell className="text-[12px] font-mono align-top">{f.data_inicio ?? "—"}</TableCell>
+              <TableCell className="text-[12px] font-mono align-top">
+                {normalizeFinding(f).endosso ?? "—"}
+              </TableCell>
+              <TableCell className="text-[12px] font-mono align-top">
+                {f.data_inicio ?? "—"}
+              </TableCell>
               <TableCell className="text-[12px] font-mono align-top">{f.data_fim ?? "—"}</TableCell>
               <TableCell className="text-[12px] align-top max-w-[420px]">
                 {(() => {
@@ -576,19 +591,21 @@ function TableView({
                     <>
                       {n.motivo && (
                         <div className="text-foreground/90">
-                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mr-1">Motivo:</span>
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mr-1">
+                            Motivo:
+                          </span>
                           {n.motivo}
                         </div>
                       )}
                       {n.detalhe && n.detalhe !== n.motivo && (
                         <div className="text-muted-foreground mt-0.5">
-                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mr-1">Detalhe:</span>
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 mr-1">
+                            Detalhe:
+                          </span>
                           {n.detalhe}
                         </div>
                       )}
-                      {!n.motivo && !n.detalhe && (
-                        <span className="text-muted-foreground">—</span>
-                      )}
+                      {!n.motivo && !n.detalhe && <span className="text-muted-foreground">—</span>}
                     </>
                   );
                 })()}
@@ -602,14 +619,6 @@ function TableView({
                     title="Ignorar este erro"
                   >
                     <EyeOff className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onResolve(f)}
-                    className="inline-flex items-center gap-1 text-[11px] text-success/80 hover:text-success"
-                    title="Marcar como resolvido"
-                  >
-                    <CheckCircle2 className="h-3.5 w-3.5" />
                   </button>
                 </div>
               </TableCell>

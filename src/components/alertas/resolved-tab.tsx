@@ -68,7 +68,8 @@ export function ResolvedTab() {
           <CheckCircle2 className="mx-auto mb-3 h-7 w-7 text-muted-foreground" />
           <div className="mb-1 text-[13px] font-semibold">Nenhum erro resolvido ainda</div>
           <p className="text-[11.5px] text-muted-foreground">
-            Ao marcar um incidente como resolvido, ele aparece aqui com o tempo de resolução.
+            Quando uma auditoria confirmar que o erro não existe mais, ele aparecerá aqui com o
+            tempo de resolução.
           </p>
         </div>
       ) : (

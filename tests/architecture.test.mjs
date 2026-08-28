@@ -89,6 +89,38 @@ test("sincronização da carteira não depende mais do webhook n8n", async () =>
   assert.match(runner, /executeDirectMotorSync/);
 });
 
+test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manual", async () => {
+  const alertPage = await read("src/routes/_authenticated/alertas.tsx");
+  const incidentRow = await read("src/components/alertas/incident-row.tsx");
+  const incidentDetail = await read("src/components/alertas/incident-detail.tsx");
+  const findingsDialog = await read("src/components/audit/findings-list-dialog.tsx");
+  const serverFn = await read("src/lib/audit-corrections.functions.ts");
+  const payload = await read("src/lib/audit/correction-payload.ts");
+  const envExample = await read(".env.example");
+
+  assert.match(alertPage, /Solucionar seleção/);
+  assert.match(alertPage, /Solucionar/);
+  assert.match(alertPage, /Ignorar apólice/);
+  assert.doesNotMatch(
+    `${alertPage}\n${incidentRow}\n${incidentDetail}\n${findingsDialog}`,
+    /onResolve|doResolve|useResolveFinding/,
+  );
+  assert.doesNotMatch(alertPage, /useResolveFinding/);
+
+  assert.match(serverFn, /process\.env\.N8N_CORRECTION_WEBHOOK_URL/);
+  assert.match(serverFn, /\.eq\("run_id", data\.run_id\)/);
+  assert.match(serverFn, /\.in\("id", findingIds\)/);
+  assert.doesNotMatch(serverFn, /resolveFinding|audit_resolutions/);
+  assert.match(payload, /documento_problematico/);
+  assert.match(payload, /relatorio_problema/);
+  assert.match(payload, /campos_incorretos/);
+  assert.match(payload, /tipo_erro/);
+  assert.match(payload, /numero_apolice/);
+
+  assert.match(envExample, /^N8N_CORRECTION_WEBHOOK_URL=/m);
+  assert.doesNotMatch(envExample, /^VITE_N8N_CORRECTION_WEBHOOK_URL=/m);
+});
+
 test("cliente do MOTOR mantém credenciais apenas no servidor e usa HTTPS", async () => {
   const source = await read("src/lib/excelsior/motor-client.server.ts");
   assert.match(source, /process\.env\.EXCELSIOR_API_USERNAME/);

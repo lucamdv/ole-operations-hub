@@ -1,13 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import {
-  CheckCircle2,
-  Clock,
-  EyeOff,
-  ExternalLink,
-  History,
-  Repeat,
-  RotateCcw,
-} from "lucide-react";
+import { Clock, EyeOff, ExternalLink, History, Repeat, RotateCcw } from "lucide-react";
 import {
   Sheet,
   SheetContent,
@@ -43,7 +35,6 @@ export function IncidentDetail({
   resolutions,
   ignores,
   onOpenChange,
-  onResolve,
   onIgnore,
   onSetUrgency,
   onClearUrgency,
@@ -54,7 +45,6 @@ export function IncidentDetail({
   resolutions: AuditResolutionRow[];
   ignores: AuditIgnoreRow[];
   onOpenChange: (v: boolean) => void;
-  onResolve: (item: AlertItem) => void;
   onIgnore: (item: AlertItem) => void;
   onSetUrgency: (item: AlertItem, u: Urgency) => void;
   onClearUrgency: (item: AlertItem) => void;
@@ -146,7 +136,6 @@ export function IncidentDetail({
             </div>
           )}
 
-
           <div className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-surface p-3">
             <Field label="Apólice">
               <span className="font-mono">{f.apolice}</span>
@@ -206,8 +195,9 @@ export function IncidentDetail({
                     <span className="font-mono">end. {h.endosso}</span>
                     <span className="text-muted-foreground">
                       {formatDateTime(h.firstSeenAt)}
-                      {h.lastSeenAt !== h.firstSeenAt ? ` → ${formatDateTime(h.lastSeenAt)}` : ""} ·{" "}
-                      {h.audits} auditoria{h.audits > 1 ? "s" : ""}
+                      {h.lastSeenAt !== h.firstSeenAt
+                        ? ` → ${formatDateTime(h.lastSeenAt)}`
+                        : ""} · {h.audits} auditoria{h.audits > 1 ? "s" : ""}
                     </span>
                   </li>
                 ))}
@@ -229,7 +219,6 @@ export function IncidentDetail({
                     {r.origem === "auto" ? "Resolvido automaticamente" : "Resolvido"}
                   </span>{" "}
                   {formatDateTime(r.resolved_at)}
-
                   {r.reopened_at && (
                     <span className="text-destructive">
                       {" "}
@@ -262,12 +251,6 @@ export function IncidentDetail({
           </details>
 
           <div className="flex flex-wrap gap-2 pb-4">
-            <button
-              onClick={() => onResolve(item)}
-              className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-surface px-3 text-[12.5px] transition hover:border-success/60 hover:text-success"
-            >
-              <CheckCircle2 className="h-3.5 w-3.5" /> Marcar como resolvido
-            </button>
             <button
               onClick={() => onIgnore(item)}
               className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-surface px-3 text-[12.5px] transition hover:border-warning/60 hover:text-warning"

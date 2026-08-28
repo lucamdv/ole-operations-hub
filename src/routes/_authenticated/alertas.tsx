@@ -7,6 +7,7 @@ import {
   EyeOff,
   History,
   Layers,
+  Loader2,
   Search,
   Sparkles,
 } from "lucide-react";
@@ -14,9 +15,9 @@ import { useLatestAudit } from "@/hooks/use-audit";
 import { useFindingRecurrence } from "@/hooks/use-audit-recurrence";
 import { useEscalationRules } from "@/hooks/use-escalation-rules";
 import { useUrgencyOverrides } from "@/hooks/use-urgency-overrides";
-import { useResolveFinding } from "@/hooks/use-audit-resolutions";
 import { useAddAuditIgnore, useAuditIgnores } from "@/hooks/use-audit-ignores";
 import { useAuditResolutions } from "@/hooks/use-audit-resolutions";
+import { useRequestAuditCorrection } from "@/hooks/use-audit-corrections";
 import {
   buildAlertItems,
   keyOf,
@@ -29,7 +30,6 @@ import { downloadAlertsCsv } from "@/lib/audit/export-alerts";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
-import { VirtualList } from "@/components/ui/virtual-list";
 import { IncidentRow } from "@/components/alertas/incident-row";
 import { IncidentDetail } from "@/components/alertas/incident-detail";
 import { ResolvedTab } from "@/components/alertas/resolved-tab";
@@ -71,7 +71,7 @@ function AlertasPage() {
   const { overrides, setOverride, clearOverride } = useUrgencyOverrides();
   const { data: resolutions = [] } = useAuditResolutions();
   const { data: ignores = [] } = useAuditIgnores();
-  const resolve = useResolveFinding();
+  const correction = useRequestAuditCorrection();
   const addIgnore = useAddAuditIgnore();
 
   const [tab, setTab] = useState<Tab>("abertos");
@@ -82,10 +82,13 @@ function AlertasPage() {
   const [onlyReopened, setOnlyReopened] = useState(false);
   const [age, setAge] = useState<AgeFilter>("all");
   const [sort, setSort] = useState<SortKey>("urgencia");
-  const [grouped, setGrouped] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [detail, setDetail] = useState<AlertItem | null>(null);
   const [ignoreTarget, setIgnoreTarget] = useState<AlertItem | null>(null);
+  const [ignorePolicyTarget, setIgnorePolicyTarget] = useState<{
+    apolice: string;
+    total: number;
+  } | null>(null);
 
   const run = latest?.run ?? null;
 
@@ -129,15 +132,27 @@ function AlertasPage() {
   }, [items, urg, tipo, onlyRecurring, onlyReopened, age, search, sort]);
 
   const groups = useMemo(() => {
-    if (!grouped) return [];
-    const map = new Map<string, AlertItem[]>();
-    for (const i of filtered) {
-      const list = map.get(i.f.apolice) ?? [];
-      list.push(i);
-      map.set(i.f.apolice, list);
+    const allByPolicy = new Map<string, AlertItem[]>();
+    for (const item of items) {
+      const list = allByPolicy.get(item.f.apolice) ?? [];
+      list.push(item);
+      allByPolicy.set(item.f.apolice, list);
     }
-    return [...map.entries()].sort((a, b) => b[1].length - a[1].length);
-  }, [filtered, grouped]);
+
+    const visibleByPolicy = new Map<string, AlertItem[]>();
+    for (const i of filtered) {
+      const list = visibleByPolicy.get(i.f.apolice) ?? [];
+      list.push(i);
+      visibleByPolicy.set(i.f.apolice, list);
+    }
+    return [...visibleByPolicy.entries()]
+      .map(([apolice, visibleItems]) => ({
+        apolice,
+        visibleItems,
+        allItems: allByPolicy.get(apolice) ?? visibleItems,
+      }))
+      .sort((a, b) => b.allItems.length - a.allItems.length);
+  }, [filtered, items]);
 
   const toggleSelect = (id: string) =>
     setSelected((prev) => {
@@ -147,32 +162,55 @@ function AlertasPage() {
       return next;
     });
 
-  const selectedItems = filtered.filter((i) => selected.has(i.f.id));
+  const selectedItems = items.filter((i) => selected.has(i.f.id));
 
-  const doResolve = (i: AlertItem) =>
-    resolve.mutate({
-      apolice: i.f.apolice,
-      tipo_erro: i.f.tipo_erro,
-      endosso: i.endosso,
-      run_id: run?.id ?? null,
+  const togglePolicy = (policyItems: AlertItem[]) =>
+    setSelected((previous) => {
+      const next = new Set(previous);
+      const allSelected = policyItems.every((item) => next.has(item.f.id));
+      for (const item of policyItems) {
+        if (allSelected) next.delete(item.f.id);
+        else next.add(item.f.id);
+      }
+      return next;
     });
 
-  const bulkResolve = () => {
-    for (const i of selectedItems) doResolve(i);
-    setSelected(new Set());
+  const requestCorrection = (targets: AlertItem[], clearSelection = false) => {
+    if (!run || targets.length === 0) return;
+    correction.mutate(
+      {
+        run_id: run.id,
+        finding_ids: Array.from(new Set(targets.map((item) => item.f.id))),
+      },
+      {
+        onSuccess: () => {
+          if (clearSelection) setSelected(new Set());
+        },
+      },
+    );
   };
 
   const confirmIgnore = (res: IgnoreReasonResult) => {
-    const targets = ignoreTarget ? [ignoreTarget] : selectedItems;
-    for (const i of targets) {
+    if (ignorePolicyTarget) {
       addIgnore.mutate({
-        apolice: i.f.apolice,
-        tipo_erro: i.f.tipo_erro,
+        apolice: ignorePolicyTarget.apolice,
+        tipo_erro: null,
         motivo: res.motivo,
         reason_tag_id: res.reason_tag_id,
       });
+    } else {
+      const targets = ignoreTarget ? [ignoreTarget] : selectedItems;
+      for (const i of targets) {
+        addIgnore.mutate({
+          apolice: i.f.apolice,
+          tipo_erro: i.f.tipo_erro,
+          motivo: res.motivo,
+          reason_tag_id: res.reason_tag_id,
+        });
+      }
     }
     setIgnoreTarget(null);
+    setIgnorePolicyTarget(null);
     setSelected(new Set());
     setBulkIgnoreOpen(false);
   };
@@ -404,29 +442,27 @@ function AlertasPage() {
             >
               Só reabertos
             </button>
-            <button
-              onClick={() => setGrouped((v) => !v)}
-              className={cn(
-                "inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-[12px] transition",
-                grouped
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-border bg-surface text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Layers className="h-3.5 w-3.5" /> Agrupar por apólice
-            </button>
           </div>
 
           {/* Bulk bar */}
-          {selected.size > 0 && (
+          {selectedItems.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 rounded-xl border border-primary/40 bg-primary/5 px-4 py-2.5">
               <Sparkles className="h-3.5 w-3.5 text-primary" />
-              <span className="text-[12.5px] font-medium">{selected.size} selecionado(s)</span>
+              <span className="text-[12.5px] font-medium">
+                {selectedItems.length} ocorrência(s) selecionada(s) em{" "}
+                {new Set(selectedItems.map((item) => item.f.apolice)).size} apólice(s)
+              </span>
               <button
-                onClick={bulkResolve}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 text-[12px] transition hover:border-success/60 hover:text-success"
+                onClick={() => requestCorrection(selectedItems, true)}
+                disabled={correction.isPending || !run}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-semibold uppercase tracking-wide text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                <CheckCircle2 className="h-3.5 w-3.5" /> Resolver em lote
+                {correction.isPending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3.5 w-3.5" />
+                )}
+                Solucionar seleção
               </button>
               <button
                 onClick={() => setBulkIgnoreOpen(true)}
@@ -477,55 +513,95 @@ function AlertasPage() {
                     : "Ajuste os filtros para ver mais resultados."}
                 </p>
               </div>
-            ) : grouped ? (
-              <div className="space-y-4">
-                {groups.map(([apolice, list]) => (
-                  <div key={apolice} className="space-y-2">
-                    <div className="flex items-center gap-2 text-[12px]">
-                      <span className="font-mono text-foreground/80">
-                        apólice …{apolice.slice(-12)}
-                      </span>
-                      <span className="rounded bg-muted/40 px-1.5 py-0.5 text-[10.5px] text-muted-foreground">
-                        {list.length} incidente(s)
-                      </span>
-                    </div>
-                    {list.map((i) => (
-                      <IncidentRow
-                        key={i.f.id}
-                        item={i}
-                        selected={selected.has(i.f.id)}
-                        onToggleSelect={toggleSelect}
-                        onOpen={setDetail}
-                        onResolve={doResolve}
-                        onIgnore={setIgnoreTarget}
-                        onSetUrgency={setUrgency}
-                        onClearUrgency={clearUrgency}
-                      />
-                    ))}
-                  </div>
-                ))}
-              </div>
             ) : (
-              <VirtualList
-                items={filtered}
-                getKey={(i) => i.f.id}
-                estimateSize={112}
-                gap={8}
-                className="max-h-[70dvh]"
-              >
-                {(i) => (
-                  <IncidentRow
-                    item={i}
-                    selected={selected.has(i.f.id)}
-                    onToggleSelect={toggleSelect}
-                    onOpen={setDetail}
-                    onResolve={doResolve}
-                    onIgnore={setIgnoreTarget}
-                    onSetUrgency={setUrgency}
-                    onClearUrgency={clearUrgency}
-                  />
-                )}
-              </VirtualList>
+              <div className="space-y-4">
+                {groups.map((group) => {
+                  const selectedCount = group.allItems.filter((item) =>
+                    selected.has(item.f.id),
+                  ).length;
+                  const allSelected = selectedCount === group.allItems.length;
+                  const uniqueTypes = new Set(group.allItems.map((item) => item.f.tipo_erro)).size;
+
+                  return (
+                    <section
+                      key={group.apolice}
+                      className="overflow-hidden rounded-xl border border-border bg-surface"
+                    >
+                      <div className="flex flex-col gap-3 bg-surface-2/50 px-3 py-3 lg:flex-row lg:items-center lg:justify-between">
+                        <div className="flex min-w-0 items-start gap-3">
+                          <input
+                            type="checkbox"
+                            checked={allSelected}
+                            onChange={() => togglePolicy(group.allItems)}
+                            aria-label={`Selecionar todas as ocorrências da apólice ${group.apolice}`}
+                            title={`${selectedCount} de ${group.allItems.length} ocorrência(s) selecionada(s)`}
+                            className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--primary)]"
+                          />
+                          <Layers className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">
+                                Apólice
+                              </span>
+                              <span className="break-all font-mono text-[12.5px] font-semibold text-foreground">
+                                {group.apolice}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-[11px] text-muted-foreground">
+                              {group.allItems.length} ocorrência(s) · {uniqueTypes} tipo(s) de erro
+                              {group.visibleItems.length !== group.allItems.length
+                                ? ` · ${group.visibleItems.length} visível(is) com os filtros atuais`
+                                : ""}
+                              {selectedCount > 0 ? ` · ${selectedCount} selecionada(s)` : ""}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 flex-wrap items-center gap-2 pl-7 lg:pl-0">
+                          <button
+                            onClick={() =>
+                              setIgnorePolicyTarget({
+                                apolice: group.apolice,
+                                total: group.allItems.length,
+                              })
+                            }
+                            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface px-3 text-[11.5px] transition hover:border-warning/60 hover:text-warning"
+                          >
+                            <EyeOff className="h-3.5 w-3.5" /> Ignorar apólice
+                          </button>
+                          <button
+                            onClick={() => requestCorrection(group.allItems)}
+                            disabled={correction.isPending || !run}
+                            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-[11.5px] font-semibold uppercase tracking-wide text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {correction.isPending ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Sparkles className="h-3.5 w-3.5" />
+                            )}
+                            Solucionar
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 border-t border-border p-2">
+                        {group.visibleItems.map((item) => (
+                          <IncidentRow
+                            key={item.f.id}
+                            item={item}
+                            selected={selected.has(item.f.id)}
+                            onToggleSelect={toggleSelect}
+                            onOpen={setDetail}
+                            onIgnore={setIgnoreTarget}
+                            onSetUrgency={setUrgency}
+                            onClearUrgency={clearUrgency}
+                          />
+                        ))}
+                      </div>
+                    </section>
+                  );
+                })}
+              </div>
             )}
           </div>
         </>
@@ -546,10 +622,6 @@ function AlertasPage() {
             (g.tipo_erro === null || g.tipo_erro === detail.f.tipo_erro),
         )}
         onOpenChange={(v) => !v && setDetail(null)}
-        onResolve={(i) => {
-          doResolve(i);
-          setDetail(null);
-        }}
         onIgnore={(i) => {
           setDetail(null);
           setIgnoreTarget(i);
@@ -565,17 +637,20 @@ function AlertasPage() {
       />
 
       <IgnoreReasonDialog
-        open={!!ignoreTarget || bulkIgnoreOpen}
+        open={!!ignoreTarget || !!ignorePolicyTarget || bulkIgnoreOpen}
         onOpenChange={(v) => {
           if (!v) {
             setIgnoreTarget(null);
+            setIgnorePolicyTarget(null);
             setBulkIgnoreOpen(false);
           }
         }}
         targetLabel={
-          ignoreTarget
-            ? `${ignoreTarget.f.tipo_erro} · apólice …${ignoreTarget.f.apolice.slice(-12)}`
-            : `${selected.size} incidente(s) selecionados`
+          ignorePolicyTarget
+            ? `Apólice ${ignorePolicyTarget.apolice} · ${ignorePolicyTarget.total} ocorrência(s)`
+            : ignoreTarget
+              ? `${ignoreTarget.f.tipo_erro} · apólice …${ignoreTarget.f.apolice.slice(-12)}`
+              : `${selectedItems.length} ocorrência(s) selecionada(s)`
         }
         pending={addIgnore.isPending}
         onConfirm={confirmIgnore}

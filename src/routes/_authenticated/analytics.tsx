@@ -456,9 +456,8 @@ function AnalyticsPage() {
           <div className="panel bg-surface/60 overflow-x-auto">
             {(ops?.resolutionTime.byTipo.length ?? 0) === 0 ? (
               <div className="px-4 py-6 text-[12.5px] text-muted-foreground">
-                Nenhuma inconsistência foi resolvida ainda. Marque um achado como “Resolvido” na
-                auditoria — ou deixe que ele saia da próxima execução — para alimentar este
-                indicador.
+                Nenhuma inconsistência foi confirmada como resolvida ainda. As conclusões são
+                registradas quando o erro deixa de aparecer na auditoria seguinte.
               </div>
             ) : (
               <table className="data-table text-[12.5px]">
