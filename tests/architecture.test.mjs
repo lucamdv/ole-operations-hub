@@ -97,6 +97,7 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
   const serverFn = await read("src/lib/audit-corrections.functions.ts");
   const correctionHook = await read("src/hooks/use-audit-corrections.ts");
   const payload = await read("src/lib/audit/correction-payload.ts");
+  const errorGroups = await read("src/lib/audit/error-groups.ts");
   const envExample = await read(".env.example");
 
   assert.match(alertPage, /Solucionar seleção/);
@@ -111,6 +112,7 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
   assert.match(serverFn, /process\.env\.N8N_CORRECTION_WEBHOOK_URL/);
   assert.match(serverFn, /resolveWebhookUrl\(rawWebhookUrl, data\.mode\)/);
   assert.match(serverFn, /modo teste/);
+  assert.match(serverFn, /groups: payload\.total_grupos_erros/);
   assert.match(correctionHook, /useWebhookMode/);
   assert.match(correctionHook, /data: \{ \.\.\.input, mode \}/);
   assert.match(serverFn, /\.eq\("run_id", data\.run_id\)/);
@@ -121,6 +123,33 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
   assert.match(payload, /campos_incorretos/);
   assert.match(payload, /tipo_erro/);
   assert.match(payload, /numero_apolice/);
+  assert.match(payload, /versao: 2/);
+  assert.match(payload, /total_grupos_erros/);
+  assert.match(payload, /grupos_erros/);
+  assert.match(payload, /codigo_grupo/);
+  assert.match(payload, /classifyAuditError/);
+
+  for (const group of ["PROPORCIONALIDADE", "VIGENCIA", "LIMITE", "PREMIO", "OUTROS"]) {
+    assert.match(errorGroups, new RegExp(group));
+  }
+  for (const errorType of [
+    "DUPLICIDADE DE VIGÊNCIA",
+    "PROPORÇÃO DE PRÊMIO DIRETO INCORRETA",
+    "MARGEM DE SERVIÇO CONTRATUAL INCORRETA",
+    "SOMA DE INTERMEDIAÇÃO INCORRETA",
+    "ADMINISTRAÇÃO ABAIXO DO MÍNIMO",
+    "COMISSÃO DE CORRETAGEM BAIXA",
+    "TAXA DE ADMINISTRAÇÃO INCORRETA",
+    "TAXA DE DISTRIBUIÇÃO INCORRETA",
+    "MARGEM DE SERVIÇO ADICIONAL INCORRETA",
+    "GAP DE DIA",
+    "VARIAÇÃO DE PRÊMIO",
+    "LIMITE DE COBERTURA INVÁLIDO",
+    "PRÊMIO FORA DO PADRÃO",
+    "COBERTURA INATIVA",
+  ]) {
+    assert.match(errorGroups, new RegExp(errorType));
+  }
 
   assert.match(envExample, /^N8N_CORRECTION_WEBHOOK_URL=/m);
   assert.doesNotMatch(envExample, /^VITE_N8N_CORRECTION_WEBHOOK_URL=/m);

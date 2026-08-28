@@ -13,7 +13,7 @@ export function useRequestAuditCorrection() {
       requestFn({ data: { ...input, mode } }),
     onSuccess: (result) => {
       toast.success("Correção solicitada ao n8n", {
-        description: `${result.policies} apólice(s) · ${result.occurrences} ocorrência(s). A conclusão será confirmada pela próxima auditoria.`,
+        description: `${result.policies} apólice(s) · ${result.occurrences} ocorrência(s) · ${result.groups} grupo(s). A conclusão será confirmada pela próxima auditoria.`,
       });
     },
     onError: (error: Error) => {

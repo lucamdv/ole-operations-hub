@@ -96,5 +96,6 @@ export const requestAuditCorrection = createServerFn({ method: "POST" })
       accepted: true as const,
       policies: payload.total_apolices,
       occurrences: payload.total_ocorrencias,
+      groups: payload.total_grupos_erros,
     };
   });

@@ -1,4 +1,9 @@
 import { normalizeFinding } from "./derive";
+import {
+  AUDIT_ERROR_GROUP_ORDER,
+  classifyAuditError,
+  type AuditErrorGroupCode,
+} from "./error-groups";
 import type { AuditFindingRow } from "./types";
 
 export interface IncorrectFieldReport {
@@ -31,15 +36,26 @@ export interface AuditCorrectionPolicy {
   erros: AuditCorrectionOccurrence[];
 }
 
+export interface AuditCorrectionErrorGroup {
+  codigo_grupo: AuditErrorGroupCode;
+  nome_grupo: string;
+  total_apolices: number;
+  total_ocorrencias: number;
+  tipos_erro: string[];
+  apolices: AuditCorrectionPolicy[];
+}
+
 export interface AuditCorrectionPayload {
   evento: "SOLICITAR_CORRECAO_AUDITORIA";
-  versao: 1;
+  versao: 2;
   origem: "ole-copilot";
   solicitado_em: string;
   solicitado_por: string;
   auditoria: { run_id: string };
   total_apolices: number;
   total_ocorrencias: number;
+  total_grupos_erros: number;
+  grupos_erros: AuditCorrectionErrorGroup[];
   apolices: AuditCorrectionPolicy[];
 }
 
@@ -177,12 +193,17 @@ export function buildAuditCorrectionPayload(input: {
   findings: AuditFindingRow[];
 }): AuditCorrectionPayload {
   const grouped = new Map<string, AuditCorrectionOccurrence[]>();
+  const groupedByError = new Map<
+    AuditErrorGroupCode,
+    { nome: string; policies: Map<string, AuditCorrectionOccurrence[]> }
+  >();
 
   for (const finding of input.findings) {
     const normalized = normalizeFinding(finding);
     const documentNumber = normalized.endosso || finding.apolice;
+    const errorGroup = classifyAuditError(finding.tipo_erro);
     const errors = grouped.get(finding.apolice) ?? [];
-    errors.push({
+    const occurrence: AuditCorrectionOccurrence = {
       id_ocorrencia: finding.id,
       tipo_erro: finding.tipo_erro,
       documento_problematico: {
@@ -190,23 +211,56 @@ export function buildAuditCorrectionPayload(input: {
         numero: documentNumber,
       },
       relatorio_problema: buildProblemReport(finding),
-    });
+    };
+    errors.push(occurrence);
     grouped.set(finding.apolice, errors);
+
+    const errorGroupEntry = groupedByError.get(errorGroup.codigo) ?? {
+      nome: errorGroup.nome,
+      policies: new Map<string, AuditCorrectionOccurrence[]>(),
+    };
+    const policyErrors = errorGroupEntry.policies.get(finding.apolice) ?? [];
+    policyErrors.push(occurrence);
+    errorGroupEntry.policies.set(finding.apolice, policyErrors);
+    groupedByError.set(errorGroup.codigo, errorGroupEntry);
   }
 
   const apolices = Array.from(grouped.entries())
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([numero_apolice, erros]) => ({ numero_apolice, erros }));
 
+  const gruposErros = Array.from(groupedByError.entries())
+    .sort(
+      ([a], [b]) => AUDIT_ERROR_GROUP_ORDER.indexOf(a) - AUDIT_ERROR_GROUP_ORDER.indexOf(b),
+    )
+    .map(([codigo_grupo, entry]): AuditCorrectionErrorGroup => {
+      const groupPolicies = Array.from(entry.policies.entries())
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([numero_apolice, erros]) => ({ numero_apolice, erros }));
+
+      return {
+        codigo_grupo,
+        nome_grupo: entry.nome,
+        total_apolices: groupPolicies.length,
+        total_ocorrencias: groupPolicies.reduce((total, policy) => total + policy.erros.length, 0),
+        tipos_erro: Array.from(
+          new Set(groupPolicies.flatMap((policy) => policy.erros.map((error) => error.tipo_erro))),
+        ).sort((a, b) => a.localeCompare(b)),
+        apolices: groupPolicies,
+      };
+    });
+
   return {
     evento: "SOLICITAR_CORRECAO_AUDITORIA",
-    versao: 1,
+    versao: 2,
     origem: "ole-copilot",
     solicitado_em: input.requestedAt ?? new Date().toISOString(),
     solicitado_por: input.requestedBy,
     auditoria: { run_id: input.runId },
     total_apolices: apolices.length,
     total_ocorrencias: input.findings.length,
+    total_grupos_erros: gruposErros.length,
+    grupos_erros: gruposErros,
     apolices,
   };
 }
