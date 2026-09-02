@@ -349,6 +349,16 @@ async function handlePolicySyncCallback(
 
   let processed = 0;
   let insertedEndos = 0;
+  const syncChanges: Array<{
+    leg: "emissoes";
+    entity_type: "apolice" | "endosso";
+    action: "adicionado" | "atualizado";
+    numero_apolice: string;
+    numero_endosso?: string;
+    numero_documento?: string;
+    before_data: JsonMap | null;
+    after_data: JsonMap;
+  }> = [];
 
   for (const [numero, endoMap] of byPolicy) {
     const endos = [...endoMap.values()].sort((a, b) => a.seq - b.seq);
@@ -358,12 +368,13 @@ async function handlePolicySyncCallback(
 
     const { data: existingPolicy } = await supabaseAdmin
       .from("policies")
-      .select("id, numero_endosso_atual, proposta")
+      .select("id, numero_endosso_atual, premio_liquido, proposta")
       .eq("numero_apolice", numero)
       .maybeSingle();
     const existingRow = existingPolicy as {
       id: string;
       numero_endosso_atual: string | null;
+      premio_liquido: number | null;
       proposta: Record<string, unknown> | null;
     } | null;
 
@@ -430,6 +441,18 @@ async function handlePolicySyncCallback(
       proposta: e.proposta ?? {},
       ordem: e.seq,
     }));
+    const { data: existingEndorsements, error: existingEndorsementsError } = await supabaseAdmin
+      .from("endorsements")
+      .select("numero_endosso, premio_liquido, proposta, ordem")
+      .eq("policy_id", policyId)
+      .in(
+        "numero_endosso",
+        rows.map((row) => row.numero_endosso),
+      );
+    if (existingEndorsementsError) {
+      console.error("[policy-sync-callback] leitura de endorsements", existingEndorsementsError);
+      continue;
+    }
     // Idempotente: a unique (policy_id, numero_endosso) garante que
     // reenvios atualizem a mesma linha em vez de duplicar.
     const { error: endErr } = await supabaseAdmin.from("endorsements").upsert(rows as never, {
@@ -439,6 +462,68 @@ async function handlePolicySyncCallback(
     if (endErr) {
       console.error("[policy-sync-callback] upsert endorsements", endErr);
       continue;
+    }
+
+    const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+    const policyAfter = {
+      numero_apolice: numero,
+      numero_endosso_atual: endossoAtualFinal,
+      premio_liquido: isNewer ? top.premio : existingRow?.premio_liquido,
+      proposta: isNewer ? (canonicalProposal ?? {}) : (existingRow?.proposta ?? {}),
+    };
+    const policyBefore = existingRow
+      ? {
+          numero_apolice: numero,
+          numero_endosso_atual: existingRow.numero_endosso_atual,
+          premio_liquido: existingRow.premio_liquido,
+          proposta: existingRow.proposta ?? {},
+        }
+      : null;
+    if (!policyBefore || !same(policyBefore, policyAfter)) {
+      syncChanges.push({
+        leg: "emissoes",
+        entity_type: "apolice",
+        action: policyBefore ? "atualizado" : "adicionado",
+        numero_apolice: numero,
+        numero_documento: numero,
+        before_data: policyBefore,
+        after_data: policyAfter,
+      });
+    }
+
+    const previousEndorsements = new Map(
+      (existingEndorsements ?? []).map((row) => [row.numero_endosso, row]),
+    );
+    for (const row of rows) {
+      const before = previousEndorsements.get(row.numero_endosso) ?? null;
+      const beforeComparable = before
+        ? {
+            numero_apolice: row.numero_apolice,
+            numero_endosso: before.numero_endosso,
+            premio_liquido: before.premio_liquido,
+            proposta: before.proposta,
+            ordem: before.ordem,
+          }
+        : null;
+      const after = {
+        numero_apolice: row.numero_apolice,
+        numero_endosso: row.numero_endosso,
+        premio_liquido: row.premio_liquido,
+        proposta: row.proposta,
+        ordem: row.ordem,
+      };
+      if (!beforeComparable || !same(beforeComparable, after)) {
+        syncChanges.push({
+          leg: "emissoes",
+          entity_type: "endosso",
+          action: before ? "atualizado" : "adicionado",
+          numero_apolice: numero,
+          numero_endosso: row.numero_endosso,
+          numero_documento: `${numero.slice(0, -6)}${row.numero_endosso}`,
+          before_data: beforeComparable,
+          after_data: after,
+        });
+      }
     }
 
     // Fonte da verdade do "endosso atual": o maior sequencial realmente
@@ -474,6 +559,11 @@ async function handlePolicySyncCallback(
     } as never)
     .eq("id", runId);
   if (updErr) return json({ error: updErr.message }, 500);
+
+  const { recordSyncChanges, refreshSyncRunCounters } =
+    await import("@/lib/policy-sync-audit.server");
+  await recordSyncChanges(runId, syncChanges);
+  await refreshSyncRunCounters(runId);
 
   const { markSyncLeg } = await import("@/lib/sync-legs.server");
   await markSyncLeg(runId, "emissoes", { status: "success", total: processed });

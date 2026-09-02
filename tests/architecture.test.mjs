@@ -61,7 +61,8 @@ test("cobrança preserva identidade individual de cada parcela", async () => {
   const source = await read("src/routes/api/public/billing-sync-callback.ts");
   assert.match(source, /numero_parcela/);
   assert.match(source, /id_parcela/);
-  assert.match(source, /byKey\.set\(`\$\{apolice\}#\$\{seq\}#\$\{numeroParcela\}`/);
+  assert.match(source, /billingPersistenceIdentity/);
+  assert.match(source, /identity\.numero_apolice/);
 });
 
 test("proposta canônica preserva campos exclusivos da apólice", async () => {
@@ -230,11 +231,63 @@ test("motor direto cobre emissões, contratos, cobrança aberta, individual e qu
   assert.match(source, /"Consulta de emissão", url, \{ method: "GET" \}/);
 });
 
-test("falha de um detalhe de cobrança preserva dados locais sem derrubar o lote", async () => {
+test("falha de cobrança entra em fila durável sem regravar dados locais antigos", async () => {
   const source = await read("src/lib/excelsior/motor-sync.server.ts");
-  assert.match(source, /detalhes individuais indisponíveis; dados locais preservados/);
-  assert.match(source, /context\.openInstallments\.filter/);
+  const worker = await read("src/lib/billing-retry-worker.server.ts");
+  const migration = await read("supabase/migrations/20260902132917_billing_sync_retry_audit.sql");
+  assert.match(source, /enqueueBillingFallbacks/);
+  assert.match(source, /status: failures\.length > 0 \? "partial" : "success"/);
+  assert.doesNotMatch(source, /localFallback/);
   assert.match(source, /falhasIndividuais: detailFailures\.length/);
+  assert.match(worker, /claim_billing_sync_fallbacks/);
+  assert.match(worker, /requeueBillingFallback/);
+  assert.match(worker, /resolveBillingFallback/);
+  assert.match(migration, /FOR UPDATE SKIP LOCKED/);
+  assert.match(migration, /billing-sync-fallback-worker/);
+  assert.match(migration, /\* \* \* \* \*/);
+});
+
+test("cobrança processa novas parcelas antes das quitações e expõe detalhes", async () => {
+  const source = await read("src/lib/excelsior/motor-sync.server.ts");
+  const page = await read("src/routes/_authenticated/apolices.index.tsx");
+  const details = await read("src/components/policies/sync-details-dialog.tsx");
+  assert.ok(source.indexOf("listOpenBilling()") < source.indexOf("listSettledBilling("));
+  assert.match(source, /shouldApplyBillingStatus|persistBillingSyncPayload/);
+  assert.match(page, /SyncDetailsDialog/);
+  assert.match(details, /Emissões adicionadas/);
+  assert.match(details, /Parcelas atualizadas/);
+  assert.match(details, /tentando em background/);
+});
+
+test("worker de fallback exige secret apenas no servidor", async () => {
+  const route = await read("src/routes/api/public/hooks/billing-retry.ts");
+  const env = await read(".env.example");
+  assert.match(route, /process\.env\.BILLING_RETRY_HOOK_SECRET/);
+  assert.match(route, /request\.headers\.get\("x-hook-secret"\)/);
+  assert.match(route, /return json\(\{ error: "Unauthorized" \}, 401\)/);
+  assert.match(env, /^BILLING_RETRY_HOOK_SECRET=/m);
+  assert.doesNotMatch(env, /^VITE_BILLING_RETRY_HOOK_SECRET=/m);
+});
+
+test("fallback libera novas sincronizações enquanto continua em background", async () => {
+  const legs = await read("src/lib/sync-legs.server.ts");
+  const hook = await read("src/hooks/use-policies.ts");
+  assert.match(legs, /s === "success" \|\| s === "partial" \|\| s === "error"/);
+  assert.match(legs, /recovering \? "partial" : "success"/);
+  assert.match(hook, /row\?\.status === "partial"/);
+  assert.match(hook, /stopPolling\(\)/);
+});
+
+test("pipeline v2 faz reconciliação única desde abril e depois volta ao delta", async () => {
+  const migration = await read(
+    "supabase/migrations/20260902132917_billing_sync_retry_audit.sql",
+  );
+  const source = await read("src/lib/excelsior/motor-sync.server.ts");
+  assert.match(migration, /CREATE TABLE public\.billing_sync_state/);
+  assert.match(migration, /DATE '2026-04-01'/);
+  assert.match(source, /reconciliation_completed_at/);
+  assert.match(source, /completeBillingReconciliation/);
+  assert.match(source, /previousFinishedAt/);
 });
 
 test("emissões consultam somente documentos ausentes na plataforma", async () => {

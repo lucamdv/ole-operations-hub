@@ -29,6 +29,7 @@ import { Route as ApiPublicBillingSyncCallbackRouteImport } from './routes/api/p
 import { Route as ApiPublicEndorsementExtractionCallbackRouteImport } from './routes/api/public/endorsement-extraction-callback'
 import { Route as ApiPublicPolicySyncCallbackRouteImport } from './routes/api/public/policy-sync-callback'
 import { Route as AuthenticatedApolicesIdIndexRouteImport } from './routes/_authenticated/apolices.$id.index'
+import { Route as ApiPublicHooksBillingRetryRouteImport } from './routes/api/public/hooks/billing-retry'
 import { Route as ApiPublicHooksPolicySyncRouteImport } from './routes/api/public/hooks/policy-sync'
 import { Route as ApiPublicHooksSchedulerRouteImport } from './routes/api/public/hooks/scheduler'
 import { Route as AuthenticatedApolicesIdEndossosNumRouteImport } from './routes/_authenticated/apolices.$id.endossos.$num'
@@ -143,6 +144,12 @@ const AuthenticatedApolicesIdIndexRoute =
     path: '/apolices/$id/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const ApiPublicHooksBillingRetryRoute =
+  ApiPublicHooksBillingRetryRouteImport.update({
+    id: '/api/public/hooks/billing-retry',
+    path: '/api/public/hooks/billing-retry',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ApiPublicHooksPolicySyncRoute =
   ApiPublicHooksPolicySyncRouteImport.update({
     id: '/api/public/hooks/policy-sync',
@@ -180,6 +187,7 @@ export interface FileRoutesByFullPath {
   '/api/public/policy-sync-callback': typeof ApiPublicPolicySyncCallbackRoute
   '/apolices/': typeof AuthenticatedApolicesIndexRoute
   '/ferramentas/': typeof AuthenticatedFerramentasIndexRoute
+  '/api/public/hooks/billing-retry': typeof ApiPublicHooksBillingRetryRoute
   '/api/public/hooks/policy-sync': typeof ApiPublicHooksPolicySyncRoute
   '/api/public/hooks/scheduler': typeof ApiPublicHooksSchedulerRoute
   '/apolices/$id/': typeof AuthenticatedApolicesIdIndexRoute
@@ -203,6 +211,7 @@ export interface FileRoutesByTo {
   '/api/public/policy-sync-callback': typeof ApiPublicPolicySyncCallbackRoute
   '/apolices': typeof AuthenticatedApolicesIndexRoute
   '/ferramentas': typeof AuthenticatedFerramentasIndexRoute
+  '/api/public/hooks/billing-retry': typeof ApiPublicHooksBillingRetryRoute
   '/api/public/hooks/policy-sync': typeof ApiPublicHooksPolicySyncRoute
   '/api/public/hooks/scheduler': typeof ApiPublicHooksSchedulerRoute
   '/apolices/$id': typeof AuthenticatedApolicesIdIndexRoute
@@ -229,6 +238,7 @@ export interface FileRoutesById {
   '/api/public/policy-sync-callback': typeof ApiPublicPolicySyncCallbackRoute
   '/_authenticated/apolices/': typeof AuthenticatedApolicesIndexRoute
   '/_authenticated/ferramentas/': typeof AuthenticatedFerramentasIndexRoute
+  '/api/public/hooks/billing-retry': typeof ApiPublicHooksBillingRetryRoute
   '/api/public/hooks/policy-sync': typeof ApiPublicHooksPolicySyncRoute
   '/api/public/hooks/scheduler': typeof ApiPublicHooksSchedulerRoute
   '/_authenticated/apolices/$id/': typeof AuthenticatedApolicesIdIndexRoute
@@ -255,6 +265,7 @@ export interface FileRouteTypes {
     | '/api/public/policy-sync-callback'
     | '/apolices/'
     | '/ferramentas/'
+    | '/api/public/hooks/billing-retry'
     | '/api/public/hooks/policy-sync'
     | '/api/public/hooks/scheduler'
     | '/apolices/$id/'
@@ -278,6 +289,7 @@ export interface FileRouteTypes {
     | '/api/public/policy-sync-callback'
     | '/apolices'
     | '/ferramentas'
+    | '/api/public/hooks/billing-retry'
     | '/api/public/hooks/policy-sync'
     | '/api/public/hooks/scheduler'
     | '/apolices/$id'
@@ -303,6 +315,7 @@ export interface FileRouteTypes {
     | '/api/public/policy-sync-callback'
     | '/_authenticated/apolices/'
     | '/_authenticated/ferramentas/'
+    | '/api/public/hooks/billing-retry'
     | '/api/public/hooks/policy-sync'
     | '/api/public/hooks/scheduler'
     | '/_authenticated/apolices/$id/'
@@ -317,6 +330,7 @@ export interface RootRouteChildren {
   ApiPublicBillingSyncCallbackRoute: typeof ApiPublicBillingSyncCallbackRoute
   ApiPublicEndorsementExtractionCallbackRoute: typeof ApiPublicEndorsementExtractionCallbackRoute
   ApiPublicPolicySyncCallbackRoute: typeof ApiPublicPolicySyncCallbackRoute
+  ApiPublicHooksBillingRetryRoute: typeof ApiPublicHooksBillingRetryRoute
   ApiPublicHooksPolicySyncRoute: typeof ApiPublicHooksPolicySyncRoute
   ApiPublicHooksSchedulerRoute: typeof ApiPublicHooksSchedulerRoute
 }
@@ -463,6 +477,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedApolicesIdIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/api/public/hooks/billing-retry': {
+      id: '/api/public/hooks/billing-retry'
+      path: '/api/public/hooks/billing-retry'
+      fullPath: '/api/public/hooks/billing-retry'
+      preLoaderRoute: typeof ApiPublicHooksBillingRetryRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/hooks/policy-sync': {
       id: '/api/public/hooks/policy-sync'
       path: '/api/public/hooks/policy-sync'
@@ -548,6 +569,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicEndorsementExtractionCallbackRoute:
     ApiPublicEndorsementExtractionCallbackRoute,
   ApiPublicPolicySyncCallbackRoute: ApiPublicPolicySyncCallbackRoute,
+  ApiPublicHooksBillingRetryRoute: ApiPublicHooksBillingRetryRoute,
   ApiPublicHooksPolicySyncRoute: ApiPublicHooksPolicySyncRoute,
   ApiPublicHooksSchedulerRoute: ApiPublicHooksSchedulerRoute,
 }

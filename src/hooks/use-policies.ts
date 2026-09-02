@@ -7,6 +7,7 @@ import {
   cancelPolicySync,
   getEndorsement,
   getLatestPolicySync,
+  getPolicySyncDetails,
   getPolicies,
   getPolicyByNumero,
   getPolicySyncStatus,
@@ -51,7 +52,20 @@ export function useEndorsementDetail(numero: string | undefined, endosso: string
   });
 }
 
-export type LegStatus = "running" | "success" | "error" | "cancelled";
+export type LegStatus = "running" | "partial" | "success" | "error" | "cancelled";
+
+export function usePolicySyncDetails(runId?: string, enabled = true) {
+  return useQuery({
+    queryKey: ["policies", "sync-details", runId ?? "latest"] as const,
+    queryFn: () => getPolicySyncDetails({ data: { runId } }),
+    enabled,
+    refetchInterval: (query) => {
+      const status = query.state.data?.run.status;
+      return status === "running" || status === "partial" ? 10_000 : false;
+    },
+    staleTime: 5_000,
+  });
+}
 
 function resolvedLegStatus(runStatus: string, legStatus: string | null | undefined): LegStatus {
   if (legStatus && legStatus !== "running") return legStatus as LegStatus;
@@ -119,6 +133,16 @@ export function useRunPolicySync() {
       if (row?.status === "success") {
         toast.success("Carteira sincronizada", {
           description: `${row.total_apolices} apólices atualizadas · ${row.cobrancas_total ?? 0} cobranças.`,
+        });
+        qc.invalidateQueries({ queryKey: ["policies"] });
+        qc.invalidateQueries({ queryKey: ["billing"] });
+        stopPolling();
+        return;
+      }
+      if (row?.status === "partial") {
+        toast.warning("Sincronização concluída com recuperação em background", {
+          description: `${row.billing_fallback_total - row.billing_fallback_resolved} consulta(s) continuarão automaticamente até a Excelsior responder.`,
+          duration: 15_000,
         });
         qc.invalidateQueries({ queryKey: ["policies"] });
         qc.invalidateQueries({ queryKey: ["billing"] });

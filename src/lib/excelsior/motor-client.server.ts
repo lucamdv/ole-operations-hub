@@ -164,7 +164,8 @@ export class ExcelsiorMotorClient {
 
     if (lastError instanceof Error) {
       const timedOut =
-        lastError.name === "TimeoutError" || /aborted due to timeout|timed? ?out/i.test(lastError.message);
+        lastError.name === "TimeoutError" ||
+        /aborted due to timeout|timed? ?out/i.test(lastError.message);
       if (timedOut) {
         throw new Error(`${label}: tempo limite de ${Math.round(timeoutMs / 1_000)}s excedido.`);
       }
@@ -281,10 +282,15 @@ export class ExcelsiorMotorClient {
     url.searchParams.set("quitacao", "Aberta");
     url.searchParams.set("situacao", "Ativo");
     url.searchParams.set("sistemaorigem", this.config.systemId);
-    return this.authorizedRequest("Listagem de parcelas abertas", url, {}, {
-      attempts: 2,
-      timeoutMs: this.config.billingRequestTimeoutMs,
-    });
+    return this.authorizedRequest(
+      "Listagem de parcelas abertas",
+      url,
+      {},
+      {
+        attempts: 2,
+        timeoutMs: this.config.billingRequestTimeoutMs,
+      },
+    );
   }
 
   async getBillingDocument(documentNumber: string) {
@@ -294,9 +300,14 @@ export class ExcelsiorMotorClient {
     );
     // O detalhe é apenas um fallback para itens incompletos da listagem em lote.
     // Não deve bloquear toda a carteira quando um documento isolado fica preso.
-    return this.authorizedRequest(`Consulta individual de cobrança ${documentNumber}`, url, {}, {
-      attempts: 1,
-    });
+    return this.authorizedRequest(
+      `Consulta individual de cobrança ${documentNumber}`,
+      url,
+      {},
+      {
+        attempts: 1,
+      },
+    );
   }
 
   async listSettledBilling(start: string, end: string) {
@@ -305,12 +316,19 @@ export class ExcelsiorMotorClient {
     url.searchParams.set("inicio", start);
     url.searchParams.set("fim", end);
     url.searchParams.set("quitacao", "Total");
-    url.searchParams.set("situacao", "Ativo");
+    // Não filtramos por situação da emissão: pagamentos antigos podem ter sido
+    // confirmados (HTTP 200) e o documento posteriormente cancelado/encerrado.
+    // A quitação continua sendo uma atualização válida da parcela.
     url.searchParams.set("sistemaorigem", this.config.systemId);
-    return this.authorizedRequest("Listagem de parcelas quitadas", url, {}, {
-      attempts: 2,
-      timeoutMs: this.config.billingRequestTimeoutMs,
-    });
+    return this.authorizedRequest(
+      "Listagem de parcelas quitadas",
+      url,
+      {},
+      {
+        attempts: 2,
+        timeoutMs: this.config.billingRequestTimeoutMs,
+      },
+    );
   }
 
   async testConnection() {

@@ -1,6 +1,7 @@
 import { ExcelsiorMotorClient } from "./motor-client.server";
 import {
   basePolicyNumber,
+  billingSettlementWindow,
   dedupeBillingItems,
   extractBasePolicies,
   flattenApiItems,
@@ -90,7 +91,6 @@ interface BillingContext {
 
 async function loadBillingContext(syncStartedAt: Date): Promise<BillingContext> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  let start = new Date(syncStartedAt.getTime() - 7 * 24 * 60 * 60 * 1_000);
 
   const { data: previousRun, error: previousRunError } = await supabaseAdmin
     .from("policy_sync_runs")
@@ -103,10 +103,12 @@ async function loadBillingContext(syncStartedAt: Date): Promise<BillingContext> 
   if (previousRunError) throw previousRunError;
   const previousFinishedAt = (previousRun as { cobrancas_finished_at: string | null } | null)
     ?.cobrancas_finished_at;
-  if (previousFinishedAt) {
-    const parsed = new Date(previousFinishedAt);
-    if (!Number.isNaN(parsed.getTime())) start = parsed;
-  }
+  const { data: syncState, error: syncStateError } = await supabaseAdmin
+    .from("billing_sync_state")
+    .select("reconciliation_start, reconciliation_completed_at")
+    .eq("singleton", true)
+    .maybeSingle();
+  if (syncStateError) throw syncStateError;
 
   const { data: billing, error: billingError } = await supabaseAdmin
     .from("policy_billing")
@@ -127,8 +129,7 @@ async function loadBillingContext(syncStartedAt: Date): Promise<BillingContext> 
     situacao_emissao: string | null;
   }>) {
     const payment = (row.status_pagamento ?? "").trim().toLowerCase();
-    const issuance = (row.situacao_emissao ?? "").trim().toLowerCase();
-    if (!payment.startsWith("abert") || !issuance.startsWith("ativ")) continue;
+    if (!payment.startsWith("abert")) continue;
     const endorsement = String(row.numero_endosso).replace(/\D/g, "").slice(-6).padStart(6, "0");
     openInstallments.push({
       numero_documento: `${row.numero_apolice.slice(0, -6)}${endorsement}`,
@@ -141,11 +142,17 @@ async function loadBillingContext(syncStartedAt: Date): Promise<BillingContext> 
     });
   }
 
+  const window = billingSettlementWindow(
+    syncStartedAt,
+    previousFinishedAt ?? null,
+    openInstallments.map((item) => item.data_vencimento),
+  );
+  if (syncState && !syncState.reconciliation_completed_at) {
+    window.start = [window.start, syncState.reconciliation_start].sort()[0]!;
+  }
+
   return {
-    window: {
-      start: start.toISOString().slice(0, 10),
-      end: syncStartedAt.toISOString().slice(0, 10),
-    },
+    window,
     openInstallments,
   };
 }
@@ -217,20 +224,72 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
   const billingStartedAt = Date.now();
   const context = await loadBillingContext(syncStartedAt);
   await assertRunActive(runId);
+  const { persistBillingSyncPayload } = await import("@/routes/api/public/billing-sync-callback");
+  const { enqueueBillingFallbacks } = await import("@/lib/policy-sync-audit.server");
+  const failures: Array<{ documentNumber: string; message: string }> = [];
+  let persisted = 0;
 
-  // As duas listagens são independentes e compartilham a mesma autenticação.
-  // Executá-las juntas elimina uma latência inteira do caminho de cobrança.
-  const [openResponse, settledResponse] = await Promise.all([
-    client.listOpenBilling(),
-    client.listSettledBilling(context.window.start, context.window.end),
-  ]);
+  // Ordem intencional: primeiro descobrimos e persistimos parcelas novas; só
+  // depois consultamos as quitações/renovações. Assim uma quitação sempre vence
+  // uma fotografia anterior de parcela aberta.
+  let openResponse: unknown = { items: [] };
+  let openListSucceeded = false;
+  try {
+    openResponse = await client.listOpenBilling();
+    openListSucceeded = true;
+    const openPlan = planBillingRefresh(context.openInstallments, openResponse, { items: [] });
+    const directOpen = normalizeBillingResponse(
+      { items: openPlan.directOpenItems },
+      { defaultPaymentStatus: "Aberta" },
+    );
+    const result = await persistBillingSyncPayload(
+      runId,
+      { atualizacoes: directOpen },
+      { finalizeLeg: false },
+    );
+    persisted += Number(result.upserted ?? 0);
+    const { completeBillingReconciliation } = await import("@/lib/policy-sync-audit.server");
+    await completeBillingReconciliation(context.window.start);
+  } catch (error) {
+    failures.push({
+      documentNumber: "__OPEN_INSTALLMENTS__",
+      message: errorMessage("Listagem de parcelas abertas", error),
+    });
+  }
   await assertRunActive(runId);
 
-  const plan = planBillingRefresh(context.openInstallments, openResponse, settledResponse);
-  const directOpen = normalizeBillingResponse(
-    { items: plan.directOpenItems },
-    { defaultPaymentStatus: "Aberta" },
-  );
+  let settledResponse: unknown = { items: [] };
+  let settledListSucceeded = false;
+  try {
+    settledResponse = await client.listSettledBilling(context.window.start, context.window.end);
+    settledListSucceeded = true;
+    const settled = normalizeBillingResponse(settledResponse, {
+      defaultPaymentStatus: "Total",
+    });
+    if (flattenApiItems(settledResponse).length > settled.length) {
+      throw new Error("A listagem de quitadas contém parcela(s) sem identidade persistível.");
+    }
+    const result = await persistBillingSyncPayload(
+      runId,
+      { atualizacoes: settled },
+      { finalizeLeg: false },
+    );
+    persisted += Number(result.upserted ?? 0);
+  } catch (error) {
+    failures.push({
+      documentNumber: `__SETTLED_WINDOW__#${context.window.start}#${context.window.end}`,
+      message: errorMessage("Listagem de parcelas quitadas", error),
+    });
+  }
+  await assertRunActive(runId);
+
+  const plan = openListSucceeded
+    ? planBillingRefresh(
+        context.openInstallments,
+        openResponse,
+        settledListSucceeded ? settledResponse : { items: [] },
+      )
+    : { directOpenItems: [], detailDocuments: [] };
   const billingConcurrency = concurrencyFromEnv("EXCELSIOR_BILLING_CONCURRENCY", 4);
   const individualResults = await mapWithConcurrency(
     plan.detailDocuments,
@@ -239,25 +298,20 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
       await assertRunActive(runId);
       try {
         const response = await client.getBillingDocument(documentNumber);
+        const normalized = normalizeBillingResponse(response, {
+          fallbackDocument: documentNumber,
+          defaultPaymentStatus: "Aberta",
+        });
+        if (normalized.length === 0) {
+          throw new Error("A Excelsior respondeu sem uma parcela identificável.");
+        }
         return {
-          updates: normalizeBillingResponse(response, {
-            fallbackDocument: documentNumber,
-            defaultPaymentStatus: "Aberta",
-          }),
+          updates: normalized,
           failure: null,
         };
       } catch (error) {
-        // O lote de abertas/quitadas é a fonte principal. Se um detalhe isolado
-        // falhar, preservamos as parcelas locais desse documento e seguimos com
-        // as demais atualizações, em vez de invalidar toda a sincronização.
-        const localFallback = context.openInstallments.filter(
-          (item) => item.numero_documento === documentNumber,
-        );
         return {
-          updates: normalizeBillingResponse(
-            { items: localFallback },
-            { fallbackDocument: documentNumber, defaultPaymentStatus: "Aberta" },
-          ),
+          updates: [],
           failure: {
             documentNumber,
             message: error instanceof Error ? error.message : String(error),
@@ -268,40 +322,55 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
   );
 
   await assertRunActive(runId);
-  const settled = normalizeBillingResponse(settledResponse, {
-    defaultPaymentStatus: "Total",
-  });
   const individual = individualResults.flatMap((result) => result.updates);
   const detailFailures = individualResults
     .map((result) => result.failure)
     .filter((failure): failure is NonNullable<typeof failure> => failure !== null);
-  const updates = dedupeBillingItems([...directOpen, ...individual, ...settled]);
+  const updates = dedupeBillingItems(individual);
+  if (updates.length > 0) {
+    const result = await persistBillingSyncPayload(
+      runId,
+      { atualizacoes: updates },
+      { finalizeLeg: false },
+    );
+    persisted += Number(result.upserted ?? 0);
+  }
+  failures.push(...detailFailures);
+  await enqueueBillingFallbacks(runId, failures);
 
   if (detailFailures.length > 0) {
-    console.warn("[motor-sync][billing] detalhes individuais indisponíveis; dados locais preservados", {
-      quantidade: detailFailures.length,
-      documentos: detailFailures.slice(0, 10).map((failure) => failure.documentNumber),
-      erros: detailFailures.slice(0, 3).map((failure) => failure.message),
-    });
+    console.warn(
+      "[motor-sync][billing] detalhes individuais indisponíveis; dados locais preservados",
+      {
+        quantidade: failures.length,
+        documentos: failures.slice(0, 10).map((failure) => failure.documentNumber),
+        erros: failures.slice(0, 3).map((failure) => failure.message),
+      },
+    );
   }
 
   console.info("[motor-sync][billing] plano concluído", {
     abertasLocais: context.openInstallments.length,
     abertasEmLote: flattenApiItems(openResponse).length,
-    abertasAproveitadas: directOpen.length,
+    listagemAbertasConcluida: openListSucceeded,
     consultasIndividuais: plan.detailDocuments.length,
     falhasIndividuais: detailFailures.length,
-    quitadasNoIntervalo: settled.length,
-    atualizacoes: updates.length,
+    listagemQuitadasConcluida: settledListSucceeded,
+    atualizacoesPersistidas: persisted,
     duracaoMs: Date.now() - billingStartedAt,
   });
 
   await assertRunActive(runId);
-  const { persistBillingSyncPayload } = await import("@/routes/api/public/billing-sync-callback");
-  return persistBillingSyncPayload(runId, {
-    janela: { inicio: context.window.start, fim: context.window.end },
-    atualizacoes: updates,
+  const { markSyncLeg } = await import("@/lib/sync-legs.server");
+  await markSyncLeg(runId, "cobrancas", {
+    status: failures.length > 0 ? "partial" : "success",
+    total: persisted,
+    errorMessage:
+      failures.length > 0
+        ? `Cobranças: ${failures.length} consulta(s) em recuperação automática.`
+        : undefined,
   });
+  return { ok: true, upserted: persisted, fallbacks: failures.length };
 }
 
 function errorMessage(prefix: string, error: unknown) {

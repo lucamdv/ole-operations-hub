@@ -10,6 +10,8 @@ export interface NormalizedBillingItem {
   situacao_emissao: string;
   data_quitacao: string | null;
   data_vencimento: string | null;
+  /** A listagem por apólice usa parcela N para representar o endosso N - 1. */
+  policy_installment_sequence: boolean;
 }
 
 const ENVELOPE_KEYS = [
@@ -69,7 +71,14 @@ export function billingDocumentNumber(value: unknown): string | null {
     return normalizedText(value) || null;
   }
   if (!isJsonRecord(value)) return null;
-  const document = firstValue(value, ["numero_documento", "documento", "numero_apolice"]);
+  const document = firstValue(value, [
+    "numero_documento",
+    "documento",
+    "numero_apolice",
+    "apolice",
+    "poliza",
+    "numero_poliza",
+  ]);
   return document === null ? null : normalizedText(document) || null;
 }
 
@@ -84,6 +93,11 @@ export function billingInstallmentIdentity(value: unknown): string | null {
     "parcela_id",
     "idParcela",
     "codigo_parcela",
+    "identificador_pagamento",
+    "identificador_pago",
+    "identificador_de_pago",
+    "id_pagamento",
+    "payment_id",
     "numero_parcela",
     "sequencial_parcela",
     "numeroParcela",
@@ -281,14 +295,21 @@ export function planBillingRefresh(
 
   const directOpenItems: JsonRecord[] = [];
   const detailDocuments = new Set<string>();
+  // Persistimos todas as parcelas identificáveis da listagem, inclusive quando
+  // o documento já existia. Uma mesma apólice/endosso pode ganhar outra parcela
+  // sem que o status agregado do documento mude; a persistência idempotente
+  // elimina as linhas inalteradas sem perder essa inclusão.
+  for (const [document, openItems] of openByDocument) {
+    if (openItems.every((item) => billingInstallmentIdentity(item) !== null)) {
+      directOpenItems.push(...openItems);
+    } else {
+      detailDocuments.add(document);
+    }
+  }
+
   for (const document of selectBillingDocumentsToRefresh(currentOpen, remoteOpen)) {
     const openItems = openByDocument.get(document);
     if (openItems?.length) {
-      if (openItems.every((item) => billingInstallmentIdentity(item) !== null)) {
-        directOpenItems.push(...openItems);
-      } else {
-        detailDocuments.add(document);
-      }
       continue;
     }
 
@@ -304,7 +325,7 @@ export function normalizeBillingResponse(
   value: unknown,
   options: { fallbackDocument?: string; defaultPaymentStatus: "Aberta" | "Total" },
 ): NormalizedBillingItem[] {
-  return flattenApiItems(value).flatMap((item, index) => {
+  return flattenApiItems(value).flatMap((item) => {
     const document = billingDocumentNumber(item) ?? options.fallbackDocument ?? null;
     if (!document) return [];
 
@@ -313,6 +334,11 @@ export function normalizeBillingResponse(
       "parcela_id",
       "idParcela",
       "codigo_parcela",
+      "identificador_pagamento",
+      "identificador_pago",
+      "identificador_de_pago",
+      "id_pagamento",
+      "payment_id",
     ]);
     const explicitNumber = firstValue(item, [
       "numero_parcela",
@@ -320,33 +346,149 @@ export function normalizeBillingResponse(
       "numeroParcela",
       "parcela",
       "parcela_numero",
+      "parcela_ole",
     ]);
-    const fallback =
+    const derivedIdentity =
       item.numero_proposta && item.data_vencimento
         ? `${String(item.numero_proposta)}@${String(item.data_vencimento)}`
-        : String(index + 1);
+        : null;
 
     const installmentNumber =
       explicitNumber !== null
         ? normalizeBillingInstallmentNumber(explicitNumber)
-        : normalizedText(installmentId ?? fallback);
+        : optionalText(installmentId ?? derivedIdentity);
+    if (!installmentNumber) return [];
+    const documentDigits = document.replace(/\D/g, "");
+    const explicitEndorsement = firstValue(item, ["numero_endosso", "numero_endosso_seguradora"]);
+    const explicitEndorsementDigits = normalizedText(explicitEndorsement).replace(/\D/g, "");
+    const policyInstallmentSequence =
+      documentDigits.length >= 6 &&
+      documentDigits.endsWith("000000") &&
+      (explicitEndorsement === null || explicitEndorsementDigits.endsWith("000000")) &&
+      explicitNumber !== null &&
+      /^\d+$/.test(normalizedText(explicitNumber));
 
     return [
       {
         numero_documento: document,
         numero_endosso: optionalText(item.numero_endosso ?? item.numero_endosso_seguradora),
-        numero_parcela: installmentNumber!,
+        numero_parcela: installmentNumber,
         id_parcela: installmentId == null ? null : String(installmentId),
         numero_proposta: optionalText(item.numero_proposta),
         status_pagamento: normalizedText(
-          item.situacao_quitacao ?? item.status_pagamento ?? options.defaultPaymentStatus,
+          item.situacao_quitacao ??
+            item.status_pagamento ??
+            item.quitacao ??
+            item.status_quitacao ??
+            options.defaultPaymentStatus,
         ),
-        situacao_emissao: normalizedText(item.situacao_emissao ?? "Ativa"),
-        data_quitacao: optionalText(item.data_quitacao),
-        data_vencimento: optionalText(item.data_vencimento),
+        situacao_emissao: normalizedText(
+          item.situacao_emissao ?? item.situacao ?? item.status_emissao ?? "Ativa",
+        ),
+        data_quitacao: optionalText(
+          item.data_quitacao ?? item.data_pagamento ?? item.fecha_pago ?? item.fecha_pagamento,
+        ),
+        data_vencimento: optionalText(item.data_vencimento ?? item.fecha_vencimiento),
+        policy_installment_sequence: policyInstallmentSequence,
       },
     ];
   });
+}
+
+export interface BillingPersistenceIdentity {
+  numero_apolice: string;
+  numero_endosso: string;
+  numero_parcela: string;
+}
+
+/**
+ * A listagem de quitadas da Excelsior pode devolver a apólice-base acompanhada
+ * da parcela comercial (parcela 2 = endosso 000001). O detalhe por documento,
+ * por outro lado, já traz o sequencial do endosso. Esta função unifica os dois
+ * contratos antes da chave única do banco.
+ */
+export function billingPersistenceIdentity(
+  item: Pick<
+    NormalizedBillingItem,
+    "numero_documento" | "numero_endosso" | "numero_parcela" | "policy_installment_sequence"
+  >,
+): BillingPersistenceIdentity | null {
+  const digits = item.numero_documento.replace(/\D/g, "");
+  if (digits.length < 12) return null;
+  const numero_apolice = `${digits.slice(0, -6)}000000`;
+  const explicitEndorsement = item.numero_endosso?.replace(/\D/g, "");
+  let numero_endosso = explicitEndorsement
+    ? explicitEndorsement.slice(-6).padStart(6, "0")
+    : digits.slice(-6);
+  let numero_parcela = normalizeBillingInstallmentNumber(item.numero_parcela);
+  if (!numero_parcela) return null;
+
+  if (item.policy_installment_sequence && /^\d+$/.test(numero_parcela)) {
+    const commercialInstallment = Number.parseInt(numero_parcela, 10);
+    if (commercialInstallment > 0 && commercialInstallment <= 10_001) {
+      numero_endosso = String(commercialInstallment - 1).padStart(6, "0");
+      numero_parcela = "1";
+    }
+  }
+
+  return { numero_apolice, numero_endosso, numero_parcela };
+}
+
+function normalizedBillingStatus(value: string | null | undefined) {
+  return (value ?? "").trim().toLocaleLowerCase("pt-BR");
+}
+
+/** Nunca deixa uma resposta de abertas rebaixar uma quitação já confirmada. */
+export function shouldApplyBillingStatus(
+  currentStatus: string | null | undefined,
+  incomingStatus: string | null | undefined,
+) {
+  const current = normalizedBillingStatus(currentStatus);
+  const incoming = normalizedBillingStatus(incomingStatus);
+  if (current.startsWith("total") && incoming.startsWith("abert")) return false;
+  return true;
+}
+
+export function dateOnlyInTimeZone(date: Date, timeZone = "America/Fortaleza") {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+/**
+ * Sobrepõe dois dias ao cursor e volta até a parcela aberta mais antiga (máximo
+ * de 400 dias). Isso recupera notificações atrasadas sem reler toda a carteira.
+ */
+export function billingSettlementWindow(
+  syncStartedAt: Date,
+  previousFinishedAt: string | null,
+  openDueDates: Array<string | null>,
+) {
+  const dayMs = 24 * 60 * 60 * 1_000;
+  const floor = new Date(syncStartedAt.getTime() - 400 * dayMs);
+  const candidates: Date[] = [];
+  if (previousFinishedAt) {
+    const previous = new Date(previousFinishedAt);
+    if (!Number.isNaN(previous.getTime()))
+      candidates.push(new Date(previous.getTime() - 2 * dayMs));
+  } else {
+    candidates.push(new Date(syncStartedAt.getTime() - 30 * dayMs));
+  }
+  for (const dueDate of openDueDates) {
+    if (!dueDate) continue;
+    const parsed = new Date(`${dueDate.slice(0, 10)}T12:00:00Z`);
+    if (!Number.isNaN(parsed.getTime())) candidates.push(new Date(parsed.getTime() - 2 * dayMs));
+  }
+  const earliest = new Date(
+    Math.max(floor.getTime(), Math.min(...candidates.map((d) => d.getTime()))),
+  );
+  return {
+    start: dateOnlyInTimeZone(earliest),
+    end: dateOnlyInTimeZone(syncStartedAt),
+  };
 }
 
 /** Última atualização vence para a mesma parcela, como no payload final do n8n. */

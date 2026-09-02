@@ -5,7 +5,11 @@
 export async function markSyncLeg(
   runId: string,
   leg: "emissoes" | "cobrancas",
-  outcome: { status: "success" | "error"; total?: number; errorMessage?: string },
+  outcome: {
+    status: "success" | "partial" | "error";
+    total?: number;
+    errorMessage?: string;
+  },
 ) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const now = new Date().toISOString();
@@ -19,7 +23,7 @@ export async function markSyncLeg(
 
   const patch: Record<string, unknown> = {
     [`${leg}_status`]: outcome.status,
-    [`${leg}_finished_at`]: now,
+    [`${leg}_finished_at`]: outcome.status === "partial" ? null : now,
   };
   if (leg === "cobrancas" && typeof outcome.total === "number") {
     patch.cobrancas_total = outcome.total;
@@ -48,13 +52,14 @@ export async function markSyncLeg(
   } | null;
   if (!r || r.status === "cancelled") return;
 
-  const done = (s: string) => s === "success" || s === "error";
+  const done = (s: string) => s === "success" || s === "partial" || s === "error";
   if (done(r.emissoes_status) && done(r.cobrancas_status)) {
     const failed = r.emissoes_status === "error" || r.cobrancas_status === "error";
+    const recovering = r.emissoes_status === "partial" || r.cobrancas_status === "partial";
     await supabaseAdmin
       .from("policy_sync_runs")
       .update({
-        status: failed ? "error" : "success",
+        status: failed ? "error" : recovering ? "partial" : "success",
         finished_at: now,
         duration_ms: Date.now() - new Date(r.created_at).getTime(),
       } as never)

@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import type { WebhookMode } from "@/lib/webhook-mode";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
+import type { Json } from "@/integrations/supabase/types";
 
 export interface PolicyListItem {
   id: string;
@@ -49,6 +50,12 @@ export interface PolicySyncStatus {
   cobrancas_status: string;
   cobrancas_finished_at: string | null;
   cobrancas_total: number;
+  emissions_added: number;
+  emissions_updated: number;
+  billing_added: number;
+  billing_updated: number;
+  billing_fallback_total: number;
+  billing_fallback_resolved: number;
 }
 
 export interface LatestPolicySync extends PolicySyncStatus {
@@ -71,7 +78,7 @@ export const getPolicySyncStatus = createServerFn({ method: "GET" })
     const { data: row, error } = await supabaseAdmin
       .from("policy_sync_runs")
       .select(
-        "id, status, total_apolices, error_message, duration_ms, finished_at, emissoes_status, emissoes_finished_at, cobrancas_status, cobrancas_finished_at, cobrancas_total",
+        "id, status, total_apolices, error_message, duration_ms, finished_at, emissoes_status, emissoes_finished_at, cobrancas_status, cobrancas_finished_at, cobrancas_total, emissions_added, emissions_updated, billing_added, billing_updated, billing_fallback_total, billing_fallback_resolved",
       )
       .eq("id", data.runId)
       .maybeSingle();
@@ -109,13 +116,87 @@ export const getLatestPolicySync = createServerFn({ method: "GET" })
     const { data, error } = await supabaseAdmin
       .from("policy_sync_runs")
       .select(
-        "id, status, total_apolices, error_message, duration_ms, finished_at, created_at, emissoes_status, emissoes_finished_at, cobrancas_status, cobrancas_finished_at, cobrancas_total",
+        "id, status, total_apolices, error_message, duration_ms, finished_at, created_at, emissoes_status, emissoes_finished_at, cobrancas_status, cobrancas_finished_at, cobrancas_total, emissions_added, emissions_updated, billing_added, billing_updated, billing_fallback_total, billing_fallback_resolved",
       )
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
     if (error) throw new Error(error.message);
     return data as LatestPolicySync | null;
+  });
+
+function displayValue(value: Json | undefined): Json {
+  if (value === undefined) return null;
+  if (typeof value === "string") return value.length > 500 ? `${value.slice(0, 497)}…` : value;
+  return value;
+}
+
+function collectFieldDiffs(
+  before: Json | undefined,
+  after: Json | undefined,
+  path = "",
+  depth = 0,
+): Array<{ field: string; before: Json; after: Json }> {
+  if (Object.is(before, after)) return [];
+  const beforeObject = before && typeof before === "object" && !Array.isArray(before);
+  const afterObject = after && typeof after === "object" && !Array.isArray(after);
+  if (beforeObject && afterObject && depth < 4) {
+    const left = before as Record<string, Json | undefined>;
+    const right = after as Record<string, Json | undefined>;
+    const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+    return [...keys].flatMap((key) =>
+      collectFieldDiffs(left[key], right[key], path ? `${path}.${key}` : key, depth + 1),
+    );
+  }
+  if (JSON.stringify(before) === JSON.stringify(after)) return [];
+  return [{ field: path || "registro", before: displayValue(before), after: displayValue(after) }];
+}
+
+export const getPolicySyncDetails = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d?: { runId?: string }) => d ?? {})
+  .handler(async ({ data: input }) => {
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    let runId = input.runId;
+    if (!runId) {
+      const { data: latest, error } = await supabaseAdmin
+        .from("policy_sync_runs")
+        .select("id")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      runId = latest?.id;
+    }
+    if (!runId) return null;
+
+    const [runResult, changesResult, fallbacksResult] = await Promise.all([
+      supabaseAdmin.from("policy_sync_runs").select("*").eq("id", runId).maybeSingle(),
+      supabaseAdmin
+        .from("policy_sync_changes")
+        .select("*")
+        .eq("run_id", runId)
+        .order("created_at", { ascending: false })
+        .limit(2_000),
+      supabaseAdmin
+        .from("billing_sync_fallbacks")
+        .select("*")
+        .eq("run_id", runId)
+        .order("created_at", { ascending: false }),
+    ]);
+    if (runResult.error) throw new Error(runResult.error.message);
+    if (changesResult.error) throw new Error(changesResult.error.message);
+    if (fallbacksResult.error) throw new Error(fallbacksResult.error.message);
+    if (!runResult.data) return null;
+
+    return {
+      run: runResult.data,
+      changes: (changesResult.data ?? []).map((change) => ({
+        ...change,
+        diffs: collectFieldDiffs(change.before_data, change.after_data).slice(0, 200),
+      })),
+      fallbacks: fallbacksResult.data ?? [],
+    };
   });
 
 export const getPolicies = createServerFn({ method: "GET" })

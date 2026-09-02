@@ -1,10 +1,4 @@
-export type Json =
-  | string
-  | number
-  | boolean
-  | null
-  | { [key: string]: Json | undefined }
-  | Json[]
+export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]
 
 export type Database = {
   // Allows to automatically instantiate createClient with right options
@@ -523,6 +517,86 @@ export type Database = {
           },
         ]
       }
+      billing_sync_fallbacks: {
+        Row: {
+          attempts: number
+          created_at: string
+          first_failed_at: string
+          id: string
+          last_attempt_at: string | null
+          last_error: string | null
+          lease_expires_at: string | null
+          next_retry_at: string
+          numero_documento: string
+          resolved_at: string | null
+          run_id: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          attempts?: number
+          created_at?: string
+          first_failed_at?: string
+          id?: string
+          last_attempt_at?: string | null
+          last_error?: string | null
+          lease_expires_at?: string | null
+          next_retry_at?: string
+          numero_documento: string
+          resolved_at?: string | null
+          run_id: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          attempts?: number
+          created_at?: string
+          first_failed_at?: string
+          id?: string
+          last_attempt_at?: string | null
+          last_error?: string | null
+          lease_expires_at?: string | null
+          next_retry_at?: string
+          numero_documento?: string
+          resolved_at?: string | null
+          run_id?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_sync_fallbacks_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "policy_sync_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      billing_sync_state: {
+        Row: {
+          pipeline_version: number
+          reconciliation_completed_at: string | null
+          reconciliation_start: string
+          singleton: boolean
+          updated_at: string
+        }
+        Insert: {
+          pipeline_version?: number
+          reconciliation_completed_at?: string | null
+          reconciliation_start?: string
+          singleton?: boolean
+          updated_at?: string
+        }
+        Update: {
+          pipeline_version?: number
+          reconciliation_completed_at?: string | null
+          reconciliation_start?: string
+          singleton?: boolean
+          updated_at?: string
+        }
+        Relationships: []
+      }
       policy_billing: {
         Row: {
           created_at: string
@@ -570,6 +644,10 @@ export type Database = {
       }
       policy_sync_runs: {
         Row: {
+          billing_added: number
+          billing_fallback_resolved: number
+          billing_fallback_total: number
+          billing_updated: number
           cobrancas_finished_at: string | null
           cobrancas_status: string
           cobrancas_total: number
@@ -577,6 +655,8 @@ export type Database = {
           duration_ms: number | null
           emissoes_finished_at: string | null
           emissoes_status: string
+          emissions_added: number
+          emissions_updated: number
           error_message: string | null
           finished_at: string | null
           id: string
@@ -585,6 +665,10 @@ export type Database = {
           total_apolices: number
         }
         Insert: {
+          billing_added?: number
+          billing_fallback_resolved?: number
+          billing_fallback_total?: number
+          billing_updated?: number
           cobrancas_finished_at?: string | null
           cobrancas_status?: string
           cobrancas_total?: number
@@ -592,6 +676,8 @@ export type Database = {
           duration_ms?: number | null
           emissoes_finished_at?: string | null
           emissoes_status?: string
+          emissions_added?: number
+          emissions_updated?: number
           error_message?: string | null
           finished_at?: string | null
           id?: string
@@ -600,6 +686,10 @@ export type Database = {
           total_apolices?: number
         }
         Update: {
+          billing_added?: number
+          billing_fallback_resolved?: number
+          billing_fallback_total?: number
+          billing_updated?: number
           cobrancas_finished_at?: string | null
           cobrancas_status?: string
           cobrancas_total?: number
@@ -607,6 +697,8 @@ export type Database = {
           duration_ms?: number | null
           emissoes_finished_at?: string | null
           emissoes_status?: string
+          emissions_added?: number
+          emissions_updated?: number
           error_message?: string | null
           finished_at?: string | null
           id?: string
@@ -615,6 +707,62 @@ export type Database = {
           total_apolices?: number
         }
         Relationships: []
+      }
+      policy_sync_changes: {
+        Row: {
+          action: string
+          after_data: Json | null
+          before_data: Json | null
+          created_at: string
+          details: string | null
+          entity_type: string
+          id: string
+          leg: string
+          numero_apolice: string | null
+          numero_documento: string | null
+          numero_endosso: string | null
+          numero_parcela: string | null
+          run_id: string
+        }
+        Insert: {
+          action: string
+          after_data?: Json | null
+          before_data?: Json | null
+          created_at?: string
+          details?: string | null
+          entity_type: string
+          id?: string
+          leg: string
+          numero_apolice?: string | null
+          numero_documento?: string | null
+          numero_endosso?: string | null
+          numero_parcela?: string | null
+          run_id: string
+        }
+        Update: {
+          action?: string
+          after_data?: Json | null
+          before_data?: Json | null
+          created_at?: string
+          details?: string | null
+          entity_type?: string
+          id?: string
+          leg?: string
+          numero_apolice?: string | null
+          numero_documento?: string | null
+          numero_endosso?: string | null
+          numero_parcela?: string | null
+          run_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "policy_sync_changes_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "policy_sync_runs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       profiles: {
         Row: {
@@ -711,6 +859,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_billing_sync_fallbacks: {
+        Args: { lease_seconds?: number; max_items?: number }
+        Returns: Database["public"]["Tables"]["billing_sync_fallbacks"]["Row"][]
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
@@ -736,12 +888,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -751,10 +903,8 @@ export type Tables<
     }
     ? R
     : never
-  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
-        DefaultSchema["Views"])
-    ? (DefaultSchema["Tables"] &
-        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
+    ? (DefaultSchema["Tables"] & DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
         Row: infer R
       }
       ? R
@@ -763,13 +913,12 @@ export type Tables<
 
 export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
-    | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+    keyof DefaultSchema["Tables"] | { schema: keyof DatabaseWithoutInternals },
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -788,13 +937,12 @@ export type TablesInsert<
 
 export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
-    | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+    keyof DefaultSchema["Tables"] | { schema: keyof DatabaseWithoutInternals },
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -813,13 +961,12 @@ export type TablesUpdate<
 
 export type Enums<
   DefaultSchemaEnumNameOrOptions extends
-    | keyof DefaultSchema["Enums"]
-    | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+    keyof DefaultSchema["Enums"] | { schema: keyof DatabaseWithoutInternals },
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -830,13 +977,12 @@ export type Enums<
 
 export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
-    | keyof DefaultSchema["CompositeTypes"]
-    | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+    keyof DefaultSchema["CompositeTypes"] | { schema: keyof DatabaseWithoutInternals },
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }

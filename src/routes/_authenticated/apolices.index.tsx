@@ -8,6 +8,7 @@ import {
   type LegStatus,
 } from "@/hooks/use-policies";
 import { NextRunCountdown } from "@/components/automation/next-run-countdown";
+import { SyncDetailsDialog } from "@/components/policies/sync-details-dialog";
 
 import { formatDateTime, relativeTime } from "@/lib/format";
 import { fmtNum } from "@/components/apolice/cards";
@@ -26,6 +27,7 @@ function LegIndicator({ label, status }: { label: string; status: LegStatus | nu
   const done = status === "success";
   const failed = status === "error";
   const cancelled = status === "cancelled";
+  const recovering = status === "partial";
   return (
     <span
       className={cn(
@@ -47,6 +49,7 @@ function LegIndicator({ label, status }: { label: string; status: LegStatus | nu
         <LoaderCircle className="h-3 w-3 animate-spin" />
       )}
       {label}
+      {recovering ? " · recuperando" : ""}
     </span>
   );
 }
@@ -84,6 +87,7 @@ function ApolicesPage() {
     isCheckingSync,
     emissoes,
     cobrancas,
+    activeRunId,
     cancel: cancelSync,
     isCancelling,
   } = useRunPolicySync();
@@ -165,6 +169,7 @@ function ApolicesPage() {
         <div className="flex flex-col items-start sm:items-end gap-1.5">
           <NextRunCountdown job="policy_sync" />
           <div className="flex items-center gap-2">
+            <SyncDetailsDialog runId={activeRunId ?? lastSync?.id} />
             <button
               onClick={() => runSync()}
               disabled={syncLocked}

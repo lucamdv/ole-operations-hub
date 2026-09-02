@@ -1,6 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
-import { normalizeBillingInstallmentNumber } from "@/lib/excelsior/motor-sync.core";
+import type { Json } from "@/integrations/supabase/types";
+import {
+  billingPersistenceIdentity,
+  normalizeBillingInstallmentNumber,
+  shouldApplyBillingStatus,
+} from "@/lib/excelsior/motor-sync.core";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -22,6 +27,8 @@ const ItemSchema = z
     numero_apolice: z.string().min(6).max(60).optional(),
     documento: z.string().min(6).max(60).optional(),
     numero_documento: z.string().min(6).max(60).optional(),
+    apolice: z.string().min(6).max(60).optional(),
+    poliza: z.string().min(6).max(60).optional(),
     numero_endosso: z.union([z.string(), z.number()]).nullish(),
     numero_parcela: z.union([z.string(), z.number()]).optional(),
     id_parcela: z.union([z.string(), z.number()]).nullish(),
@@ -30,6 +37,7 @@ const ItemSchema = z
     situacao_emissao: z.string().max(40).nullish(),
     data_vencimento: z.string().max(40).nullish(),
     data_quitacao: z.string().max(60).nullish(),
+    policy_installment_sequence: z.boolean().optional(),
   })
   .passthrough();
 
@@ -89,6 +97,7 @@ function toTimestamp(v: unknown): string | null {
 async function handleBillingSyncCallback(
   { request }: { request: Request },
   trustedInternalCall = false,
+  finalizeLeg = true,
 ) {
   // BILLING_CALLBACK_SECRET passa a ser o secret oficial. Durante a troca
   // coordenada, o valor antigo da auditoria continua aceito sem interromper
@@ -140,7 +149,8 @@ async function handleBillingSyncCallback(
   const byKey = new Map<string, Row>();
   const invalidItems: Array<{ index: number; reason: string }> = [];
   for (const [index, item] of parsed.data.entries()) {
-    const docRaw = item.numero_apolice ?? item.documento ?? item.numero_documento;
+    const docRaw =
+      item.numero_apolice ?? item.apolice ?? item.poliza ?? item.documento ?? item.numero_documento;
     if (!docRaw) {
       invalidItems.push({ index, reason: "documento ausente" });
       continue;
@@ -150,12 +160,6 @@ async function handleBillingSyncCallback(
       invalidItems.push({ index, reason: "documento inválido" });
       continue;
     }
-    const seq =
-      item.numero_endosso != null
-        ? String(item.numero_endosso).replace(/\D/g, "").slice(-6).padStart(6, "0")
-        : digits.slice(-6);
-    // A apólice é sempre gravada com sequencial 000000.
-    const apolice = digits.slice(0, -6) + "000000";
     const rawItem = item as Record<string, unknown>;
     const parcelaRaw = valueFrom(rawItem, [
       "numero_parcela",
@@ -163,9 +167,20 @@ async function handleBillingSyncCallback(
       "sequencial_parcela",
       "numeroParcela",
       "parcela_numero",
+      "parcela_ole",
     ]);
     const idParcela = identityText(
-      valueFrom(rawItem, ["id_parcela", "parcela_id", "idParcela", "codigo_parcela"]),
+      valueFrom(rawItem, [
+        "id_parcela",
+        "parcela_id",
+        "idParcela",
+        "codigo_parcela",
+        "identificador_pagamento",
+        "identificador_pago",
+        "identificador_de_pago",
+        "id_pagamento",
+        "payment_id",
+      ]),
     );
     const numeroProposta = identityText(item.numero_proposta);
     const dataVencimento = toDateOnly(item.data_vencimento);
@@ -182,10 +197,20 @@ async function handleBillingSyncCallback(
       invalidItems.push({ index, reason: "identidade da parcela ausente" });
       continue;
     }
-    const row: Row = {
-      numero_apolice: apolice,
-      numero_endosso: seq,
+    const identity = billingPersistenceIdentity({
+      numero_documento: String(docRaw),
+      numero_endosso: item.numero_endosso == null ? null : String(item.numero_endosso),
       numero_parcela: numeroParcela,
+      policy_installment_sequence: item.policy_installment_sequence === true,
+    });
+    if (!identity) {
+      invalidItems.push({ index, reason: "identidade do documento inválida" });
+      continue;
+    }
+    const row: Row = {
+      numero_apolice: identity.numero_apolice,
+      numero_endosso: identity.numero_endosso,
+      numero_parcela: identity.numero_parcela,
       id_parcela_seguradora: idParcela,
       numero_proposta: numeroProposta,
       status_pagamento: (item.status_pagamento ?? "").trim() || "Aberta",
@@ -194,18 +219,23 @@ async function handleBillingSyncCallback(
       data_quitacao: toTimestamp(item.data_quitacao),
       updated_at: new Date().toISOString(),
     };
-    byKey.set(`${apolice}#${seq}#${numeroParcela}`, row);
+    byKey.set(
+      `${identity.numero_apolice}#${identity.numero_endosso}#${identity.numero_parcela}`,
+      row,
+    );
   }
 
   const rows = [...byKey.values()];
   const { markSyncLeg } = await import("@/lib/sync-legs.server");
 
   if (invalidItems.length > 0) {
-    await markSyncLeg(runId, "cobrancas", {
-      status: "error",
-      total: 0,
-      errorMessage: `Cobranças: ${invalidItems.length} parcela(s) sem identidade válida`,
-    });
+    if (finalizeLeg) {
+      await markSyncLeg(runId, "cobrancas", {
+        status: "error",
+        total: 0,
+        errorMessage: `Cobranças: ${invalidItems.length} parcela(s) sem identidade válida`,
+      });
+    }
     return json(
       {
         error: "Existem parcelas sem documento ou identidade válida",
@@ -217,36 +247,130 @@ async function handleBillingSyncCallback(
   }
 
   if (rows.length === 0) {
-    await markSyncLeg(runId, "cobrancas", { status: "success", total: 0 });
+    if (finalizeLeg) await markSyncLeg(runId, "cobrancas", { status: "success", total: 0 });
     return json({ ok: true, upserted: 0 });
   }
 
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const policyNumbers = [...new Set(rows.map((row) => row.numero_apolice))];
+  const { data: existingRows, error: existingError } = await supabaseAdmin
+    .from("policy_billing")
+    .select(
+      "id, numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_vencimento, data_quitacao, created_at, updated_at",
+    )
+    .in("numero_apolice", policyNumbers);
+  if (existingError) throw existingError;
+
+  const existingByKey = new Map(
+    (existingRows ?? []).map((row) => [
+      `${row.numero_apolice}#${row.numero_endosso}#${row.numero_parcela}`,
+      row,
+    ]),
+  );
+  const meaningfulFields = [
+    "id_parcela_seguradora",
+    "numero_proposta",
+    "status_pagamento",
+    "situacao_emissao",
+    "data_vencimento",
+    "data_quitacao",
+  ] as const;
+  const changedRows: Row[] = [];
+  const legacyIds = new Set<string>();
+  const changes: Array<{
+    leg: "cobrancas";
+    entity_type: "parcela";
+    action: "adicionado" | "atualizado";
+    numero_apolice: string;
+    numero_endosso: string;
+    numero_parcela: string;
+    numero_documento: string;
+    before_data: Json | null;
+    after_data: Json;
+  }> = [];
+  for (const row of rows) {
+    const key = `${row.numero_apolice}#${row.numero_endosso}#${row.numero_parcela}`;
+    const exact = existingByKey.get(key);
+    const legacy = (existingRows ?? []).find(
+      (candidate) =>
+        candidate.numero_apolice === row.numero_apolice &&
+        candidate.numero_endosso === row.numero_endosso &&
+        candidate.numero_parcela.toUpperCase() === "LEGACY",
+    );
+    const previous = exact ?? legacy;
+    if (previous && !shouldApplyBillingStatus(previous.status_pagamento, row.status_pagamento)) {
+      continue;
+    }
+    const changed =
+      !previous ||
+      meaningfulFields.some((field) => (previous[field] ?? null) !== (row[field] ?? null));
+    if (!changed) continue;
+    changedRows.push(row);
+    if (!exact && legacy) legacyIds.add(legacy.id);
+    changes.push({
+      leg: "cobrancas",
+      entity_type: "parcela",
+      action: previous ? "atualizado" : "adicionado",
+      numero_apolice: row.numero_apolice,
+      numero_endosso: row.numero_endosso,
+      numero_parcela: row.numero_parcela,
+      numero_documento: `${row.numero_apolice.slice(0, -6)}${row.numero_endosso}`,
+      before_data: previous ? (previous as unknown as Json) : null,
+      after_data: row as unknown as Json,
+    });
+  }
+
   let upserted = 0;
-  for (let i = 0; i < rows.length; i += 500) {
-    const chunk = rows.slice(i, i + 500);
+  for (let i = 0; i < changedRows.length; i += 500) {
+    const chunk = changedRows.slice(i, i + 500);
     const { error } = await supabaseAdmin.from("policy_billing").upsert(chunk as never, {
       onConflict: "numero_apolice,numero_endosso,numero_parcela",
     });
     if (error) {
       console.error("[billing-sync-callback] upsert falhou", error.message);
-      await markSyncLeg(runId, "cobrancas", {
-        status: "error",
-        total: upserted,
-        errorMessage: `Cobranças: ${error.message}`,
-      });
+      if (finalizeLeg) {
+        await markSyncLeg(runId, "cobrancas", {
+          status: "error",
+          total: upserted,
+          errorMessage: `Cobranças: ${error.message}`,
+        });
+      }
       return json({ error: error.message, upserted }, 500);
     }
     upserted += chunk.length;
   }
 
-  await markSyncLeg(runId, "cobrancas", { status: "success", total: upserted });
+  if (legacyIds.size > 0) {
+    const { error } = await supabaseAdmin
+      .from("policy_billing")
+      .delete()
+      .in("id", [...legacyIds]);
+    if (error) throw error;
+  }
 
-  return json({ ok: true, received: parsed.data.length, upserted });
+  const { recordSyncChanges, refreshSyncRunCounters } =
+    await import("@/lib/policy-sync-audit.server");
+  await recordSyncChanges(runId, changes);
+  await refreshSyncRunCounters(runId);
+
+  if (finalizeLeg) {
+    await markSyncLeg(runId, "cobrancas", { status: "success", total: upserted });
+  }
+
+  return json({
+    ok: true,
+    received: parsed.data.length,
+    upserted,
+    unchanged: rows.length - upserted,
+  });
 }
 
 /** Persiste parcelas sem uma chamada HTTP intermediária dentro da aplicação. */
-export async function persistBillingSyncPayload(runId: string, payload: unknown) {
+export async function persistBillingSyncPayload(
+  runId: string,
+  payload: unknown,
+  options: { finalizeLeg?: boolean } = {},
+) {
   const response = await handleBillingSyncCallback(
     {
       request: new Request(
@@ -259,6 +383,7 @@ export async function persistBillingSyncPayload(runId: string, payload: unknown)
       ),
     },
     true,
+    options.finalizeLeg ?? true,
   );
   const body = (await response.json()) as Record<string, unknown>;
   if (!response.ok) {
