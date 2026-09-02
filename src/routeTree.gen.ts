@@ -23,6 +23,7 @@ import { Route as AuthenticatedAdminUsuariosRouteImport } from './routes/_authen
 import { Route as AuthenticatedApolicesIndexRouteImport } from './routes/_authenticated/apolices.index'
 import { Route as AuthenticatedFerramentasIndexRouteImport } from './routes/_authenticated/ferramentas.index'
 import { Route as AuthenticatedFerramentasExtratorEndossosRouteImport } from './routes/_authenticated/ferramentas.extrator-endossos'
+import { Route as AuthenticatedFerramentasMapaRepassesRouteImport } from './routes/_authenticated/ferramentas.mapa-repasses'
 import { Route as ApiPublicAuditCallbackRouteImport } from './routes/api/public/audit-callback'
 import { Route as ApiPublicBillingSyncCallbackRouteImport } from './routes/api/public/billing-sync-callback'
 import { Route as ApiPublicEndorsementExtractionCallbackRouteImport } from './routes/api/public/endorsement-extraction-callback'
@@ -107,6 +108,12 @@ const AuthenticatedFerramentasExtratorEndossosRoute =
     path: '/extrator-endossos',
     getParentRoute: () => AuthenticatedFerramentasRoute,
   } as any)
+const AuthenticatedFerramentasMapaRepassesRoute =
+  AuthenticatedFerramentasMapaRepassesRouteImport.update({
+    id: '/mapa-repasses',
+    path: '/mapa-repasses',
+    getParentRoute: () => AuthenticatedFerramentasRoute,
+  } as any)
 const ApiPublicAuditCallbackRoute = ApiPublicAuditCallbackRouteImport.update({
   id: '/api/public/audit-callback',
   path: '/api/public/audit-callback',
@@ -166,6 +173,7 @@ export interface FileRoutesByFullPath {
   '/invite/$token': typeof InviteTokenRoute
   '/admin/usuarios': typeof AuthenticatedAdminUsuariosRoute
   '/ferramentas/extrator-endossos': typeof AuthenticatedFerramentasExtratorEndossosRoute
+  '/ferramentas/mapa-repasses': typeof AuthenticatedFerramentasMapaRepassesRoute
   '/api/public/audit-callback': typeof ApiPublicAuditCallbackRoute
   '/api/public/billing-sync-callback': typeof ApiPublicBillingSyncCallbackRoute
   '/api/public/endorsement-extraction-callback': typeof ApiPublicEndorsementExtractionCallbackRoute
@@ -188,6 +196,7 @@ export interface FileRoutesByTo {
   '/': typeof AuthenticatedIndexRoute
   '/admin/usuarios': typeof AuthenticatedAdminUsuariosRoute
   '/ferramentas/extrator-endossos': typeof AuthenticatedFerramentasExtratorEndossosRoute
+  '/ferramentas/mapa-repasses': typeof AuthenticatedFerramentasMapaRepassesRoute
   '/api/public/audit-callback': typeof ApiPublicAuditCallbackRoute
   '/api/public/billing-sync-callback': typeof ApiPublicBillingSyncCallbackRoute
   '/api/public/endorsement-extraction-callback': typeof ApiPublicEndorsementExtractionCallbackRoute
@@ -213,6 +222,7 @@ export interface FileRoutesById {
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/admin/usuarios': typeof AuthenticatedAdminUsuariosRoute
   '/_authenticated/ferramentas/extrator-endossos': typeof AuthenticatedFerramentasExtratorEndossosRoute
+  '/_authenticated/ferramentas/mapa-repasses': typeof AuthenticatedFerramentasMapaRepassesRoute
   '/api/public/audit-callback': typeof ApiPublicAuditCallbackRoute
   '/api/public/billing-sync-callback': typeof ApiPublicBillingSyncCallbackRoute
   '/api/public/endorsement-extraction-callback': typeof ApiPublicEndorsementExtractionCallbackRoute
@@ -238,6 +248,7 @@ export interface FileRouteTypes {
     | '/invite/$token'
     | '/admin/usuarios'
     | '/ferramentas/extrator-endossos'
+    | '/ferramentas/mapa-repasses'
     | '/api/public/audit-callback'
     | '/api/public/billing-sync-callback'
     | '/api/public/endorsement-extraction-callback'
@@ -260,6 +271,7 @@ export interface FileRouteTypes {
     | '/'
     | '/admin/usuarios'
     | '/ferramentas/extrator-endossos'
+    | '/ferramentas/mapa-repasses'
     | '/api/public/audit-callback'
     | '/api/public/billing-sync-callback'
     | '/api/public/endorsement-extraction-callback'
@@ -284,6 +296,7 @@ export interface FileRouteTypes {
     | '/_authenticated/'
     | '/_authenticated/admin/usuarios'
     | '/_authenticated/ferramentas/extrator-endossos'
+    | '/_authenticated/ferramentas/mapa-repasses'
     | '/api/public/audit-callback'
     | '/api/public/billing-sync-callback'
     | '/api/public/endorsement-extraction-callback'
@@ -408,6 +421,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedFerramentasExtratorEndossosRouteImport
       parentRoute: typeof AuthenticatedFerramentasRoute
     }
+    '/_authenticated/ferramentas/mapa-repasses': {
+      id: '/_authenticated/ferramentas/mapa-repasses'
+      path: '/mapa-repasses'
+      fullPath: '/ferramentas/mapa-repasses'
+      preLoaderRoute: typeof AuthenticatedFerramentasMapaRepassesRouteImport
+      parentRoute: typeof AuthenticatedFerramentasRoute
+    }
     '/api/public/audit-callback': {
       id: '/api/public/audit-callback'
       path: '/api/public/audit-callback'
@@ -469,6 +489,7 @@ declare module '@tanstack/react-router' {
 
 interface AuthenticatedFerramentasRouteChildren {
   AuthenticatedFerramentasExtratorEndossosRoute: typeof AuthenticatedFerramentasExtratorEndossosRoute
+  AuthenticatedFerramentasMapaRepassesRoute: typeof AuthenticatedFerramentasMapaRepassesRoute
   AuthenticatedFerramentasIndexRoute: typeof AuthenticatedFerramentasIndexRoute
 }
 
@@ -476,6 +497,8 @@ const AuthenticatedFerramentasRouteChildren: AuthenticatedFerramentasRouteChildr
   {
     AuthenticatedFerramentasExtratorEndossosRoute:
       AuthenticatedFerramentasExtratorEndossosRoute,
+    AuthenticatedFerramentasMapaRepassesRoute:
+      AuthenticatedFerramentasMapaRepassesRoute,
     AuthenticatedFerramentasIndexRoute: AuthenticatedFerramentasIndexRoute,
   }
 

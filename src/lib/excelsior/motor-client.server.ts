@@ -305,6 +305,7 @@ export class ExcelsiorMotorClient {
     url.searchParams.set("inicio", start);
     url.searchParams.set("fim", end);
     url.searchParams.set("quitacao", "Total");
+    url.searchParams.set("situacao", "Ativo");
     url.searchParams.set("sistemaorigem", this.config.systemId);
     return this.authorizedRequest("Listagem de parcelas quitadas", url, {}, {
       attempts: 2,
