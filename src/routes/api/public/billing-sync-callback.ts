@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Json } from "@/integrations/supabase/types";
 import {
   billingPersistenceIdentity,
+  normalizeBillingAmount,
   normalizeBillingInstallmentNumber,
   shouldApplyBillingStatus,
 } from "@/lib/excelsior/motor-sync.core";
@@ -37,6 +38,7 @@ const ItemSchema = z
     situacao_emissao: z.string().max(40).nullish(),
     data_vencimento: z.string().max(40).nullish(),
     data_quitacao: z.string().max(60).nullish(),
+    valor_total: z.union([z.string(), z.number()]).nullish(),
     policy_installment_sequence: z.boolean().optional(),
   })
   .passthrough();
@@ -143,6 +145,7 @@ async function handleBillingSyncCallback(
     situacao_emissao: string;
     data_vencimento: string | null;
     data_quitacao: string | null;
+    valor_total: number | null;
     updated_at: string;
   };
 
@@ -217,6 +220,7 @@ async function handleBillingSyncCallback(
       situacao_emissao: (item.situacao_emissao ?? "").trim() || "Ativa",
       data_vencimento: dataVencimento,
       data_quitacao: toTimestamp(item.data_quitacao),
+      valor_total: normalizeBillingAmount(item.valor_total),
       updated_at: new Date().toISOString(),
     };
     byKey.set(
@@ -256,7 +260,7 @@ async function handleBillingSyncCallback(
   const { data: existingRows, error: existingError } = await supabaseAdmin
     .from("policy_billing")
     .select(
-      "id, numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_vencimento, data_quitacao, created_at, updated_at",
+      "id, numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_vencimento, data_quitacao, valor_total, created_at, updated_at",
     )
     .in("numero_apolice", policyNumbers);
   if (existingError) throw existingError;
@@ -274,6 +278,7 @@ async function handleBillingSyncCallback(
     "situacao_emissao",
     "data_vencimento",
     "data_quitacao",
+    "valor_total",
   ] as const;
   const changedRows: Row[] = [];
   const legacyIds = new Set<string>();

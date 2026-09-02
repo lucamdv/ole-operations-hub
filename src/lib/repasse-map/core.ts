@@ -78,6 +78,14 @@ export interface RepasseSourceRow {
   paymentDate: string;
 }
 
+const FORTALEZA_TIME_ZONE = "America/Fortaleza";
+const FORTALEZA_DATE_FORMATTER = new Intl.DateTimeFormat("en", {
+  timeZone: FORTALEZA_TIME_ZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 function cell(value: RepasseCellValue, formula?: string): RepasseCell {
   return formula ? { value, formula } : { value };
 }
@@ -87,11 +95,24 @@ function blankMatrix(rows: number, columns: number) {
 }
 
 export function dateOnly(value: unknown): string | null {
+  const fortalezaDate = (date: Date) => {
+    const parts = FORTALEZA_DATE_FORMATTER.formatToParts(date);
+    const part = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((item) => item.type === type)?.value;
+    const year = part("year");
+    const month = part("month");
+    const day = part("day");
+    return year && month && day ? `${year}-${month}-${day}` : null;
+  };
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value.toISOString().slice(0, 10);
+    return fortalezaDate(value);
   }
   const text = String(value ?? "").trim();
   if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:?\d{2})$/i.test(text)) {
+    const parsed = new Date(text);
+    if (!Number.isNaN(parsed.getTime())) return fortalezaDate(parsed);
+  }
   const iso = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
   if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
   const br = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(text);
@@ -194,18 +215,14 @@ export function repasseBillingDocumentNumber(record: JsonRecord): string | null 
     "sequencial_endosso",
   ]);
   const endorsementDigits = String(endorsementRaw ?? "").replace(/\D/g, "");
-  if (!endorsementDigits) return raw;
-  const endorsement = endorsementDigits.slice(-6).padStart(6, "0");
+  const commercialInstallment = String(record.parcela_ole ?? "").replace(/\D/g, "");
+  const endorsement = endorsementDigits
+    ? endorsementDigits.slice(-6).padStart(6, "0")
+    : digits.endsWith("000000") && commercialInstallment && Number(commercialInstallment) > 0
+      ? String(Number(commercialInstallment) - 1).padStart(6, "0")
+      : null;
+  if (!endorsement) return raw;
   return `${digits.slice(0, -6)}${endorsement}`;
-}
-
-function isPaid(value: unknown) {
-  const status = normalizedText(value);
-  return status.startsWith("total") || status.startsWith("quit") || status.startsWith("pag");
-}
-
-function isActive(value: unknown) {
-  return normalizedText(value).startsWith("ativ");
 }
 
 function sourcePaymentDate(record: JsonRecord) {
@@ -223,15 +240,9 @@ export function filterEligibleBillingItems(response: unknown, start: string, end
   const received = flattenApiItems(response);
   const byInstallment = new Map<string, JsonRecord>();
   let ignoredOutsidePeriod = 0;
-  let ignoredInactiveOrUnsettled = 0;
+  const ignoredInactiveOrUnsettled = 0;
 
   for (const item of received) {
-    const paymentStatus = deepValue(item, ["situacao_quitacao", "status_pagamento"]);
-    const issuanceStatus = deepValue(item, ["situacao_emissao", "situacao"]);
-    if (!isPaid(paymentStatus ?? "Total") || !isActive(issuanceStatus ?? "Ativa")) {
-      ignoredInactiveOrUnsettled += 1;
-      continue;
-    }
     const paymentDate = sourcePaymentDate(item);
     if (!paymentDate || paymentDate < start || paymentDate > end) {
       ignoredOutsidePeriod += 1;
@@ -248,6 +259,81 @@ export function filterEligibleBillingItems(response: unknown, start: string, end
     eligible: [...byInstallment.values()],
     ignoredOutsidePeriod,
     ignoredInactiveOrUnsettled,
+  };
+}
+
+function repasseIdentityAliases(record: JsonRecord) {
+  const document = repasseBillingDocumentNumber(record);
+  if (!document) return [];
+  const aliases = new Set<string>();
+  const externalId = deepValue(record, [
+    "id_parcela",
+    "id_parcela_seguradora",
+    "identificador_pagamento",
+    "identificador_pago",
+    "identificador_de_pago",
+    "payment_id",
+  ]);
+  if (externalId !== null) aliases.add(`${document}#id:${String(externalId).trim()}`);
+  const installment = deepValue(record, [
+    "numero_parcela",
+    "sequencial_parcela",
+    "numeroParcela",
+    "parcela",
+    "parcela_numero",
+  ]);
+  if (installment !== null) aliases.add(`${document}#parcela:${String(installment).trim()}`);
+  const proposal = deepValue(record, ["numero_proposta"]);
+  const dueDate = dateOnly(deepValue(record, ["data_vencimento"]));
+  if (proposal !== null && dueDate) {
+    aliases.add(`${document}#proposta:${String(proposal).trim()}@${dueDate}`);
+  }
+  if (aliases.size === 0) {
+    aliases.add(`${document}#quitacao:${sourcePaymentDate(record) ?? "sem-data"}`);
+  }
+  return [...aliases];
+}
+
+function mergeRecordMissingValues(fallback: JsonRecord, preferred: JsonRecord): JsonRecord {
+  const result = { ...fallback };
+  for (const [key, value] of Object.entries(preferred)) {
+    if (value !== undefined && value !== null && String(value).trim() !== "") result[key] = value;
+  }
+  return result;
+}
+
+/** Une a API ao espelho local sem duplicar a mesma parcela; a resposta da API prevalece. */
+export function mergeRepasseBillingItems(apiItems: JsonRecord[], databaseItems: JsonRecord[]) {
+  const merged: JsonRecord[] = [];
+  const indexByAlias = new Map<string, number>();
+  const add = (item: JsonRecord) => {
+    const index = merged.push(item) - 1;
+    for (const alias of repasseIdentityAliases(item)) indexByAlias.set(alias, index);
+    return index;
+  };
+
+  for (const item of apiItems) add(item);
+
+  const databaseFallbackItems: JsonRecord[] = [];
+  for (const item of databaseItems) {
+    const aliases = repasseIdentityAliases(item);
+    const existingIndex = aliases
+      .map((alias) => indexByAlias.get(alias))
+      .find((value) => value != null);
+    if (existingIndex == null) {
+      add(item);
+      databaseFallbackItems.push(item);
+      continue;
+    }
+    const combined = mergeRecordMissingValues(item, merged[existingIndex]!);
+    merged[existingIndex] = combined;
+    for (const alias of repasseIdentityAliases(combined)) indexByAlias.set(alias, existingIndex);
+  }
+
+  return {
+    merged,
+    databaseFallbackItems,
+    databaseFallbackAdded: databaseFallbackItems.length,
   };
 }
 
@@ -277,23 +363,26 @@ export function repasseSourceRow(
   if (!documentNumber || !paymentDate) return null;
 
   const { policyNumber, endorsement } = documentParts(documentNumber);
+  const proposalKeys = ["numero_proposta", "numero_proposta_seguradora", "proposta"];
   const proposalNumber = String(
-    deepValue(billing, ["numero_proposta", "numero_proposta_seguradora", "proposta"]) ?? "",
+    deepValue(billing, proposalKeys) ?? deepValue(emissionResponse, proposalKeys) ?? "",
   ).trim();
+  const insuredKeys = [
+    "cpf_segurado",
+    "cpf_cnpj_segurado",
+    "documento_segurado",
+    "documento_seg",
+    "cpf",
+  ];
   const insuredDocument = String(
-    deepValue(billing, [
-      "cpf_segurado",
-      "cpf_cnpj_segurado",
-      "documento_segurado",
-      "documento_seg",
-      "cpf",
-    ]) ?? "",
+    deepValue(billing, insuredKeys) ?? deepValue(emissionResponse, insuredKeys) ?? "",
   ).replace(/\D/g, "");
 
   const composition = amountFromComposition(billing);
   const emittedValue =
     numericValue(
       deepValue(billing, [
+        "valor_total",
         "valor_emitido",
         "valor_emissao",
         "premio_emitido",
@@ -304,6 +393,7 @@ export function repasseSourceRow(
   const paidValue =
     numericValue(
       deepValue(billing, [
+        "valor_total",
         "valor_pago",
         "valor_quitado",
         "valor_pagamento",

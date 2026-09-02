@@ -28,6 +28,8 @@ export interface RepasseWorkbook {
 export interface RepasseGenerationStats {
   billingReceived: number;
   settledActiveInPeriod: number;
+  databaseCandidates: number;
+  databaseFallbackAdded: number;
   documentsConsulted: number;
   rowsGenerated: number;
   ignoredOutsidePeriod: number;

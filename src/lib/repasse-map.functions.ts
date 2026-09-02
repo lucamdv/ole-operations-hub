@@ -1,10 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import type { JsonRecord } from "@/lib/excelsior/motor-sync.core";
+import { normalizeBillingAmount, type JsonRecord } from "@/lib/excelsior/motor-sync.core";
 import {
   buildRepasseWorkbook,
   filterEligibleBillingItems,
+  mergeRepasseBillingItems,
   repasseBillingDocumentNumber,
   repasseSourceRow,
 } from "@/lib/repasse-map/core";
@@ -118,6 +119,15 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+function fortalezaPeriodBounds(start: string, end: string) {
+  const utcBoundary = (value: string, nextDay = false) => {
+    const [year, month, day] = value.split("-").map(Number);
+    // Fortaleza não observa horário de verão: meia-noite local é 03:00 UTC.
+    return new Date(Date.UTC(year!, month! - 1, day! + (nextDay ? 1 : 0), 3)).toISOString();
+  };
+  return { start: utcBoundary(start), endExclusive: utcBoundary(end, true) };
+}
+
 export const generateRepasseMap = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .validator((input: { start: string; end: string }) => periodSchema.parse(input))
@@ -126,9 +136,31 @@ export const generateRepasseMap = createServerFn({ method: "POST" })
     const client = new ExcelsiorMotorClient();
     const billingResponse = await client.listSettledBilling(data.start, data.end);
     const filtered = filterEligibleBillingItems(billingResponse, data.start, data.end);
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const bounds = fortalezaPeriodBounds(data.start, data.end);
+    const { data: databaseRows, error: databaseError } = await supabaseAdmin
+      .from("policy_billing")
+      .select(
+        "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_quitacao, data_vencimento, valor_total",
+      )
+      .eq("status_pagamento", "Total")
+      .gte("data_quitacao", bounds.start)
+      .lt("data_quitacao", bounds.endExclusive);
+    if (databaseError) throw databaseError;
+
+    const databaseFiltered = filterEligibleBillingItems(databaseRows ?? [], data.start, data.end);
+    const reconciled = mergeRepasseBillingItems(filtered.eligible, databaseFiltered.eligible);
+    const fallbackWithoutAmount = reconciled.databaseFallbackItems.filter(
+      (item) => normalizeBillingAmount(item.valor_total) === null,
+    );
+    if (fallbackWithoutAmount.length > 0) {
+      throw new Error(
+        `${fallbackWithoutAmount.length} parcela(s) recuperada(s) pelo banco ainda estão sem valor_total. Execute a sincronização de cobranças e tente novamente.`,
+      );
+    }
     const documents = [
       ...new Set(
-        filtered.eligible
+        reconciled.merged
           .map((item) => repasseBillingDocumentNumber(item))
           .filter((value): value is string => !!value),
       ),
@@ -145,7 +177,7 @@ export const generateRepasseMap = createServerFn({ method: "POST" })
       }
     });
     const emissions = new Map<string, unknown>(documentResponses);
-    const rows = filtered.eligible.flatMap((item: JsonRecord) => {
+    const rows = reconciled.merged.flatMap((item: JsonRecord) => {
       const document = repasseBillingDocumentNumber(item);
       const mapped = repasseSourceRow(item, document ? emissions.get(document) : null);
       return mapped ? [mapped] : [];
@@ -155,7 +187,9 @@ export const generateRepasseMap = createServerFn({ method: "POST" })
       workbook: buildRepasseWorkbook(rows, data),
       stats: {
         billingReceived: filtered.received.length,
-        settledActiveInPeriod: filtered.eligible.length,
+        settledActiveInPeriod: reconciled.merged.length,
+        databaseCandidates: databaseFiltered.eligible.length,
+        databaseFallbackAdded: reconciled.databaseFallbackAdded,
         documentsConsulted: documents.length,
         rowsGenerated: rows.length,
         ignoredOutsidePeriod: filtered.ignoredOutsidePeriod,

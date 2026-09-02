@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildRepasseWorkbook,
   filterEligibleBillingItems,
+  mergeRepasseBillingItems,
   repasseBillingDocumentNumber,
   repasseSourceRow,
   updateRepasseCell,
@@ -21,7 +22,7 @@ test("reconstrói o documento quando cobrança separa apólice e endosso", () =>
   );
 });
 
-test("mantém somente quitações totais e ativas rigorosamente dentro do período", () => {
+test("filtra exclusivamente por data_quitacao no fuso de Fortaleza", () => {
   const response = {
     parcelas: [
       {
@@ -50,15 +51,54 @@ test("mantém somente quitações totais e ativas rigorosamente dentro do perío
         numero_parcela: 1,
         situacao_quitacao: "Total",
         situacao_emissao: "Ativa",
-        data_quitacao: "2026-08-01T00:00:00Z",
+        data_quitacao: "2026-08-01T03:00:00Z",
       },
     ],
   };
 
   const result = filterEligibleBillingItems(response, "2026-07-01", "2026-07-31");
-  assert.equal(result.eligible.length, 1);
-  assert.equal(result.ignoredInactiveOrUnsettled, 2);
+  assert.equal(result.eligible.length, 3);
+  assert.equal(result.ignoredInactiveOrUnsettled, 0);
   assert.equal(result.ignoredOutsidePeriod, 1);
+});
+
+test("reconcilia o banco e inclui parcela paga no período com vencimento anterior", () => {
+  const apiItem = {
+    numero_documento: DOCUMENT,
+    numero_parcela: 1,
+    id_parcela: "API-1",
+    data_quitacao: "2026-08-10T12:00:00-03:00",
+    valor_total: 24,
+  };
+  const databaseDuplicate = {
+    numero_apolice: DOCUMENT,
+    numero_endosso: "000000",
+    numero_parcela: "1",
+    id_parcela_seguradora: "API-1",
+    data_quitacao: "2026-08-10T15:00:00Z",
+    valor_total: 24,
+  };
+  const databaseFallback = {
+    numero_apolice: DOCUMENT,
+    numero_endosso: "000001",
+    numero_parcela: "1",
+    id_parcela_seguradora: "DB-2",
+    data_vencimento: "2026-07-31",
+    data_quitacao: "2026-08-03T14:00:00Z",
+    valor_total: 48.5,
+  };
+
+  const result = mergeRepasseBillingItems([apiItem], [databaseDuplicate, databaseFallback]);
+  assert.equal(result.merged.length, 2);
+  assert.equal(result.databaseFallbackAdded, 1);
+  assert.equal(result.databaseFallbackItems[0]?.valor_total, 48.5);
+});
+
+test("parcela comercial aponta para o documento de emissão correspondente", () => {
+  assert.equal(
+    repasseBillingDocumentNumber({ numero_documento: DOCUMENT, parcela_ole: 3 }),
+    `${DOCUMENT.slice(0, -6)}000002`,
+  );
 });
 
 test("monta a linha analítica com cobrança e usa a emissão somente para a data", () => {
@@ -71,11 +111,10 @@ test("monta a linha analítica com cobrança e usa a emissão somente para a dat
       situacao_quitacao: "Total",
       situacao_emissao: "Ativa",
       data_quitacao: "2026-07-19T12:00:00Z",
-      valor_emitido: 24,
-      valor_pago: 24,
+      valor_total: "87,35",
       valor_corretagem: 0,
     },
-    { apolice: { data_emissao: "2026-07-18T00:00:00Z", cpf: "00000000000" } },
+    { apolice: { data_emissao: "2026-07-18T03:00:00Z", cpf: "00000000000" } },
   );
 
   assert.ok(row);
@@ -84,7 +123,8 @@ test("monta a linha analítica com cobrança e usa a emissão somente para a dat
   assert.equal(row.emissionDate, "2026-07-18");
   assert.equal(row.movementType, "Emissão de Apólice");
   assert.equal(row.movementReason, "EMISSÃO APÓLICE");
-  assert.equal(row.paidValue, 24);
+  assert.equal(row.emittedValue, 87.35);
+  assert.equal(row.paidValue, 87.35);
 });
 
 test("gera as três abas e recalcula o resumo após edição no analítico", () => {

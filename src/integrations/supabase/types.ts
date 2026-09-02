@@ -611,6 +611,7 @@ export type Database = {
           situacao_emissao: string
           status_pagamento: string
           updated_at: string
+          valor_total: number | null
         }
         Insert: {
           created_at?: string
@@ -625,6 +626,7 @@ export type Database = {
           situacao_emissao: string
           status_pagamento: string
           updated_at?: string
+          valor_total?: number | null
         }
         Update: {
           created_at?: string
@@ -639,6 +641,7 @@ export type Database = {
           situacao_emissao?: string
           status_pagamento?: string
           updated_at?: string
+          valor_total?: number | null
         }
         Relationships: []
       }

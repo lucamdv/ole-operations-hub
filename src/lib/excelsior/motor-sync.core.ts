@@ -10,6 +10,7 @@ export interface NormalizedBillingItem {
   situacao_emissao: string;
   data_quitacao: string | null;
   data_vencimento: string | null;
+  valor_total: number | null;
   /** A listagem por apólice usa parcela N para representar o endosso N - 1. */
   policy_installment_sequence: boolean;
 }
@@ -59,6 +60,18 @@ function optionalText(value: unknown): string | null {
   return text || null;
 }
 
+/** Converte valores monetários tanto no formato da API quanto no formato pt-BR. */
+export function normalizeBillingAmount(value: unknown): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const text = normalizedText(value);
+  if (!text || text === "-") return null;
+  const normalized = /^-?\d{1,3}(\.\d{3})*,\d+$/.test(text)
+    ? text.replace(/\./g, "").replace(",", ".")
+    : text.replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 /** Canoniza sequenciais numéricos sem alterar identificadores alfanuméricos. */
 export function normalizeBillingInstallmentNumber(value: unknown): string | null {
   const text = normalizedText(value);
@@ -98,6 +111,7 @@ export function billingInstallmentIdentity(value: unknown): string | null {
     "identificador_de_pago",
     "id_pagamento",
     "payment_id",
+    "id_parcela_seguradora",
     "numero_parcela",
     "sequencial_parcela",
     "numeroParcela",
@@ -389,6 +403,9 @@ export function normalizeBillingResponse(
           item.data_quitacao ?? item.data_pagamento ?? item.fecha_pago ?? item.fecha_pagamento,
         ),
         data_vencimento: optionalText(item.data_vencimento ?? item.fecha_vencimiento),
+        valor_total: normalizeBillingAmount(
+          item.valor_total ?? item.valorTotal ?? item.valor_parcela ?? item.valor_pago,
+        ),
         policy_installment_sequence: policyInstallmentSequence,
       },
     ];

@@ -31,7 +31,7 @@ export const Route = createFileRoute("/_authenticated/ferramentas/mapa-repasses"
       { title: "Gerador de Mapas de Repasse · OLÉ COPILOT" },
       {
         name: "description",
-        content: "Gere mapas de repasse a partir das cobranças quitadas e emissões da Excelsior.",
+        content: "Gere mapas de repasse por data de quitação das parcelas da Excelsior.",
       },
     ],
   }),
@@ -82,7 +82,7 @@ function RepasseMapPage() {
       setBaseline(structuredClone(next.workbook));
       setActiveSheetId("summary");
       toast.success("Mapa gerado", {
-        description: `${next.stats.rowsGenerated} ocorrência(s) quitada(s) e ativa(s) no período.`,
+        description: `${next.stats.rowsGenerated} parcela(s) quitada(s) no período.`,
       });
     } catch (error) {
       toast.error("Não foi possível gerar o mapa", {
@@ -146,8 +146,8 @@ function RepasseMapPage() {
             Gerador de Mapas de Repasse
           </h1>
           <p className="mt-1 max-w-3xl text-[12.5px] leading-relaxed text-muted-foreground">
-            Consulta cobranças totalmente quitadas e ativas, cruza a data de emissão e monta o
-            arquivo no padrão contratual da Olé.
+            Consulta cobranças por data de quitação, reconcilia o resultado com o banco, cruza a
+            data de emissão e monta o arquivo no padrão contratual da Olé.
           </p>
         </div>
 
@@ -189,8 +189,8 @@ function RepasseMapPage() {
           <CalendarRange className="relative mx-auto h-9 w-9 text-primary" />
           <h2 className="relative mt-4 text-[16px] font-semibold">Defina a competência do mapa</h2>
           <p className="relative mx-auto mt-1 max-w-lg text-[12.5px] leading-relaxed text-muted-foreground">
-            O período considera a data de pagamento de forma inclusiva. Registros fora das datas,
-            não quitados integralmente ou inativos são descartados.
+            O período considera a data de quitação de forma inclusiva. O banco recupera parcelas
+            pagas no período mesmo quando o vencimento original ficou fora dele.
           </p>
         </div>
       ) : (
@@ -213,10 +213,10 @@ function RepasseMapPage() {
             <div className="flex items-start gap-2 text-[11.5px] text-muted-foreground">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-success" />
               <span>
-                Apenas quitações totais e emissões ativas entre{" "}
+                Quitações totais por data_quitacao entre{" "}
                 <strong>{result.workbook.period.start}</strong> e{" "}
-                <strong>{result.workbook.period.end}</strong>. Edite qualquer célula abaixo antes de
-                exportar.
+                <strong>{result.workbook.period.end}</strong>, reconciliadas com o Supabase. Edite
+                qualquer célula abaixo antes de exportar.
               </span>
             </div>
             <div className="flex flex-wrap gap-2">

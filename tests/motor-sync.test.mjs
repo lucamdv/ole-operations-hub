@@ -241,6 +241,19 @@ test("preserva parcelas distintas e a atualização total mais recente vence por
   assert.equal(result.find((item) => item.id_parcela === "p-2")?.status_pagamento, "Aberta");
 });
 
+test("normaliza valor_total da cobrança para persistência", () => {
+  const [normalized] = normalizeBillingResponse(
+    {
+      numero_documento: "123456000004",
+      numero_parcela: 1,
+      situacao_quitacao: "Total",
+      valor_total: "1.234,56",
+    },
+    { defaultPaymentStatus: "Total" },
+  );
+  assert.equal(normalized.valor_total, 1234.56);
+});
+
 test("parcela comercial da apólice-base é persistida no endosso correspondente", () => {
   const [normalized] = normalizeBillingResponse(
     {
