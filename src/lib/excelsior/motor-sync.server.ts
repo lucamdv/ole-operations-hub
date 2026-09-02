@@ -77,6 +77,7 @@ async function assertRunActive(runId: string) {
 
 interface BillingContext {
   window: { start: string; end: string };
+  valueBackfillDocuments: string[];
   openInstallments: Array<{
     numero_documento: string;
     numero_parcela: string;
@@ -112,11 +113,12 @@ async function loadBillingContext(syncStartedAt: Date): Promise<BillingContext> 
   const { data: billing, error: billingError } = await supabaseAdmin
     .from("policy_billing")
     .select(
-      "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, data_vencimento, status_pagamento, situacao_emissao",
+      "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, data_vencimento, status_pagamento, situacao_emissao, valor_total",
     );
   if (billingError) throw billingError;
 
   const openInstallments: BillingContext["openInstallments"] = [];
+  const valueBackfillDocuments = new Set<string>();
   for (const row of (billing ?? []) as Array<{
     numero_apolice: string;
     numero_endosso: string;
@@ -126,12 +128,17 @@ async function loadBillingContext(syncStartedAt: Date): Promise<BillingContext> 
     data_vencimento: string | null;
     status_pagamento: string | null;
     situacao_emissao: string | null;
+    valor_total: number | null;
   }>) {
     const payment = (row.status_pagamento ?? "").trim().toLowerCase();
-    if (!payment.startsWith("abert")) continue;
     const endorsement = String(row.numero_endosso).replace(/\D/g, "").slice(-6).padStart(6, "0");
+    const document = `${row.numero_apolice.slice(0, -6)}${endorsement}`;
+    if (payment.startsWith("total") && row.valor_total == null) {
+      valueBackfillDocuments.add(document);
+    }
+    if (!payment.startsWith("abert")) continue;
     openInstallments.push({
-      numero_documento: `${row.numero_apolice.slice(0, -6)}${endorsement}`,
+      numero_documento: document,
       numero_parcela: row.numero_parcela,
       id_parcela: row.id_parcela_seguradora,
       numero_proposta: row.numero_proposta,
@@ -152,6 +159,7 @@ async function loadBillingContext(syncStartedAt: Date): Promise<BillingContext> 
 
   return {
     window,
+    valueBackfillDocuments: [...valueBackfillDocuments],
     openInstallments,
   };
 }
@@ -289,20 +297,23 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
         settledListSucceeded ? settledResponse : { items: [] },
       )
     : { directOpenItems: [], detailDocuments: [] };
+  const detailDocuments = [
+    ...new Set([...plan.detailDocuments, ...context.valueBackfillDocuments]),
+  ];
 
   // O detalhe individual é deliberadamente assíncrono. Uma execução anterior
   // tentou esperar todos os documentos aqui e foi encerrada pela Vercel após
   // 300 s antes de conseguir gravar o fallback. Enfileirar primeiro torna o
   // trabalho recuperável mesmo se a função inicial desaparecer em seguida.
   failures.push(
-    ...plan.detailDocuments.map((documentNumber) => ({
+    ...detailDocuments.map((documentNumber) => ({
       documentNumber,
       message: "Consulta individual transferida para recuperação automática em background.",
     })),
   );
   await enqueueBillingFallbacks(runId, failures);
 
-  if (plan.detailDocuments.length > 0) {
+  if (detailDocuments.length > 0) {
     console.warn(
       "[motor-sync][billing] detalhes individuais enfileirados; dados locais preservados",
       {
@@ -317,8 +328,9 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
     abertasLocais: context.openInstallments.length,
     abertasEmLote: flattenApiItems(openResponse).length,
     listagemAbertasConcluida: openListSucceeded,
-    consultasIndividuais: plan.detailDocuments.length,
-    detalhesEnfileirados: plan.detailDocuments.length,
+    consultasIndividuais: detailDocuments.length,
+    valoresPendentes: context.valueBackfillDocuments.length,
+    detalhesEnfileirados: detailDocuments.length,
     listagemQuitadasConcluida: settledListSucceeded,
     atualizacoesPersistidas: persisted,
     duracaoMs: Date.now() - billingStartedAt,

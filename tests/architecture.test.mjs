@@ -242,7 +242,8 @@ test("falha de cobrança entra em fila durável sem regravar dados locais antigo
   assert.match(source, /enqueueBillingFallbacks/);
   assert.match(source, /status: failures\.length > 0 \? "partial" : "success"/);
   assert.doesNotMatch(source, /localFallback/);
-  assert.match(source, /detalhesEnfileirados: plan\.detailDocuments\.length/);
+  assert.match(source, /valueBackfillDocuments/);
+  assert.match(source, /detalhesEnfileirados: detailDocuments\.length/);
   assert.match(source, /Consulta individual transferida para recuperação automática/);
   assert.doesNotMatch(source, /await client\.getBillingDocument\(documentNumber\)/);
   assert.match(worker, /claim_billing_sync_fallbacks/);
@@ -286,9 +287,7 @@ test("fallback libera novas sincronizações enquanto continua em background", a
 });
 
 test("pipeline v2 faz reconciliação única desde abril e depois volta ao delta", async () => {
-  const migration = await read(
-    "supabase/migrations/20260902132917_billing_sync_retry_audit.sql",
-  );
+  const migration = await read("supabase/migrations/20260902132917_billing_sync_retry_audit.sql");
   const source = await read("src/lib/excelsior/motor-sync.server.ts");
   assert.match(migration, /CREATE TABLE public\.billing_sync_state/);
   assert.match(migration, /DATE '2026-04-01'/);
