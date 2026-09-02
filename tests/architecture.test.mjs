@@ -229,6 +229,10 @@ test("motor direto cobre emissões, contratos, cobrança aberta, individual e qu
   assert.match(source, /quitacao", "Aberta"/);
   assert.match(source, /quitacao", "Total"/);
   assert.match(source, /"Consulta de emissão", url, \{ method: "GET" \}/);
+  assert.match(
+    source,
+    /Consulta individual de cobrança[\s\S]*timeoutMs: this\.config\.billingRequestTimeoutMs/,
+  );
 });
 
 test("falha de cobrança entra em fila durável sem regravar dados locais antigos", async () => {
