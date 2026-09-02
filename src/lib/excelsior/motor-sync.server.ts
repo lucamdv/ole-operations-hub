@@ -2,7 +2,6 @@ import { ExcelsiorMotorClient } from "./motor-client.server";
 import {
   basePolicyNumber,
   billingSettlementWindow,
-  dedupeBillingItems,
   extractBasePolicies,
   flattenApiItems,
   normalizeBillingResponse,
@@ -248,8 +247,6 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
       { finalizeLeg: false },
     );
     persisted += Number(result.upserted ?? 0);
-    const { completeBillingReconciliation } = await import("@/lib/policy-sync-audit.server");
-    await completeBillingReconciliation(context.window.start);
   } catch (error) {
     failures.push({
       documentNumber: "__OPEN_INSTALLMENTS__",
@@ -275,6 +272,8 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
       { finalizeLeg: false },
     );
     persisted += Number(result.upserted ?? 0);
+    const { completeBillingReconciliation } = await import("@/lib/policy-sync-audit.server");
+    await completeBillingReconciliation(context.window.start);
   } catch (error) {
     failures.push({
       documentNumber: `__SETTLED_WINDOW__#${context.window.start}#${context.window.end}`,
@@ -290,57 +289,22 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
         settledListSucceeded ? settledResponse : { items: [] },
       )
     : { directOpenItems: [], detailDocuments: [] };
-  const billingConcurrency = concurrencyFromEnv("EXCELSIOR_BILLING_CONCURRENCY", 4);
-  const individualResults = await mapWithConcurrency(
-    plan.detailDocuments,
-    billingConcurrency,
-    async (documentNumber) => {
-      await assertRunActive(runId);
-      try {
-        const response = await client.getBillingDocument(documentNumber);
-        const normalized = normalizeBillingResponse(response, {
-          fallbackDocument: documentNumber,
-          defaultPaymentStatus: "Aberta",
-        });
-        if (normalized.length === 0) {
-          throw new Error("A Excelsior respondeu sem uma parcela identificável.");
-        }
-        return {
-          updates: normalized,
-          failure: null,
-        };
-      } catch (error) {
-        return {
-          updates: [],
-          failure: {
-            documentNumber,
-            message: error instanceof Error ? error.message : String(error),
-          },
-        };
-      }
-    },
-  );
 
-  await assertRunActive(runId);
-  const individual = individualResults.flatMap((result) => result.updates);
-  const detailFailures = individualResults
-    .map((result) => result.failure)
-    .filter((failure): failure is NonNullable<typeof failure> => failure !== null);
-  const updates = dedupeBillingItems(individual);
-  if (updates.length > 0) {
-    const result = await persistBillingSyncPayload(
-      runId,
-      { atualizacoes: updates },
-      { finalizeLeg: false },
-    );
-    persisted += Number(result.upserted ?? 0);
-  }
-  failures.push(...detailFailures);
+  // O detalhe individual é deliberadamente assíncrono. Uma execução anterior
+  // tentou esperar todos os documentos aqui e foi encerrada pela Vercel após
+  // 300 s antes de conseguir gravar o fallback. Enfileirar primeiro torna o
+  // trabalho recuperável mesmo se a função inicial desaparecer em seguida.
+  failures.push(
+    ...plan.detailDocuments.map((documentNumber) => ({
+      documentNumber,
+      message: "Consulta individual transferida para recuperação automática em background.",
+    })),
+  );
   await enqueueBillingFallbacks(runId, failures);
 
-  if (detailFailures.length > 0) {
+  if (plan.detailDocuments.length > 0) {
     console.warn(
-      "[motor-sync][billing] detalhes individuais indisponíveis; dados locais preservados",
+      "[motor-sync][billing] detalhes individuais enfileirados; dados locais preservados",
       {
         quantidade: failures.length,
         documentos: failures.slice(0, 10).map((failure) => failure.documentNumber),
@@ -354,7 +318,7 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
     abertasEmLote: flattenApiItems(openResponse).length,
     listagemAbertasConcluida: openListSucceeded,
     consultasIndividuais: plan.detailDocuments.length,
-    falhasIndividuais: detailFailures.length,
+    detalhesEnfileirados: plan.detailDocuments.length,
     listagemQuitadasConcluida: settledListSucceeded,
     atualizacoesPersistidas: persisted,
     duracaoMs: Date.now() - billingStartedAt,

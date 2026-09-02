@@ -48,11 +48,13 @@ async function finishRecoveredRuns(runIds: Set<string>) {
 }
 
 /** Processa um lote curto; o cron seguinte continua de onde o lease parou. */
-export async function processBillingFallbacks(maxItems = 4) {
+export async function processBillingFallbacks(maxItems = 2) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { data: claimed, error } = await supabaseAdmin.rpc("claim_billing_sync_fallbacks", {
     max_items: maxItems,
-    lease_seconds: 150,
+    // Duas consultas podem consumir até 240 s. O lease cobre todo o limite da
+    // função para que outro cron não reclame o segundo item ainda em andamento.
+    lease_seconds: 300,
   });
   if (error) throw error;
   if (!claimed || claimed.length === 0) return { claimed: 0, resolved: 0, pending: 0 };

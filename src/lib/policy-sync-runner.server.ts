@@ -4,18 +4,63 @@ import { executeDirectMotorSync } from "@/lib/excelsior/motor-sync.server";
 import { keepRequestAlive } from "@/lib/request-lifecycle.server";
 import type { WebhookMode } from "@/lib/webhook-mode";
 
+const STALE_RUN_AFTER_MS = 6 * 60 * 1_000;
+
+async function recoverInterruptedRun(run: {
+  id: string;
+  created_at: string;
+  emissoes_status: string;
+  cobrancas_status: string;
+}) {
+  const createdAt = new Date(run.created_at).getTime();
+  if (Number.isFinite(createdAt) && Date.now() - createdAt <= STALE_RUN_AFTER_MS) return false;
+
+  const now = new Date().toISOString();
+  const patch: Record<string, unknown> = {
+    status: "error",
+    error_message:
+      "Execução anterior interrompida pelo limite de 300 s da função; uma nova sincronização foi iniciada.",
+    finished_at: now,
+  };
+  if (run.emissoes_status === "running") {
+    patch.emissoes_status = "error";
+    patch.emissoes_finished_at = now;
+  }
+  if (run.cobrancas_status === "running") {
+    patch.cobrancas_status = "error";
+    patch.cobrancas_finished_at = now;
+  }
+  const { error } = await supabaseAdmin
+    .from("policy_sync_runs")
+    .update(patch as never)
+    .eq("id", run.id)
+    .eq("status", "running");
+  if (error) throw new Error(`Falha ao recuperar execução interrompida: ${error.message}`);
+  return true;
+}
+
 // Implementação interna (sem auth). Usada tanto pela serverFn protegida quanto
 // pelo hook público /api/public/hooks/policy-sync (que já valida shared-secret).
 export async function runPolicySyncImpl(_webhookMode?: WebhookMode | null) {
   const { data: activeRun, error: activeRunError } = await supabaseAdmin
     .from("policy_sync_runs")
-    .select("id")
+    .select("id, created_at, emissoes_status, cobrancas_status")
     .eq("status", "running")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (activeRunError) throw new Error(activeRunError.message);
-  if (activeRun) {
+  const recovered = activeRun
+    ? await recoverInterruptedRun(
+        activeRun as {
+          id: string;
+          created_at: string;
+          emissoes_status: string;
+          cobrancas_status: string;
+        },
+      )
+    : false;
+  if (activeRun && !recovered) {
     return {
       runId: (activeRun as { id: string }).id,
       status: "running" as const,

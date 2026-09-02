@@ -238,8 +238,11 @@ test("falha de cobrança entra em fila durável sem regravar dados locais antigo
   assert.match(source, /enqueueBillingFallbacks/);
   assert.match(source, /status: failures\.length > 0 \? "partial" : "success"/);
   assert.doesNotMatch(source, /localFallback/);
-  assert.match(source, /falhasIndividuais: detailFailures\.length/);
+  assert.match(source, /detalhesEnfileirados: plan\.detailDocuments\.length/);
+  assert.match(source, /Consulta individual transferida para recuperação automática/);
+  assert.doesNotMatch(source, /await client\.getBillingDocument\(documentNumber\)/);
   assert.match(worker, /claim_billing_sync_fallbacks/);
+  assert.match(worker, /lease_seconds: 300/);
   assert.match(worker, /requeueBillingFallback/);
   assert.match(worker, /resolveBillingFallback/);
   assert.match(migration, /FOR UPDATE SKIP LOCKED/);
@@ -306,6 +309,8 @@ test("sincronização ativa é recuperada após F5 e possui trava contra concorr
   assert.match(hook, /setIsPolling\(true\)/);
   assert.match(server, /\.eq\("status", "running"\)/);
   assert.match(server, /reused: true/);
+  assert.match(server, /STALE_RUN_AFTER_MS/);
+  assert.match(server, /interrompida pelo limite de 300 s/);
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS policy_sync_runs_single_running/);
   assert.match(migration, /WHERE status = 'running'/);
 });

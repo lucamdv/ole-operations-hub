@@ -19,7 +19,7 @@ export const Route = createFileRoute("/api/public/hooks/billing-retry")({
         if (!expected || provided !== expected) return json({ error: "Unauthorized" }, 401);
 
         keepRequestAlive(
-          processBillingFallbacks().catch((error) => {
+          processBillingFallbacks(2).catch((error) => {
             console.error("[billing-retry] worker falhou", error);
           }),
         );
