@@ -9,6 +9,7 @@ import {
   Radio,
   TrendingDown,
   TrendingUp,
+  Zap,
 } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ReferenceLine, Tooltip, XAxis, YAxis } from "recharts";
 import { ResponsiveContainer } from "@/components/charts/in-view-container";
@@ -149,40 +150,60 @@ function OperacaoPage() {
   const noData = !isLoading && !run;
 
   return (
-    <div className="space-y-6">
-      <div>
-        <div className="flex items-center gap-2 mb-2">
-          <Radio
-            className={cn(
-              "h-4 w-4 animate-pulse-dot",
-              healthTone === "success" && "text-success",
-              healthTone === "warning" && "text-warning",
-              healthTone === "destructive" && "text-destructive",
-              healthTone === "default" && "text-primary",
-            )}
-          />
-          <span
-            className={cn(
-              "text-[11px] font-mono uppercase tracking-[0.2em]",
-              healthTone === "success" && "text-success",
-              healthTone === "warning" && "text-warning",
-              healthTone === "destructive" && "text-destructive",
-              healthTone === "default" && "text-primary",
-            )}
+    <div className="mx-auto w-full max-w-[1180px] space-y-5">
+      <section className="glass-panel relative overflow-hidden rounded-3xl p-6 sm:p-8">
+        <div
+          className={cn(
+            "apple-orb -right-20 -top-24",
+            healthTone === "success" && "bg-success/12",
+            healthTone === "warning" && "bg-warning/15",
+            healthTone === "destructive" && "bg-destructive/12",
+            healthTone === "default" && "apple-orb-primary",
+          )}
+        />
+        <div className="relative flex flex-wrap items-end justify-between gap-6">
+          <div>
+            <div className="mb-3 flex items-center gap-2">
+              <Radio
+                className={cn(
+                  "h-4 w-4 animate-pulse-dot",
+                  healthTone === "success" && "text-success",
+                  healthTone === "warning" && "text-warning",
+                  healthTone === "destructive" && "text-destructive",
+                  healthTone === "default" && "text-primary",
+                )}
+              />
+              <span
+                className={cn(
+                  "text-[11px] font-mono uppercase tracking-[0.2em]",
+                  healthTone === "success" && "text-success",
+                  healthTone === "warning" && "text-warning",
+                  healthTone === "destructive" && "text-destructive",
+                  healthTone === "default" && "text-primary",
+                )}
+              >
+                NOC · {statusGeral || "AGUARDANDO"}
+              </span>
+            </div>
+            <h1 className="page-title text-[2.35rem] sm:text-[2.75rem]">Operação</h1>
+            <p className="page-subtitle mt-2 max-w-2xl">
+              {run?.mensagem_geral ??
+                "Painel operacional · dados da última execução do motor de auditoria."}
+            </p>
+          </div>
+          <Link
+            to="/alertas"
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-primary px-5 text-[13px] font-semibold text-primary-foreground shadow-[0_12px_28px_-16px_var(--primary)] transition-all duration-300 ease-[var(--ease-apple)] hover:brightness-110 active:scale-[0.985]"
           >
-            NOC · {statusGeral || "AGUARDANDO"}
-          </span>
+            <Zap className="h-4 w-4" />
+            {reprov > 0 ? "Tratar divergências" : "Acompanhar alertas"}
+          </Link>
         </div>
-        <h1 className="page-title">Operação</h1>
-        <p className="page-subtitle mt-1.5">
-          {run?.mensagem_geral ??
-            "Painel operacional · dados da última execução do motor de auditoria."}
-        </p>
-      </div>
+      </section>
 
       {/* Empty state */}
       {noData && (
-        <div className="rounded-2xl border border-dashed border-border bg-surface p-10 text-center">
+        <div className="glass-panel rounded-3xl border-dashed p-10 text-center">
           <Activity className="h-8 w-8 text-muted-foreground mx-auto mb-3" />
           <div className="text-[14px] font-semibold mb-1">Nenhuma execução de auditoria ainda</div>
           <p className="text-[12px] text-muted-foreground">
@@ -248,7 +269,7 @@ function OperacaoPage() {
 
       {/* Tendência de saúde + KPIs semanais */}
       <div>
-        <section className="panel overflow-hidden">
+        <section className="panel overflow-hidden rounded-3xl">
           <header className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-5 py-4">
             <div>
               <div className="flex items-center gap-2 text-[13px] font-semibold">
@@ -372,7 +393,7 @@ function OperacaoPage() {
 
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
         {/* Error type breakdown */}
-        <div className="lg:col-span-2 panel overflow-hidden">
+        <div className="panel overflow-hidden rounded-3xl lg:col-span-2">
           <div className="px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-2">
             <div className="text-[13px] font-semibold">Inconsistências por tipo</div>
             <div className="text-[11px] text-muted-foreground">
@@ -421,7 +442,7 @@ function OperacaoPage() {
         </div>
 
         {/* Critical findings */}
-        <div className="panel overflow-hidden">
+        <div className="panel overflow-hidden rounded-3xl">
           <div className="px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-2">
             <div className="text-[13px] font-semibold flex items-center gap-2">
               <AlertOctagon className="h-4 w-4 text-destructive" /> Findings críticos
@@ -482,7 +503,7 @@ function OperacaoPage() {
       <RunHistoryTable history={history} />
 
       {/* Motor strip */}
-      <div className="panel p-5 flex items-center gap-6 flex-wrap">
+      <div className="panel flex flex-wrap items-center gap-6 rounded-3xl p-5">
         <div className="flex items-center gap-2">
           <Cpu className="h-4 w-4 text-primary" />
           <div>
@@ -516,6 +537,10 @@ function OperacaoPage() {
           {statusGeral || "Aguardando"}
         </div>
       </div>
+
+      <p className="pb-2 text-center text-[11px] tracking-[0.08em] text-muted-foreground/70">
+        OLÉ COPILOT · CENTRO DE COMANDO DA OPERAÇÃO
+      </p>
     </div>
   );
 }
@@ -614,7 +639,7 @@ function RunHistoryTable({ history }: { history: AuditHistoryItem[] }) {
   if (rows.length === 0) return null;
 
   return (
-    <section className="panel overflow-hidden">
+    <section className="panel overflow-hidden rounded-3xl">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4">
         <div>
           <div className="flex items-center gap-2 text-[13px] font-semibold">
@@ -732,46 +757,58 @@ function MetricTile({
   delta?: number;
 }) {
   return (
-    <div className="panel p-4">
-      <div className="flex items-center gap-2 mb-3">
-        <div
-          className={cn(
-            "h-7 w-7 rounded-md grid place-items-center",
-            tone === "success" && "bg-success/15 text-success",
-            tone === "warning" && "bg-warning/15 text-warning",
-            tone === "destructive" && "bg-destructive/15 text-destructive",
-            tone === "info" && "bg-info/15 text-info",
-            tone === "default" && "bg-primary/15 text-primary",
-          )}
-        >
-          <Icon className="h-3.5 w-3.5" />
+    <div className="panel group relative overflow-hidden rounded-3xl p-5 transition-transform duration-500 ease-[var(--ease-apple)] hover:-translate-y-0.5">
+      <div
+        className={cn(
+          "pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full blur-2xl",
+          tone === "success" && "bg-success/12",
+          tone === "warning" && "bg-warning/12",
+          tone === "destructive" && "bg-destructive/12",
+          tone === "info" && "bg-primary/12",
+          tone === "default" && "bg-primary/10",
+        )}
+      />
+      <div className="relative">
+        <div className="flex items-center gap-2 mb-3">
+          <div
+            className={cn(
+              "h-7 w-7 rounded-md grid place-items-center",
+              tone === "success" && "bg-success/15 text-success",
+              tone === "warning" && "bg-warning/15 text-warning",
+              tone === "destructive" && "bg-destructive/15 text-destructive",
+              tone === "info" && "bg-info/15 text-info",
+              tone === "default" && "bg-primary/15 text-primary",
+            )}
+          >
+            <Icon className="h-3.5 w-3.5" />
+          </div>
+          <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground">
+            {label}
+          </span>
         </div>
-        <span className="text-[10.5px] uppercase tracking-wider text-muted-foreground">
-          {label}
-        </span>
+        <div className="text-[18px] sm:text-[22px] font-semibold tabular-nums">{value}</div>
+        {(hint || delta !== undefined) && (
+          <div className="text-[10.5px] text-muted-foreground mt-1 flex items-center gap-1.5">
+            {delta !== undefined && delta !== 0 && (
+              <span
+                className={cn(
+                  "flex items-center gap-0.5 font-mono",
+                  delta > 0 ? "text-destructive" : "text-success",
+                )}
+              >
+                {delta > 0 ? (
+                  <TrendingUp className="h-3 w-3" />
+                ) : (
+                  <TrendingDown className="h-3 w-3" />
+                )}
+                {delta > 0 ? "+" : ""}
+                {delta}
+              </span>
+            )}
+            {hint && <span>{hint}</span>}
+          </div>
+        )}
       </div>
-      <div className="text-[18px] sm:text-[22px] font-semibold tabular-nums">{value}</div>
-      {(hint || delta !== undefined) && (
-        <div className="text-[10.5px] text-muted-foreground mt-1 flex items-center gap-1.5">
-          {delta !== undefined && delta !== 0 && (
-            <span
-              className={cn(
-                "flex items-center gap-0.5 font-mono",
-                delta > 0 ? "text-destructive" : "text-success",
-              )}
-            >
-              {delta > 0 ? (
-                <TrendingUp className="h-3 w-3" />
-              ) : (
-                <TrendingDown className="h-3 w-3" />
-              )}
-              {delta > 0 ? "+" : ""}
-              {delta}
-            </span>
-          )}
-          {hint && <span>{hint}</span>}
-        </div>
-      )}
     </div>
   );
 }

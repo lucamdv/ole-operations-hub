@@ -21,13 +21,16 @@ export function MobileNav() {
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
         <button
-          className="md:hidden h-10 w-10 shrink-0 grid place-items-center rounded-md border border-border bg-surface/60 text-muted-foreground hover:bg-surface-2 transition"
+          className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-border bg-surface/60 text-muted-foreground transition duration-300 ease-[var(--ease-apple)] hover:bg-surface-2 md:hidden"
           aria-label="Abrir menu de navegação"
         >
           <Menu className="h-5 w-5" />
         </button>
       </SheetTrigger>
-      <SheetContent side="left" className="w-[85vw] max-w-[300px] p-0 flex flex-col bg-sidebar">
+      <SheetContent
+        side="left"
+        className="glass-bar inset-y-2 m-0 flex h-auto w-[85vw] max-w-[300px] flex-col overflow-hidden rounded-3xl border p-0"
+      >
         <div className="px-5 pt-[max(1.25rem,calc(env(safe-area-inset-top)+0.75rem))] pb-4 border-b border-sidebar-border">
           <BrandMark height={32} />
           <div className="flex items-center gap-1.5 mt-1.5">
@@ -50,12 +53,14 @@ export function MobileNav() {
                 key={item.to}
                 to={item.to}
                 className={cn(
-                  "flex items-center gap-3 min-h-11 px-3 rounded-lg text-[14px] font-medium transition",
+                  "flex min-h-11 items-center gap-3 rounded-xl px-3 text-[14px] font-medium transition-all duration-300 ease-[var(--ease-apple)]",
                   "text-muted-foreground hover:text-foreground hover:bg-sidebar-accent/60",
-                  active && "bg-sidebar-accent text-foreground",
+                  active && "bg-primary text-primary-foreground shadow-soft",
                 )}
               >
-                <Icon className={cn("h-[18px] w-[18px] shrink-0", active && "text-primary")} />
+                <Icon
+                  className={cn("h-[18px] w-[18px] shrink-0", active && "text-primary-foreground")}
+                />
                 <span className="truncate">{item.label}</span>
               </Link>
             );
@@ -74,12 +79,17 @@ export function MobileNav() {
                     key={item.to}
                     to={item.to}
                     className={cn(
-                      "flex items-center gap-3 min-h-11 px-3 rounded-lg text-[14px] font-medium transition",
+                      "flex min-h-11 items-center gap-3 rounded-xl px-3 text-[14px] font-medium transition-all duration-300 ease-[var(--ease-apple)]",
                       "text-muted-foreground hover:text-foreground hover:bg-sidebar-accent/60",
-                      active && "bg-sidebar-accent text-foreground",
+                      active && "bg-primary text-primary-foreground shadow-soft",
                     )}
                   >
-                    <Icon className={cn("h-[18px] w-[18px] shrink-0", active && "text-primary")} />
+                    <Icon
+                      className={cn(
+                        "h-[18px] w-[18px] shrink-0",
+                        active && "text-primary-foreground",
+                      )}
+                    />
                     <span className="truncate">{item.label}</span>
                   </Link>
                 );

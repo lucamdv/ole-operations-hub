@@ -15,7 +15,8 @@ export function SystemStatusPill({ compact = false }: { compact?: boolean }) {
   });
 
   const state = status?.state ?? "operational";
-  const tone = state === "operational" ? "success" : state === "degraded" ? "warning" : "destructive";
+  const tone =
+    state === "operational" ? "success" : state === "degraded" ? "warning" : "destructive";
   const label =
     state === "operational"
       ? "Sistema Operacional"
@@ -35,7 +36,7 @@ export function SystemStatusPill({ compact = false }: { compact?: boolean }) {
           : "Sem auditorias registradas"
       }
       className={cn(
-        "flex items-center gap-2 rounded-md border",
+        "flex items-center gap-2 rounded-2xl border",
         compact ? "justify-center px-1.5 py-2" : "px-2 py-1.5",
         tone === "success" && "bg-success/10 border-success/20",
         tone === "warning" && "bg-warning/10 border-warning/20",
@@ -96,7 +97,7 @@ export function UserChip({ compact = false }: { compact?: boolean }) {
   return (
     <div
       className={cn(
-        "flex items-center gap-2.5 rounded-md hover:bg-sidebar-accent/40 transition",
+        "flex items-center gap-2.5 rounded-2xl transition hover:bg-sidebar-accent/40",
         compact ? "justify-center px-1 py-2" : "px-2 py-2",
       )}
       title={`${profile.nome} · ${roleLabel}`}

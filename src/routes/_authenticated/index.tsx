@@ -14,6 +14,11 @@ import { FindingsListDialog } from "@/components/audit/findings-list-dialog";
 import { RunAuditButton } from "@/components/audit/run-audit-button";
 import { NextRunCountdown } from "@/components/automation/next-run-countdown";
 import { PageHeader } from "@/components/layout/page-header";
+import {
+  OverviewPersonalizer,
+  type OverviewPreferences,
+  useOverviewPreferences,
+} from "@/components/overview/overview-personalizer";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuditHistory, useLatestAudit } from "@/hooks/use-audit";
@@ -40,10 +45,11 @@ function VisaoGeral() {
   const { data: latest, isLoading } = useLatestAudit();
   const { data: history = [] } = useAuditHistory();
   const { profile } = useProfile();
+  const { preferences, updatePreferences, resetPreferences } = useOverviewPreferences();
 
   if (isLoading) {
     return (
-      <div className="space-y-8">
+      <div className="mx-auto w-full max-w-[1180px] space-y-5">
         <div className="space-y-2">
           <Skeleton className="h-4 w-28" />
           <Skeleton className="h-8 w-72" />
@@ -63,24 +69,43 @@ function VisaoGeral() {
   const greeting = hour < 12 ? "Bom dia" : hour < 18 ? "Boa tarde" : "Boa noite";
 
   return (
-    <div className="space-y-8 sm:space-y-10">
-      <PageHeader
-        eyebrow={`${greeting}, ${firstName}`}
-        title="Visão geral"
-        description={
-          latest?.run.created_at
-            ? `Última auditoria ${relativeTime(latest.run.created_at)} · ${formatDateTime(latest.run.created_at)}`
-            : "Execute uma auditoria para obter o primeiro diagnóstico da carteira."
-        }
-        actions={
-          <div className="flex flex-col items-start gap-1.5 sm:items-end">
-            <NextRunCountdown job="audit" />
-            <RunAuditButton compact />
-          </div>
-        }
-      />
+    <div className="mx-auto w-full max-w-[1180px] space-y-5">
+      <section className="apple-hero glass-panel relative overflow-hidden rounded-3xl p-6 sm:p-8">
+        <div className="apple-orb apple-orb-primary -right-24 -top-28" />
+        <PageHeader
+          className="relative border-0 pb-0"
+          eyebrow={`${greeting}, ${firstName}`}
+          title="Visão geral"
+          description={
+            latest?.run.created_at
+              ? `Última auditoria ${relativeTime(latest.run.created_at)} · ${formatDateTime(latest.run.created_at)}`
+              : "Execute uma auditoria para obter o primeiro diagnóstico da carteira."
+          }
+          actions={
+            <div className="flex flex-wrap items-end justify-start gap-2 sm:justify-end">
+              <OverviewPersonalizer
+                preferences={preferences}
+                onChange={updatePreferences}
+                onReset={resetPreferences}
+              />
+              <div className="flex flex-col items-start gap-1.5 sm:items-end">
+                <NextRunCountdown job="audit" />
+                <RunAuditButton compact />
+              </div>
+            </div>
+          }
+        />
+      </section>
 
-      {!latest ? <AuditEmptyState /> : <AuditOverview latest={latest} history={history} />}
+      {!latest ? (
+        <AuditEmptyState />
+      ) : (
+        <AuditOverview latest={latest} history={history} preferences={preferences} />
+      )}
+
+      <p className="pb-2 text-center text-[11px] tracking-[0.08em] text-muted-foreground/70">
+        OLÉ COPILOT · CENTRO DE COMANDO DA OPERAÇÃO
+      </p>
     </div>
   );
 }
@@ -88,9 +113,11 @@ function VisaoGeral() {
 function AuditOverview({
   latest,
   history,
+  preferences,
 }: {
   latest: LatestAudit;
   history: NonNullable<ReturnType<typeof useAuditHistory>["data"]>;
+  preferences: OverviewPreferences;
 }) {
   const kpis = deriveKpis({ latest, history });
   if (!kpis) return null;
@@ -113,199 +140,216 @@ function AuditOverview({
 
   return (
     <>
-      <section
-        className={cn(
-          "relative overflow-hidden rounded-2xl border bg-surface px-5 py-6 shadow-soft sm:px-8 sm:py-8",
-          tone === "danger" && "border-destructive/25",
-          tone === "warning" && "border-warning/25",
-          tone === "success" && "border-success/25",
-        )}
-      >
-        <div
+      {preferences.auditSummary && (
+        <section
           className={cn(
-            "pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full blur-3xl",
-            tone === "danger" && "bg-destructive/8",
-            tone === "warning" && "bg-warning/8",
-            tone === "success" && "bg-success/8",
+            "glass-panel relative overflow-hidden rounded-3xl px-5 py-6 sm:px-8 sm:py-8",
+            tone === "danger" && "border-destructive/25",
+            tone === "warning" && "border-warning/25",
+            tone === "success" && "border-success/25",
           )}
-        />
-        <div className="relative grid gap-8 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-center">
-          <div className="flex min-w-0 items-start gap-4 sm:gap-5">
-            <div
-              className={cn(
-                "grid h-11 w-11 shrink-0 place-items-center rounded-xl border sm:h-12 sm:w-12",
-                tone === "danger" && "border-destructive/25 bg-destructive/10 text-destructive",
-                tone === "warning" && "border-warning/25 bg-warning/10 text-warning",
-                tone === "success" && "border-success/25 bg-success/10 text-success",
-              )}
-            >
-              {tone === "success" ? (
-                <ShieldCheck className="h-5 w-5 sm:h-6 sm:w-6" />
-              ) : (
-                <ShieldAlert className="h-5 w-5 sm:h-6 sm:w-6" />
-              )}
-            </div>
-            <div className="min-w-0">
+        >
+          <div
+            className={cn(
+              "pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full blur-3xl",
+              tone === "danger" && "bg-destructive/10",
+              tone === "warning" && "bg-warning/10",
+              tone === "success" && "bg-success/12",
+            )}
+          />
+          <div className="relative grid gap-8 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-center">
+            <div className="flex min-w-0 items-start gap-4 sm:gap-5">
               <div
                 className={cn(
-                  "mb-2 text-[10.5px] font-semibold uppercase tracking-[0.16em]",
-                  tone === "danger" && "text-destructive",
-                  tone === "warning" && "text-warning",
-                  tone === "success" && "text-success",
+                  "grid h-11 w-11 shrink-0 place-items-center rounded-2xl border sm:h-12 sm:w-12",
+                  tone === "danger" && "border-destructive/25 bg-destructive/10 text-destructive",
+                  tone === "warning" && "border-warning/25 bg-warning/10 text-warning",
+                  tone === "success" && "border-success/25 bg-success/10 text-success",
                 )}
               >
-                Resultado da última auditoria
+                {tone === "success" ? (
+                  <ShieldCheck className="h-5 w-5 sm:h-6 sm:w-6" />
+                ) : (
+                  <ShieldAlert className="h-5 w-5 sm:h-6 sm:w-6" />
+                )}
               </div>
-              <h2 className="max-w-3xl text-xl font-semibold leading-tight tracking-[-0.025em] sm:text-2xl">
-                {title}
-              </h2>
-              <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-muted-foreground sm:text-sm">
-                {description}
-              </p>
-            </div>
-          </div>
-
-          <div className="border-t border-border pt-5 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
-            <div className="metric-label">Conformidade</div>
-            <div className="mt-2 flex items-baseline gap-2">
-              <span
-                className={cn(
-                  "text-4xl font-semibold tracking-[-0.05em] tabular-nums",
-                  tone === "success" ? "text-success" : "text-foreground",
-                )}
-              >
-                {formatPct(kpis.approvedRate)}
-              </span>
-            </div>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              {formatInt(kpis.approved)} de {formatInt(kpis.audited)} aprovadas
-            </p>
-          </div>
-        </div>
-
-        <div className="relative mt-7 grid gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-3">
-          <Signal
-            label="Críticas"
-            value={severity.erros}
-            detail={severity.erros === 1 ? "ocorrência" : "ocorrências"}
-            tone={severity.erros > 0 ? "danger" : "muted"}
-          />
-          <Signal
-            label="Apólices afetadas"
-            value={kpis.affectedPolicies}
-            detail={`de ${formatInt(kpis.audited)} auditadas`}
-            tone={kpis.affectedPolicies > 0 ? "warning" : "muted"}
-          />
-          <Signal
-            label="Tipos de inconsistência"
-            value={kpis.uniqueErrorTypes}
-            detail={
-              kpis.topErrorType
-                ? `Mais frequente: ${kpis.topErrorType}`
-                : "Nenhum desvio encontrado"
-            }
-            tone="muted"
-          />
-        </div>
-      </section>
-
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.65fr)_minmax(280px,0.75fr)]">
-        <section className="panel overflow-hidden">
-          <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4 sm:px-6">
-            <div>
-              <h2 className="section-title">Prioridades da auditoria</h2>
-              <p className="caption mt-1">
-                Apólices com maior volume de ocorrências na execução atual.
-              </p>
-            </div>
-            {latest.findings.length > 0 && (
-              <FindingsListDialog
-                latest={latest}
-                trigger={
-                  <Button variant="ghost" size="sm" className="gap-1.5 text-[12px]">
-                    <List className="h-3.5 w-3.5" /> Ver todos
-                  </Button>
-                }
-              />
-            )}
-          </header>
-
-          {priorityPolicies.length === 0 ? (
-            <div className="flex min-h-56 flex-col items-center justify-center px-6 py-12 text-center">
-              <CheckCircle2 className="mb-3 h-7 w-7 text-success" />
-              <div className="text-sm font-semibold">Nada para tratar agora</div>
-              <p className="mt-1 max-w-sm text-[12px] leading-relaxed text-muted-foreground">
-                A execução mais recente terminou sem achados pendentes.
-              </p>
-            </div>
-          ) : (
-            <div className="divide-y divide-border/70">
-              {priorityPolicies.map((group) => (
-                <PriorityRow key={group.apolice} group={group} />
-              ))}
-            </div>
-          )}
-        </section>
-
-        <aside className="panel h-fit overflow-hidden">
-          <header className="border-b border-border px-5 py-4">
-            <h2 className="section-title">Leitura rápida</h2>
-            <p className="caption mt-1">Contexto suficiente para decidir o próximo passo.</p>
-          </header>
-          <div className="space-y-5 p-5">
-            <div className="space-y-3">
-              <AuditDetail
-                icon={Clock3}
-                label="Executada"
-                value={formatDateTime(latest.run.created_at)}
-              />
-              <AuditDetail
-                icon={CheckCircle2}
-                label="Aprovadas"
-                value={`${formatInt(latest.run.aprovados)} apólices`}
-                tone="success"
-              />
-              <AuditDetail
-                icon={AlertTriangle}
-                label="Com inconsistências"
-                value={`${formatInt(latest.run.reprovados)} apólices`}
-                tone={latest.run.reprovados > 0 ? "danger" : "muted"}
-              />
-            </div>
-
-            <div className="border-t border-border pt-5">
-              <div className="metric-label mb-3">Próximo passo</div>
-              <div className="space-y-2">
-                {latest.findings.length > 0 && (
-                  <Link
-                    to="/alertas"
-                    className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5 text-[12.5px] font-medium transition hover:border-primary/30 hover:bg-surface-2"
-                  >
-                    Tratar ocorrências <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-                  </Link>
-                )}
-                <Link
-                  to="/operacao"
-                  className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5 text-[12.5px] font-medium transition hover:border-primary/30 hover:bg-surface-2"
+              <div className="min-w-0">
+                <div
+                  className={cn(
+                    "mb-2 text-[10.5px] font-semibold uppercase tracking-[0.16em]",
+                    tone === "danger" && "text-destructive",
+                    tone === "warning" && "text-warning",
+                    tone === "success" && "text-success",
+                  )}
                 >
-                  Acompanhar operação <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
-                </Link>
+                  Resultado da última auditoria
+                </div>
+                <h2 className="max-w-3xl text-xl font-semibold leading-tight tracking-[-0.025em] sm:text-2xl">
+                  {title}
+                </h2>
+                <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-muted-foreground sm:text-sm">
+                  {description}
+                </p>
               </div>
             </div>
 
-            <button
-              type="button"
-              className="inline-flex items-center gap-1.5 text-[11.5px] text-muted-foreground transition hover:text-foreground"
-              onClick={async () => {
-                const { exportAuditPdf } = await import("@/lib/audit/export-pdf");
-                exportAuditPdf(latest, history);
-              }}
-            >
-              <FileDown className="h-3.5 w-3.5" /> Exportar relatório em PDF
-            </button>
+            <div className="border-t border-border pt-5 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
+              <div className="metric-label">Conformidade</div>
+              <div className="mt-2 flex items-baseline gap-2">
+                <span
+                  className={cn(
+                    "text-4xl font-semibold tracking-[-0.05em] tabular-nums",
+                    tone === "success" ? "text-success" : "text-foreground",
+                  )}
+                >
+                  {formatPct(kpis.approvedRate)}
+                </span>
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {formatInt(kpis.approved)} de {formatInt(kpis.audited)} aprovadas
+              </p>
+            </div>
           </div>
-        </aside>
-      </div>
+
+          <div className="relative mt-7 grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-3">
+            <Signal
+              label="Críticas"
+              value={severity.erros}
+              detail={severity.erros === 1 ? "ocorrência" : "ocorrências"}
+              tone={severity.erros > 0 ? "danger" : "muted"}
+            />
+            <Signal
+              label="Apólices afetadas"
+              value={kpis.affectedPolicies}
+              detail={`de ${formatInt(kpis.audited)} auditadas`}
+              tone={kpis.affectedPolicies > 0 ? "warning" : "muted"}
+            />
+            <Signal
+              label="Tipos de inconsistência"
+              value={kpis.uniqueErrorTypes}
+              detail={
+                kpis.topErrorType
+                  ? `Mais frequente: ${kpis.topErrorType}`
+                  : "Nenhum desvio encontrado"
+              }
+              tone="muted"
+            />
+          </div>
+        </section>
+      )}
+
+      {(preferences.priorities || preferences.quickRead) && (
+        <div
+          className={cn(
+            "grid gap-4",
+            preferences.priorities &&
+              preferences.quickRead &&
+              "lg:grid-cols-[minmax(0,1.65fr)_minmax(280px,0.75fr)]",
+          )}
+        >
+          {preferences.priorities && (
+            <section className="glass-panel overflow-hidden rounded-3xl">
+              <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-5 py-4 sm:px-6">
+                <div>
+                  <h2 className="section-title">Prioridades da auditoria</h2>
+                  <p className="caption mt-1">
+                    Apólices com maior volume de ocorrências na execução atual.
+                  </p>
+                </div>
+                {latest.findings.length > 0 && (
+                  <FindingsListDialog
+                    latest={latest}
+                    trigger={
+                      <Button variant="ghost" size="sm" className="gap-1.5 text-[12px]">
+                        <List className="h-3.5 w-3.5" /> Ver todos
+                      </Button>
+                    }
+                  />
+                )}
+              </header>
+
+              {priorityPolicies.length === 0 ? (
+                <div className="flex min-h-56 flex-col items-center justify-center px-6 py-12 text-center">
+                  <CheckCircle2 className="mb-3 h-7 w-7 text-success" />
+                  <div className="text-sm font-semibold">Nada para tratar agora</div>
+                  <p className="mt-1 max-w-sm text-[12px] leading-relaxed text-muted-foreground">
+                    A execução mais recente terminou sem achados pendentes.
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-border/70">
+                  {priorityPolicies.map((group) => (
+                    <PriorityRow key={group.apolice} group={group} />
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {preferences.quickRead && (
+            <aside className="glass-panel h-fit overflow-hidden rounded-3xl">
+              <header className="border-b border-border px-5 py-4">
+                <h2 className="section-title">Leitura rápida</h2>
+                <p className="caption mt-1">Contexto suficiente para decidir o próximo passo.</p>
+              </header>
+              <div className="space-y-5 p-5">
+                <div className="space-y-3">
+                  <AuditDetail
+                    icon={Clock3}
+                    label="Executada"
+                    value={formatDateTime(latest.run.created_at)}
+                  />
+                  <AuditDetail
+                    icon={CheckCircle2}
+                    label="Aprovadas"
+                    value={`${formatInt(latest.run.aprovados)} apólices`}
+                    tone="success"
+                  />
+                  <AuditDetail
+                    icon={AlertTriangle}
+                    label="Com inconsistências"
+                    value={`${formatInt(latest.run.reprovados)} apólices`}
+                    tone={latest.run.reprovados > 0 ? "danger" : "muted"}
+                  />
+                </div>
+
+                <div className="border-t border-border pt-5">
+                  <div className="metric-label mb-3">Próximo passo</div>
+                  <div className="space-y-2">
+                    {latest.findings.length > 0 && (
+                      <Link
+                        to="/alertas"
+                        className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5 text-[12.5px] font-medium transition hover:border-primary/30 hover:bg-surface-2"
+                      >
+                        Tratar ocorrências{" "}
+                        <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+                      </Link>
+                    )}
+                    <Link
+                      to="/operacao"
+                      className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5 text-[12.5px] font-medium transition hover:border-primary/30 hover:bg-surface-2"
+                    >
+                      Acompanhar operação{" "}
+                      <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+                    </Link>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1.5 text-[11.5px] text-muted-foreground transition hover:text-foreground"
+                  onClick={async () => {
+                    const { exportAuditPdf } = await import("@/lib/audit/export-pdf");
+                    exportAuditPdf(latest, history);
+                  }}
+                >
+                  <FileDown className="h-3.5 w-3.5" /> Exportar relatório em PDF
+                </button>
+              </div>
+            </aside>
+          )}
+        </div>
+      )}
     </>
   );
 }
@@ -322,7 +366,7 @@ function Signal({
   tone: "danger" | "warning" | "muted";
 }) {
   return (
-    <div className="min-w-0 bg-surface-2/70 px-4 py-4 sm:px-5">
+    <div className="min-w-0 bg-surface-2/65 px-4 py-4 sm:px-5">
       <div className="metric-label">{label}</div>
       <div className="mt-1.5 flex items-baseline gap-2">
         <span
@@ -351,7 +395,7 @@ function PriorityRow({ group }: { group: ReturnType<typeof groupByApolice>[numbe
     <Link
       to="/apolices/$id"
       params={{ id: group.apolice }}
-      className="group flex items-start gap-3 px-5 py-4 transition hover:bg-surface-2/60 sm:px-6"
+      className="group flex items-start gap-3 px-5 py-4 transition hover:bg-surface-2/75 sm:px-6"
     >
       <span
         className={cn(
