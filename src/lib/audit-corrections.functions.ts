@@ -68,6 +68,7 @@ export const requestAuditCorrection = createServerFn({ method: "POST" })
     }
 
     const selectedFindings = (rows ?? []) as unknown as AuditFindingRow[];
+    const correctionMode = data.mode ?? "production";
     const { buildAuditCorrectionPayload } = await import("@/lib/audit/correction-payload");
     const payload = buildAuditCorrectionPayload({
       runId: data.run_id,
@@ -169,13 +170,13 @@ export const requestAuditCorrection = createServerFn({ method: "POST" })
           detected_at: firstSeenByIncident.get(incidentKey) ?? finding.created_at,
           responded_at: respondedAt,
           requested_by: context.userId,
-          mode: data.mode ?? "production",
+          mode: correctionMode,
         };
       });
       const { error: trackingError } = await supabaseAdmin
         .from("audit_correction_responses")
         .upsert(responseRows, {
-          onConflict: "incident_key,detected_at",
+          onConflict: "incident_key,detected_at,mode",
           ignoreDuplicates: true,
         });
       trackingRecorded = !trackingError;

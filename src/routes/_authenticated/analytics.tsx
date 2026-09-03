@@ -26,7 +26,6 @@ import { toast } from "sonner";
 import { useAuditHistory, useLatestAudit } from "@/hooks/use-audit";
 import { usePolicies } from "@/hooks/use-policies";
 import { useAnalyticsAggregates } from "@/hooks/use-analytics";
-import { useChartPrefs } from "@/hooks/use-settings";
 import { useOperationKpis } from "@/hooks/use-operation-kpis";
 import { formatDuracaoHoras } from "@/lib/audit/resolution-filter";
 import { useKpiTargets } from "@/hooks/use-kpi-targets";
@@ -43,6 +42,10 @@ import {
 import { formatCompact, formatInt, formatPct, formatUSD, relativeTime } from "@/lib/format";
 import { REPASSE_RULES } from "@/lib/analytics/repasse-rules";
 import { DateRangeFilter } from "@/components/analytics/date-range-filter";
+import {
+  AnalyticsPersonalizer,
+  useAnalyticsPreferences,
+} from "@/components/analytics/analytics-personalizer";
 import {
   DEFAULT_RANGE,
   formatRangeBadge,
@@ -73,6 +76,7 @@ function AnalyticsPage() {
   const aggregatesQ = useAnalyticsAggregates();
   const { targets } = useKpiTargets();
   const opsQ = useOperationKpis(targets.resolucaoSlaHoras);
+  const { preferences, updatePreferences, resetPreferences } = useAnalyticsPreferences();
 
   const ops = opsQ.data ?? null;
   const monthlyReinc = useMemo(() => ops?.monthlyReincidencia ?? [], [ops]);
@@ -193,27 +197,43 @@ function AnalyticsPage() {
   }, [policies]);
 
   // === Disponibilidade de dados por gráfico ===
-  const { prefs: chartPrefs } = useChartPrefs();
   const charts = useMemo(() => {
     const hasIssuances = issuances.length > 0;
     return [
-      { title: "Tendência de runs", has: series.length > 0 },
-      { title: "Severidade", has: sev.erros + sev.alertas + sev.infos > 0 },
-      { title: "Conformidade ao longo do tempo", has: series.length > 0 },
-      { title: "Volume processado", has: series.length > 0 },
-      { title: "Top 10 tipos de erro", has: errorTypes.length > 0 },
-      { title: "Findings por mês de vigência", has: monthly.length > 0 },
-      { title: "Receita Excelsior (USD)", has: repasse.length > 0 },
+      { id: "runTrend", title: "Tendência de runs", has: series.length > 0 },
+      { id: "severity", title: "Severidade", has: sev.erros + sev.alertas + sev.infos > 0 },
+      { id: "conformity", title: "Conformidade ao longo do tempo", has: series.length > 0 },
+      { id: "processedVolume", title: "Volume processado", has: series.length > 0 },
+      { id: "errorTypes", title: "Top 10 tipos de erro", has: errorTypes.length > 0 },
+      { id: "findingsByMonth", title: "Findings por mês de vigência", has: monthly.length > 0 },
+      { id: "revenue", title: "Receita Excelsior (USD)", has: repasse.length > 0 },
       {
+        id: "heatmap",
         title: "Heatmap · tipo de erro × runs",
         has: heatmap.rows.length > 0 && heatmap.runs.length > 0,
       },
-      { title: "Apólices mais problemáticas", has: apoliceRank.length > 0 },
-      { title: "Top endossos com inconsistências", has: endossoRank.length > 0 },
-      { title: "Carteira por nº de endossos", has: endorsementsDist.length > 0 },
-      { title: "Apólices emitidas por mês", has: issuances.some((i) => i.apolices > 0) },
-      { title: "Endossos emitidos por mês", has: issuances.some((i) => i.endossosTotal > 0) },
-      { title: "Emissões por mês e por tipo", has: hasIssuances },
+      { id: "problemPolicies", title: "Apólices mais problemáticas", has: apoliceRank.length > 0 },
+      {
+        id: "problemEndorsements",
+        title: "Top endossos com inconsistências",
+        has: endossoRank.length > 0,
+      },
+      {
+        id: "portfolioEndorsements",
+        title: "Carteira por nº de endossos",
+        has: endorsementsDist.length > 0,
+      },
+      {
+        id: "policiesIssued",
+        title: "Apólices emitidas por mês",
+        has: issuances.some((i) => i.apolices > 0),
+      },
+      {
+        id: "endorsementsIssued",
+        title: "Endossos emitidos por mês",
+        has: issuances.some((i) => i.endossosTotal > 0),
+      },
+      { id: "issuancesByType", title: "Emissões por mês e por tipo", has: hasIssuances },
     ] as const;
   }, [
     series,
@@ -231,9 +251,10 @@ function AnalyticsPage() {
     () => Object.fromEntries(charts.map((c) => [c.title, c.has])) as Record<string, boolean>,
     [charts],
   );
-  const hiddenCharts = chartPrefs.hideEmptyCharts
-    ? charts.filter((c) => !c.has).map((c) => c.title)
+  const hiddenCharts = preferences.hideEmptyCharts
+    ? charts.filter((c) => preferences.charts[c.id] && !c.has).map((c) => c.title)
     : [];
+  const visibleChartCount = charts.filter((chart) => preferences.charts[chart.id]).length;
 
   const chartsRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState<"none" | "report" | "charts">("none");
@@ -297,10 +318,15 @@ function AnalyticsPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <AnalyticsPersonalizer
+            preferences={preferences}
+            onChange={updatePreferences}
+            onReset={resetPreferences}
+          />
           <DateRangeFilter value={range} onChange={setRange} />
           <button
             onClick={handleExportCharts}
-            disabled={!latest || exporting !== "none"}
+            disabled={!latest || visibleChartCount === 0 || exporting !== "none"}
             className="inline-flex items-center gap-2 h-9 px-3 rounded-lg border border-border bg-surface hover:bg-surface-2 text-[12px] font-medium disabled:opacity-50 disabled:cursor-not-allowed transition"
           >
             {exporting === "charts" ? (
@@ -331,202 +357,254 @@ function AnalyticsPage() {
         <EmptyState />
       ) : (
         <>
-          {/* === KPIs diários (cadência 5.1) === */}
-          <SectionTitle
-            title="KPIs diários"
-            subtitle="Detecção, backlog crítico e velocidade da primeira resposta no dia"
-          />
-          <div className="bento">
-            <Kpi
-              label="Nº de inconsistências novas detectadas"
-              value={formatInt(ops?.daily.novas ?? 0)}
-              hint={`média móvel: ${formatInt(ops?.daily.mediaMovel ?? 0)} · desvio ${formatPct(ops?.daily.desvioPct ?? 0, 1)}`}
-              tone={(ops?.daily.desvioPct ?? 0) > targets.picoDesvioPct ? "warning" : "success"}
-              target={`alerta acima de ${targets.picoDesvioPct}% da média móvel`}
-              status={statusMax(ops?.daily.desvioPct ?? 0, targets.picoDesvioPct)}
-            />
-            <Kpi
-              label="Nº de ocorrências críticas em aberto"
-              value={formatInt(ops?.daily.criticasAbertas ?? 0)}
-              hint="backlog crítico da auditoria mais recente"
-              tone={(ops?.daily.criticasAbertas ?? 0) > 0 ? "destructive" : "success"}
-              target="meta: zerar até o fim do dia"
-              status={statusMax(ops?.daily.criticasAbertas ?? 0, targets.criticasAbertasMax)}
-            />
-            <Kpi
-              label="Tempo até a primeira resposta em ocorrência crítica"
-              value={
-                ops?.daily.primeiraRespostaCriticaHoras == null
-                  ? "—"
-                  : ops.daily.primeiraRespostaCriticaHoras === 0
-                    ? "0min"
-                    : formatDuracaoHoras(ops.daily.primeiraRespostaCriticaHoras)
-              }
-              hint={
-                ops?.daily.criticasRespondidas
-                  ? `${formatInt(ops.daily.criticasRespondidas)} crítica(s) respondida(s) hoje`
-                  : "sem respostas críticas registradas hoje"
-              }
-              tone={
-                ops?.daily.primeiraRespostaCriticaHoras == null
-                  ? undefined
-                  : ops.daily.primeiraRespostaCriticaHoras < targets.primeiraRespostaCriticaMaxHoras
-                    ? "success"
-                    : "destructive"
-              }
-              target={`meta < ${targets.primeiraRespostaCriticaMaxHoras}h úteis`}
-              status={
-                ops?.daily.primeiraRespostaCriticaHoras == null
-                  ? undefined
-                  : ops.daily.primeiraRespostaCriticaHoras < targets.primeiraRespostaCriticaMaxHoras
-                    ? "ok"
-                    : "bad"
-              }
-            />
-          </div>
+          {(preferences.kpis.dailyNewFindings ||
+            preferences.kpis.dailyOpenCritical ||
+            preferences.kpis.dailyFirstResponse) && (
+            <>
+              <SectionTitle
+                title="KPIs diários"
+                subtitle="Detecção, backlog crítico e velocidade da primeira resposta no dia"
+              />
+              <div className="bento">
+                {preferences.kpis.dailyNewFindings && (
+                  <Kpi
+                    label="Nº de inconsistências novas detectadas"
+                    value={formatInt(ops?.daily.novas ?? 0)}
+                    hint={`média móvel: ${formatInt(ops?.daily.mediaMovel ?? 0)} · desvio ${formatPct(ops?.daily.desvioPct ?? 0, 1)}`}
+                    tone={
+                      (ops?.daily.desvioPct ?? 0) > targets.picoDesvioPct ? "warning" : "success"
+                    }
+                    target={`alerta acima de ${targets.picoDesvioPct}% da média móvel`}
+                    status={statusMax(ops?.daily.desvioPct ?? 0, targets.picoDesvioPct)}
+                  />
+                )}
+                {preferences.kpis.dailyOpenCritical && (
+                  <Kpi
+                    label="Nº de ocorrências críticas em aberto"
+                    value={formatInt(ops?.daily.criticasAbertas ?? 0)}
+                    hint="backlog crítico da auditoria mais recente"
+                    tone={(ops?.daily.criticasAbertas ?? 0) > 0 ? "destructive" : "success"}
+                    target="meta: zerar até o fim do dia"
+                    status={statusMax(ops?.daily.criticasAbertas ?? 0, targets.criticasAbertasMax)}
+                  />
+                )}
+                {preferences.kpis.dailyFirstResponse && (
+                  <Kpi
+                    label="Tempo até a primeira resposta em ocorrência"
+                    value={
+                      ops?.daily.primeiraRespostaHoras == null
+                        ? "—"
+                        : ops.daily.primeiraRespostaHoras === 0
+                          ? "0min"
+                          : formatDuracaoHoras(ops.daily.primeiraRespostaHoras)
+                    }
+                    hint={
+                      ops?.daily.ocorrenciasRespondidas
+                        ? `${formatInt(ops.daily.ocorrenciasRespondidas)} ocorrência(s) respondida(s) hoje`
+                        : "sem respostas registradas hoje"
+                    }
+                    tone={
+                      ops?.daily.primeiraRespostaHoras == null
+                        ? undefined
+                        : ops.daily.primeiraRespostaHoras < targets.primeiraRespostaCriticaMaxHoras
+                          ? "success"
+                          : "destructive"
+                    }
+                    target={`meta < ${targets.primeiraRespostaCriticaMaxHoras}h úteis`}
+                    status={
+                      ops?.daily.primeiraRespostaHoras == null
+                        ? undefined
+                        : ops.daily.primeiraRespostaHoras < targets.primeiraRespostaCriticaMaxHoras
+                          ? "ok"
+                          : "bad"
+                    }
+                  />
+                )}
+              </div>
+            </>
+          )}
 
-          {/* === KPIs semanais (cadência 5.2) === */}
-          <SectionTitle
-            title="KPIs semanais"
-            subtitle="Reincidência, disciplina de SLA e saúde financeira nos últimos 7 dias"
-          />
-          <div className="bento">
-            <Kpi
-              label="Taxa de reincidência (% ocorrências repetidas vs. novas)"
-              value={formatPct(ops?.weekly.reincidenciaPct ?? 0, 1)}
-              hint={`${formatInt(ops?.weekly.repetidas ?? 0)} repetidas · ${formatInt(ops?.weekly.novasUnicas ?? 0)} novas`}
-              tone={
-                (ops?.weekly.reincidenciaPct ?? 0) > targets.reincidenciaMaxPct
-                  ? "destructive"
-                  : "success"
-              }
-              target={`alerta acima de ${targets.reincidenciaMaxPct}%`}
-              status={statusMax(ops?.weekly.reincidenciaPct ?? 0, targets.reincidenciaMaxPct)}
-            />
-            <Kpi
-              label="% de ocorrências resolvidas dentro do SLA"
-              value={
-                ops?.weekly.resolvidasDentroSlaPct == null
-                  ? "—"
-                  : formatPct(ops.weekly.resolvidasDentroSlaPct, 1)
-              }
-              hint={
-                ops?.weekly.resolvidas
-                  ? `${formatInt(ops.weekly.resolvidasDentroSla)} de ${formatInt(ops.weekly.resolvidas)} resolvidas em até ${targets.resolucaoSlaHoras}h úteis`
-                  : "sem resoluções mensuráveis na semana"
-              }
-              tone={
-                ops?.weekly.resolvidasDentroSlaPct == null
-                  ? undefined
-                  : ops.weekly.resolvidasDentroSlaPct > targets.resolvidasSlaMinPct
-                    ? "success"
-                    : "destructive"
-              }
-              target={`meta > ${targets.resolvidasSlaMinPct}%`}
-              status={
-                ops?.weekly.resolvidasDentroSlaPct == null
-                  ? undefined
-                  : ops.weekly.resolvidasDentroSlaPct > targets.resolvidasSlaMinPct
-                    ? "ok"
-                    : "bad"
-              }
-            />
-            <Kpi
-              label="Nº de contratos inadimplentes"
-              value={formatInt(ops?.weekly.inadimplentes ?? 0)}
-              hint={`${formatInt(ops?.weekly.inadimplentesSemanaAnterior ?? 0)} há 7 dias · ${(ops?.weekly.inadimplentesDelta ?? 0) > 0 ? "+" : ""}${formatInt(ops?.weekly.inadimplentesDelta ?? 0)} na tendência`}
-              tone={(ops?.weekly.inadimplentesDelta ?? 0) > 0 ? "destructive" : "success"}
-            />
-          </div>
+          {(preferences.kpis.weeklyRecurrence ||
+            preferences.kpis.weeklySla ||
+            preferences.kpis.weeklyDelinquent) && (
+            <>
+              <SectionTitle
+                title="KPIs semanais"
+                subtitle="Reincidência, disciplina de SLA e saúde financeira nos últimos 7 dias"
+              />
+              <div className="bento">
+                {preferences.kpis.weeklyRecurrence && (
+                  <Kpi
+                    label="Taxa de reincidência (% ocorrências repetidas vs. novas)"
+                    value={
+                      ops?.weekly.reincidenciaPct == null
+                        ? "—"
+                        : formatPct(ops.weekly.reincidenciaPct, 1)
+                    }
+                    hint={
+                      ops?.weekly.reincidenciaPct == null
+                        ? "sem ocorrências registradas nos últimos 7 dias"
+                        : `${formatInt(ops.weekly.repetidas)} repetidas · ${formatInt(ops.weekly.novasUnicas)} novas`
+                    }
+                    tone={
+                      ops?.weekly.reincidenciaPct == null
+                        ? undefined
+                        : ops.weekly.reincidenciaPct > targets.reincidenciaMaxPct
+                          ? "destructive"
+                          : "success"
+                    }
+                    target={`alerta acima de ${targets.reincidenciaMaxPct}%`}
+                    status={
+                      ops?.weekly.reincidenciaPct == null
+                        ? undefined
+                        : statusMax(ops.weekly.reincidenciaPct, targets.reincidenciaMaxPct)
+                    }
+                  />
+                )}
+                {preferences.kpis.weeklySla && (
+                  <Kpi
+                    label="% de ocorrências resolvidas dentro do SLA"
+                    value={
+                      ops?.weekly.resolvidasDentroSlaPct == null
+                        ? "—"
+                        : formatPct(ops.weekly.resolvidasDentroSlaPct, 1)
+                    }
+                    hint={
+                      ops?.weekly.resolvidas
+                        ? `${formatInt(ops.weekly.resolvidasDentroSla)} de ${formatInt(ops.weekly.resolvidas)} resolvidas em até ${targets.resolucaoSlaHoras}h úteis`
+                        : "sem resoluções mensuráveis na semana"
+                    }
+                    tone={
+                      ops?.weekly.resolvidasDentroSlaPct == null
+                        ? undefined
+                        : ops.weekly.resolvidasDentroSlaPct > targets.resolvidasSlaMinPct
+                          ? "success"
+                          : "destructive"
+                    }
+                    target={`meta > ${targets.resolvidasSlaMinPct}%`}
+                    status={
+                      ops?.weekly.resolvidasDentroSlaPct == null
+                        ? undefined
+                        : ops.weekly.resolvidasDentroSlaPct > targets.resolvidasSlaMinPct
+                          ? "ok"
+                          : "bad"
+                    }
+                  />
+                )}
+                {preferences.kpis.weeklyDelinquent && (
+                  <Kpi
+                    label="Nº de contratos inadimplentes"
+                    value={formatInt(ops?.weekly.inadimplentes ?? 0)}
+                    hint={`${formatInt(ops?.weekly.inadimplentesSemanaAnterior ?? 0)} há 7 dias · ${(ops?.weekly.inadimplentesDelta ?? 0) > 0 ? "+" : ""}${formatInt(ops?.weekly.inadimplentesDelta ?? 0)} na tendência`}
+                    tone={(ops?.weekly.inadimplentesDelta ?? 0) > 0 ? "destructive" : "success"}
+                  />
+                )}
+              </div>
+            </>
+          )}
 
-          {/* === KPIs mensais (cadência 5.3) === */}
-          <SectionTitle
-            title="KPIs mensais"
-            subtitle="Tendência estrutural da reincidência consolidada do mês"
-          />
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            <Kpi
-              label="Taxa de reincidência consolidada do mês"
-              value={formatPct(reincMensalAtual?.reincidenciaPct ?? 0, 1)}
-              hint={
-                reincMensalAtual
-                  ? `${reincMensalAtual.label} · média móvel 3m ${formatPct(reincMensalAtual.mm3, 1)}${reincMensalAtual.deltaMm3 == null ? "" : ` · ${reincMensalAtual.deltaMm3 > 0 ? "+" : ""}${reincMensalAtual.deltaMm3.toFixed(1)} pp`}`
-                  : "sem dados"
-              }
-              tone={
-                reincMensalAtual?.deltaMm3 == null
-                  ? undefined
-                  : reincMensalAtual.deltaMm3 > 0
-                    ? "destructive"
-                    : "success"
-              }
-              target="alerta se a média móvel de 3 meses subir"
-              status={
-                reincMensalAtual?.deltaMm3 == null
-                  ? undefined
-                  : reincMensalAtual.deltaMm3 > 0
-                    ? "bad"
-                    : "ok"
-              }
-            />
-          </div>
+          {preferences.kpis.monthlyRecurrence && (
+            <>
+              <SectionTitle
+                title="KPIs mensais"
+                subtitle="Tendência estrutural da reincidência consolidada do mês"
+              />
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <Kpi
+                  label="Taxa de reincidência consolidada do mês"
+                  value={formatPct(reincMensalAtual?.reincidenciaPct ?? 0, 1)}
+                  hint={
+                    reincMensalAtual
+                      ? `${reincMensalAtual.label} · média móvel 3m ${formatPct(reincMensalAtual.mm3, 1)}${reincMensalAtual.deltaMm3 == null ? "" : ` · ${reincMensalAtual.deltaMm3 > 0 ? "+" : ""}${reincMensalAtual.deltaMm3.toFixed(1)} pp`}`
+                      : "sem dados"
+                  }
+                  tone={
+                    reincMensalAtual?.deltaMm3 == null
+                      ? undefined
+                      : reincMensalAtual.deltaMm3 > 0
+                        ? "destructive"
+                        : "success"
+                  }
+                  target="alerta se a média móvel de 3 meses subir"
+                  status={
+                    reincMensalAtual?.deltaMm3 == null
+                      ? undefined
+                      : reincMensalAtual.deltaMm3 > 0
+                        ? "bad"
+                        : "ok"
+                  }
+                />
+              </div>
+            </>
+          )}
 
-          {/* === KPIs anuais (cadência 5.4) === */}
-          <SectionTitle
-            title="KPIs anuais"
-            subtitle={
-              ytdLabel
-                ? `Comparação do acumulado até ${ytdLabel} contra o mesmo período do ano anterior`
-                : "Crescimento da carteira, redução de incidentes e prêmio emitido"
-            }
-          />
-          <div className="bento">
-            <Kpi
-              label="Crescimento da carteira Olé no ano (nº de contratos e prêmio emitido)"
-              value={
-                crescimentoCarteira === null && crescimentoPremio === null
-                  ? "—"
-                  : `${crescimentoCarteira === null ? "—" : formatPct(crescimentoCarteira, 1)} contratos · ${crescimentoPremio === null ? "—" : formatPct(crescimentoPremio, 1)} prêmio`
-              }
-              hint={
-                !yearCur || !yearPrev
-                  ? "histórico insuficiente"
-                  : `${yearCur.year}: ${formatInt(yearCur.contratosYtd)} contratos · ${formatUSD(yearCur.premioEmitidoYtdUsd, { maximumFractionDigits: 0 })} emitidos (YTD ${ytdLabel})`
-              }
-              tone={
-                crescimentoCarteira === null && crescimentoPremio === null
-                  ? undefined
-                  : (crescimentoCarteira ?? 0) >= 0 && (crescimentoPremio ?? 0) >= 0
-                    ? "success"
-                    : "destructive"
-              }
-              target="comparar com a meta comercial definida com a Olé"
-            />
-            <Kpi
-              label="Redução ano a ano de incidentes críticos"
-              value={reducaoIncidentes === null ? "—" : formatPct(reducaoIncidentes, 1)}
-              hint={
-                reducaoIncidentes === null || !yearCur || !yearPrev
-                  ? "histórico insuficiente"
-                  : `${formatInt(yearPrev.criticosYtd)} → ${formatInt(yearCur.criticosYtd)} críticos distintos (YTD ${ytdLabel})`
-              }
-              tone={
-                reducaoIncidentes === null
-                  ? undefined
-                  : reducaoIncidentes > 0
-                    ? "success"
-                    : "destructive"
-              }
-              target="meta: queda em relação ao ano anterior"
-              status={reducaoIncidentes === null ? undefined : reducaoIncidentes > 0 ? "ok" : "bad"}
-            />
-          </div>
+          {(preferences.kpis.yearlyPortfolioGrowth || preferences.kpis.yearlyCriticalReduction) && (
+            <>
+              <SectionTitle
+                title="KPIs anuais"
+                subtitle={
+                  ytdLabel
+                    ? `Comparação do acumulado até ${ytdLabel} contra o mesmo período do ano anterior`
+                    : "Crescimento da carteira, redução de incidentes e prêmio emitido"
+                }
+              />
+              <div className="bento">
+                {preferences.kpis.yearlyPortfolioGrowth && (
+                  <Kpi
+                    label="Crescimento da carteira Olé no ano (nº de contratos e prêmio emitido)"
+                    value={
+                      crescimentoCarteira === null && crescimentoPremio === null
+                        ? "—"
+                        : `${crescimentoCarteira === null ? "—" : formatPct(crescimentoCarteira, 1)} contratos · ${crescimentoPremio === null ? "—" : formatPct(crescimentoPremio, 1)} prêmio`
+                    }
+                    hint={
+                      !yearCur || !yearPrev
+                        ? "histórico insuficiente"
+                        : `${yearCur.year}: ${formatInt(yearCur.contratosYtd)} contratos · ${formatUSD(yearCur.premioEmitidoYtdUsd, { maximumFractionDigits: 0 })} emitidos (YTD ${ytdLabel})`
+                    }
+                    tone={
+                      crescimentoCarteira === null && crescimentoPremio === null
+                        ? undefined
+                        : (crescimentoCarteira ?? 0) >= 0 && (crescimentoPremio ?? 0) >= 0
+                          ? "success"
+                          : "destructive"
+                    }
+                    target="comparar com a meta comercial definida com a Olé"
+                  />
+                )}
+                {preferences.kpis.yearlyCriticalReduction && (
+                  <Kpi
+                    label="Redução ano a ano de incidentes críticos"
+                    value={reducaoIncidentes === null ? "—" : formatPct(reducaoIncidentes, 1)}
+                    hint={
+                      reducaoIncidentes === null || !yearCur || !yearPrev
+                        ? "histórico insuficiente"
+                        : `${formatInt(yearPrev.criticosYtd)} → ${formatInt(yearCur.criticosYtd)} críticos distintos (YTD ${ytdLabel})`
+                    }
+                    tone={
+                      reducaoIncidentes === null
+                        ? undefined
+                        : reducaoIncidentes > 0
+                          ? "success"
+                          : "destructive"
+                    }
+                    target="meta: queda em relação ao ano anterior"
+                    status={
+                      reducaoIncidentes === null ? undefined : reducaoIncidentes > 0 ? "ok" : "bad"
+                    }
+                  />
+                )}
+              </div>
+            </>
+          )}
 
           <div ref={chartsRef} className="space-y-6">
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
               <ChartCard
                 className="lg:col-span-2"
                 title="Tendência de runs"
+                visible={preferences.charts.runTrend}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Tendência de runs"]}
                 subtitle="Aprovados vs reprovados nas últimas 12 auditorias"
               >
@@ -572,6 +650,8 @@ function AnalyticsPage() {
 
               <ChartCard
                 title="Severidade"
+                visible={preferences.charts.severity}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Severidade"]}
                 subtitle="Distribuição na última auditoria"
               >
@@ -605,6 +685,8 @@ function AnalyticsPage() {
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               <ChartCard
                 title="Conformidade ao longo do tempo"
+                visible={preferences.charts.conformity}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Conformidade ao longo do tempo"]}
                 subtitle="% aprovado por run"
               >
@@ -643,6 +725,8 @@ function AnalyticsPage() {
 
               <ChartCard
                 title="Volume processado"
+                visible={preferences.charts.processedVolume}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Volume processado"]}
                 subtitle="Apólices auditadas por run"
               >
@@ -667,6 +751,8 @@ function AnalyticsPage() {
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               <ChartCard
                 title="Top 10 tipos de erro"
+                visible={preferences.charts.errorTypes}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Top 10 tipos de erro"]}
                 subtitle="Última auditoria"
               >
@@ -700,6 +786,8 @@ function AnalyticsPage() {
 
               <ChartCard
                 title="Findings por mês de vigência"
+                visible={preferences.charts.findingsByMonth}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Findings por mês de vigência"]}
                 subtitle="Distribuição temporal das inconsistências"
               >
@@ -727,6 +815,8 @@ function AnalyticsPage() {
 
             <ChartCard
               title="Dinheiro pago e repasse Excelsior (USD) por mês"
+              visible={preferences.charts.revenue}
+              hideWhenEmpty={preferences.hideEmptyCharts}
               empty={!hasData["Receita Excelsior (USD)"]}
               subtitle={`Competência pelo mês de emissão · somente documentos ativos com quitação total · Total Repasse = Carregamento + Prêmio Direto + PIS/COFINS, conforme o Mapa de Repasses · Total: ${formatUSD(repasseTotals.excelsiorLiquido, { maximumFractionDigits: 0 })} · Média/mês: ${formatUSD(repasseAvg, { maximumFractionDigits: 0 })} · ${repasse.length} competências`}
             >
@@ -863,6 +953,8 @@ function AnalyticsPage() {
 
             <ChartCard
               title="Heatmap · tipo de erro × runs"
+              visible={preferences.charts.heatmap}
+              hideWhenEmpty={preferences.hideEmptyCharts}
               empty={!hasData["Heatmap · tipo de erro × runs"]}
               subtitle="Intensidade de inconsistências por tipo nas últimas runs"
             >
@@ -872,6 +964,8 @@ function AnalyticsPage() {
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               <ChartCard
                 title="Apólices mais problemáticas"
+                visible={preferences.charts.problemPolicies}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Apólices mais problemáticas"]}
                 subtitle={`Top ${apoliceRank.length} por nº de inconsistências`}
               >
@@ -924,6 +1018,8 @@ function AnalyticsPage() {
 
               <ChartCard
                 title="Top endossos com inconsistências"
+                visible={preferences.charts.problemEndorsements}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Top endossos com inconsistências"]}
                 subtitle="Endossos que mais acumulam findings"
               >
@@ -966,6 +1062,8 @@ function AnalyticsPage() {
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               <ChartCard
                 title="Carteira por nº de endossos"
+                visible={preferences.charts.portfolioEndorsements}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Carteira por nº de endossos"]}
                 subtitle="Quantas alterações cada apólice acumulou"
               >
@@ -992,6 +1090,8 @@ function AnalyticsPage() {
 
               <ChartCard
                 title="Apólices emitidas por mês"
+                visible={preferences.charts.policiesIssued}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Apólices emitidas por mês"]}
                 subtitle={`${formatInt(totalApolices)} apólices em ${issuances.filter((i) => i.apolices > 0).length} meses`}
               >
@@ -1029,6 +1129,8 @@ function AnalyticsPage() {
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
               <ChartCard
                 title="Endossos emitidos por mês"
+                visible={preferences.charts.endorsementsIssued}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Endossos emitidos por mês"]}
                 subtitle={`${formatInt(totalEndossos)} endossos em ${issuances.filter((i) => i.endossosTotal > 0).length} meses`}
               >
@@ -1064,6 +1166,8 @@ function AnalyticsPage() {
 
               <ChartCard
                 title="Emissões por mês e por tipo"
+                visible={preferences.charts.issuancesByType}
+                hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Emissões por mês e por tipo"]}
                 subtitle="Apólices e endossos (A, B, C, D) lado a lado"
               >
@@ -1127,11 +1231,8 @@ function AnalyticsPage() {
                 {hiddenCharts.length === 1
                   ? "1 gráfico oculto"
                   : `${hiddenCharts.length} gráficos ocultos`}{" "}
-                por falta de informação relevante: {hiddenCharts.join(", ")}.{" "}
-                <Link to="/configuracoes" className="underline hover:text-foreground">
-                  Ajustar em Configurações
-                </Link>
-                .
+                por falta de informação relevante: {hiddenCharts.join(", ")}. Use o botão
+                Personalizar para alterar esse comportamento.
               </span>
             </div>
           )}
@@ -1246,6 +1347,8 @@ function ChartCard({
   subtitle,
   className,
   empty,
+  visible,
+  hideWhenEmpty,
   children,
 }: {
   title: string;
@@ -1253,10 +1356,11 @@ function ChartCard({
   className?: string;
   /** true quando o gráfico não tem dados relevantes */
   empty?: boolean;
+  visible: boolean;
+  hideWhenEmpty: boolean;
   children: React.ReactNode;
 }) {
-  const { prefs } = useChartPrefs();
-  if (empty && prefs.hideEmptyCharts) return null;
+  if (!visible || (empty && hideWhenEmpty)) return null;
 
   return (
     <div data-export="chart" data-title={title} className={`panel p-5 ${className ?? ""}`}>

@@ -87,15 +87,15 @@ function OperacaoPage() {
     criticasAbertas: 0,
     mediaMovel: 0,
     desvioPct: 0,
-    primeiraRespostaCriticaHoras: null,
-    criticasRespondidas: 0,
+    primeiraRespostaHoras: null,
+    ocorrenciasRespondidas: 0,
   };
   const weekly = operationKpis?.weekly ?? {
     runs: 0,
     total: 0,
     repetidas: 0,
     novasUnicas: 0,
-    reincidenciaPct: 0,
+    reincidenciaPct: null,
     resolvidas: 0,
     resolvidasDentroSla: 0,
     resolvidasDentroSlaPct: null,
@@ -242,25 +242,25 @@ function OperacaoPage() {
             />
             <MetricTile
               icon={CheckCircle2}
-              label="Tempo até a primeira resposta crítica"
+              label="Tempo até a primeira resposta"
               value={
-                daily.primeiraRespostaCriticaHoras == null
+                daily.primeiraRespostaHoras == null
                   ? "—"
-                  : daily.primeiraRespostaCriticaHoras === 0
+                  : daily.primeiraRespostaHoras === 0
                     ? "0min"
-                    : formatDuracaoHoras(daily.primeiraRespostaCriticaHoras)
+                    : formatDuracaoHoras(daily.primeiraRespostaHoras)
               }
               tone={
-                daily.primeiraRespostaCriticaHoras == null
+                daily.primeiraRespostaHoras == null
                   ? "default"
-                  : daily.primeiraRespostaCriticaHoras < targets.primeiraRespostaCriticaMaxHoras
+                  : daily.primeiraRespostaHoras < targets.primeiraRespostaCriticaMaxHoras
                     ? "success"
                     : "destructive"
               }
               hint={
-                daily.criticasRespondidas > 0
-                  ? `${formatInt(daily.criticasRespondidas)} respondida(s) hoje · meta < ${targets.primeiraRespostaCriticaMaxHoras}h úteis`
-                  : "sem respostas críticas registradas hoje"
+                daily.ocorrenciasRespondidas > 0
+                  ? `${formatInt(daily.ocorrenciasRespondidas)} ocorrência(s) respondida(s) hoje · meta < ${targets.primeiraRespostaCriticaMaxHoras}h úteis`
+                  : "sem respostas registradas hoje"
               }
             />
           </>
@@ -361,9 +361,19 @@ function OperacaoPage() {
           <div className="grid gap-px border-t border-border bg-border sm:grid-cols-3">
             <TrendStat
               label="Taxa de reincidência · 7 dias"
-              value={formatPct(weekly.reincidenciaPct)}
-              hint={`${formatInt(weekly.repetidas)} repetidas · ${formatInt(weekly.novasUnicas)} novas`}
-              tone={weekly.reincidenciaPct > targets.reincidenciaMaxPct ? "destructive" : "success"}
+              value={weekly.reincidenciaPct == null ? "—" : formatPct(weekly.reincidenciaPct)}
+              hint={
+                weekly.reincidenciaPct == null
+                  ? "sem ocorrências nos últimos 7 dias"
+                  : `${formatInt(weekly.repetidas)} repetidas · ${formatInt(weekly.novasUnicas)} novas`
+              }
+              tone={
+                weekly.reincidenciaPct == null
+                  ? "default"
+                  : weekly.reincidenciaPct > targets.reincidenciaMaxPct
+                    ? "destructive"
+                    : "success"
+              }
             />
             <TrendStat
               label="Resolvidas dentro do SLA"

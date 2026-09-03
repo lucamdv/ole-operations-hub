@@ -39,7 +39,7 @@ export const getOperationKpis = createServerFn({ method: "GET" })
     const {
       countDelinquentContracts,
       deriveDaily,
-      deriveFirstCriticalResponse,
+      deriveFirstResponse,
       deriveMonthlyReincidencia,
       deriveResolutionSla,
       deriveWeekly,
@@ -126,7 +126,7 @@ export const getOperationKpis = createServerFn({ method: "GET" })
         .order("resolved_at", { ascending: false }),
       supabaseAdmin
         .from("audit_correction_responses")
-        .select("nivel, detected_at, responded_at")
+        .select("detected_at, responded_at")
         .eq("mode", "production")
         .gte("responded_at", new Date(now - 31 * 86_400_000).toISOString())
         .order("responded_at", { ascending: false }),
@@ -139,12 +139,12 @@ export const getOperationKpis = createServerFn({ method: "GET" })
     if (billingResult.error) throw new Error(billingResult.error.message);
 
     const daily = deriveDaily(runsAsc, byRun, now);
-    const firstResponse = deriveFirstCriticalResponse(
+    const firstResponse = deriveFirstResponse(
       (responseResult.data ?? []) as CorrectionResponseLite[],
       daily.referenceDate,
     );
-    daily.primeiraRespostaCriticaHoras = firstResponse.mediaHoras;
-    daily.criticasRespondidas = firstResponse.respondidas;
+    daily.primeiraRespostaHoras = firstResponse.mediaHoras;
+    daily.ocorrenciasRespondidas = firstResponse.respondidas;
 
     const weekly = deriveWeekly(runsAsc, byRun, 7, now);
     const resolutionSla = deriveResolutionSla(

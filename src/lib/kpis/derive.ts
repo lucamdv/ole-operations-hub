@@ -10,7 +10,7 @@ export interface KpiTargets {
   criticasAbertasMax: number;
   /** Desvio (%) acima da média móvel que caracteriza pico de novas inconsistências. */
   picoDesvioPct: number;
-  /** Tempo máximo até a primeira resposta de uma ocorrência crítica, em horas úteis. */
+  /** Tempo máximo até a primeira resposta de uma ocorrência, em horas úteis. */
   primeiraRespostaCriticaMaxHoras: number;
   /** Prazo padrão para resolver uma ocorrência, em horas úteis. */
   resolucaoSlaHoras: number;
@@ -64,10 +64,10 @@ export interface DailyKpis {
   mediaMovel: number;
   /** Desvio (%) do dia sobre a média móvel. */
   desvioPct: number;
-  /** Média do tempo útil até a primeira resposta das críticas respondidas no dia. */
-  primeiraRespostaCriticaHoras: number | null;
-  /** Quantidade de ocorrências críticas respondidas no dia. */
-  criticasRespondidas: number;
+  /** Média do tempo útil até a primeira resposta das ocorrências respondidas no dia. */
+  primeiraRespostaHoras: number | null;
+  /** Quantidade de ocorrências respondidas no dia. */
+  ocorrenciasRespondidas: number;
 }
 
 export interface WeeklyKpis {
@@ -75,7 +75,8 @@ export interface WeeklyKpis {
   total: number;
   repetidas: number;
   novasUnicas: number;
-  reincidenciaPct: number;
+  /** null quando não houve nenhuma ocorrência na janela semanal. */
+  reincidenciaPct: number | null;
   resolvidas: number;
   resolvidasDentroSla: number;
   resolvidasDentroSlaPct: number | null;
@@ -185,7 +186,6 @@ export function businessHoursBetween(from: string, to: string): number | null {
 }
 
 export interface CorrectionResponseLite {
-  nivel: string | null;
   detected_at: string;
   responded_at: string;
 }
@@ -203,16 +203,12 @@ export interface BillingSlaLite {
   data_quitacao: string | null;
 }
 
-export function deriveFirstCriticalResponse(
+export function deriveFirstResponse(
   rows: CorrectionResponseLite[],
   referenceDate: string,
 ): { mediaHoras: number | null; respondidas: number } {
   const hours = rows
-    .filter(
-      (row) =>
-        (row.nivel ?? "").trim().toUpperCase() === "ERRO" &&
-        fortalezaDateKey(row.responded_at) === referenceDate,
-    )
+    .filter((row) => fortalezaDateKey(row.responded_at) === referenceDate)
     .map((row) => businessHoursBetween(row.detected_at, row.responded_at))
     .filter((value): value is number => value !== null);
 
@@ -310,8 +306,8 @@ export function deriveDaily(
     criticasAbertas: new Set(latestFindings.filter(isCritical).map(findingKey)).size,
     mediaMovel: Math.round(mediaMovel * 10) / 10,
     desvioPct: Math.round(desvioPct * 10) / 10,
-    primeiraRespostaCriticaHoras: null,
-    criticasRespondidas: 0,
+    primeiraRespostaHoras: null,
+    ocorrenciasRespondidas: 0,
   };
 }
 
@@ -331,7 +327,7 @@ export function deriveWeekly(
       total: 0,
       repetidas: 0,
       novasUnicas: 0,
-      reincidenciaPct: 0,
+      reincidenciaPct: null,
       resolvidas: 0,
       resolvidasDentroSla: 0,
       resolvidasDentroSlaPct: null,
@@ -370,7 +366,7 @@ export function deriveWeekly(
     total,
     repetidas,
     novasUnicas,
-    reincidenciaPct: total > 0 ? Math.round((repetidas / total) * 1000) / 10 : 0,
+    reincidenciaPct: total > 0 ? Math.round((repetidas / total) * 1000) / 10 : null,
     resolvidas: 0,
     resolvidasDentroSla: 0,
     resolvidasDentroSlaPct: null,

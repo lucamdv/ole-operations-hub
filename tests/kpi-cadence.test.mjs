@@ -4,7 +4,7 @@ import {
   businessHoursBetween,
   countDelinquentContracts,
   deriveDaily,
-  deriveFirstCriticalResponse,
+  deriveFirstResponse,
   deriveMonthlyReincidencia,
   deriveResolutionSla,
   deriveWeekly,
@@ -63,8 +63,8 @@ test("datas de referência respeitam o dia civil de Fortaleza", () => {
   assert.equal(ytdCutoff(instant), "12-31");
 });
 
-test("primeira resposta crítica usa a média em horas úteis", () => {
-  const response = deriveFirstCriticalResponse(
+test("primeira resposta considera qualquer nível e usa a média em horas úteis", () => {
+  const response = deriveFirstResponse(
     [
       {
         nivel: "ERRO",
@@ -79,7 +79,17 @@ test("primeira resposta crítica usa a média em horas úteis", () => {
     ],
     "2026-08-28",
   );
-  assert.deepEqual(response, { mediaHoras: 2, respondidas: 1 });
+  assert.deepEqual(response, { mediaHoras: 3, respondidas: 2 });
+});
+
+test("reincidência semanal fica sem base quando não há ocorrências", () => {
+  const weekly = deriveWeekly(
+    [{ id: "r-empty", at: "2026-08-28T15:00:00.000Z" }],
+    new Map([["r-empty", []]]),
+    7,
+  );
+  assert.equal(weekly.total, 0);
+  assert.equal(weekly.reincidenciaPct, null);
 });
 
 test("SLA semanal considera apenas resoluções mensuráveis e não reabertas", () => {

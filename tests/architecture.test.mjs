@@ -160,17 +160,22 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
 
 test("analytics exibe somente os KPIs definidos para cada cadência", async () => {
   const analytics = await read("src/routes/_authenticated/analytics.tsx");
+  const analyticsPersonalizer = await read("src/components/analytics/analytics-personalizer.tsx");
+  const profileSettings = await read("src/components/settings/perfil-tab.tsx");
   const operation = await read("src/routes/_authenticated/operacao.tsx");
   const kpis = await read("src/lib/kpis/derive.ts");
   const kpiServer = await read("src/lib/kpis.functions.ts");
   const migration = await read(
     "supabase/migrations/20260828210350_add_audit_correction_responses.sql",
   );
+  const responseModeMigration = await read(
+    "supabase/migrations/20260903155341_separate_correction_response_modes.sql",
+  );
 
   for (const label of [
     "Nº de inconsistências novas detectadas",
     "Nº de ocorrências críticas em aberto",
-    "Tempo até a primeira resposta em ocorrência crítica",
+    "Tempo até a primeira resposta em ocorrência",
     "Taxa de reincidência (% ocorrências repetidas vs. novas)",
     "% de ocorrências resolvidas dentro do SLA",
     "Nº de contratos inadimplentes",
@@ -192,7 +197,7 @@ test("analytics exibe somente os KPIs definidos para cada cadência", async () =
     assert.doesNotMatch(analytics, new RegExp(removed.replace(/[()%]/g, "\\$&")));
   }
 
-  assert.match(operation, /Tempo até a primeira resposta crítica/);
+  assert.match(operation, /Tempo até a primeira resposta/);
   assert.doesNotMatch(operation, /Resolvidas no ciclo|Velocidade de resolução/);
   assert.match(kpis, /businessHoursBetween/);
   assert.match(kpis, /resolvidasDentroSlaPct/);
@@ -200,6 +205,11 @@ test("analytics exibe somente os KPIs definidos para cada cadência", async () =
   assert.match(migration, /CREATE TABLE public\.audit_correction_responses/);
   assert.match(migration, /ENABLE ROW LEVEL SECURITY/);
   assert.match(migration, /REVOKE ALL.*anon, authenticated/);
+  assert.match(responseModeMigration, /UNIQUE \(incident_key, detected_at, mode\)/);
+  assert.match(kpiServer, /\.eq\("mode", "production"\)/);
+  assert.match(analyticsPersonalizer, /Personalizar Analytics/);
+  assert.match(analyticsPersonalizer, /Ocultar gráficos sem dados suficientes/);
+  assert.doesNotMatch(profileSettings, /Visualização de gráficos/);
 });
 
 test("cliente do MOTOR mantém credenciais apenas no servidor e usa HTTPS", async () => {

@@ -43,8 +43,8 @@ const FIELDS: Array<{
   },
   {
     key: "primeiraRespostaCriticaMaxHoras",
-    label: "Primeira resposta crítica",
-    desc: "Prazo máximo para a primeira resposta a uma ocorrência crítica.",
+    label: "Primeira resposta",
+    desc: "Prazo máximo para a primeira resposta a qualquer ocorrência.",
     suffix: "horas úteis",
     min: 1,
     max: 72,
