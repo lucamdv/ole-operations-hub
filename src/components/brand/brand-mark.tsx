@@ -1,34 +1,18 @@
-import { useState } from "react";
-import olexAsset from "@/assets/olex.png.asset.json";
 import { cn } from "@/lib/utils";
 
+const LOGO_VIEWBOX = "70 163 371 185";
+const LOGO_ASPECT_RATIO = 371 / 185;
+
 export function BrandMark({ className, height = 32 }: { className?: string; height?: number }) {
-  const [imageFailed, setImageFailed] = useState(false);
-
-  if (imageFailed) {
-    return (
-      <span
-        role="img"
-        aria-label="Oléx"
-        style={{ height, lineHeight: `${height}px`, fontSize: Math.max(18, height * 0.62) }}
-        className={cn(
-          "inline-flex select-none items-center font-display font-semibold tracking-[-0.055em] text-primary",
-          className,
-        )}
-      >
-        OLÉX
-      </span>
-    );
-  }
-
   return (
-    <img
-      src={olexAsset.url}
-      alt="Oléx"
-      style={{ height, width: "auto" }}
-      className={cn("object-contain select-none", className)}
-      onError={() => setImageFailed(true)}
-      draggable={false}
-    />
+    <svg
+      viewBox={LOGO_VIEWBOX}
+      role="img"
+      aria-label="OléX"
+      style={{ height, width: height * LOGO_ASPECT_RATIO }}
+      className={cn("shrink-0 select-none", className)}
+    >
+      <image href="/icon-512.png" width="512" height="512" />
+    </svg>
   );
 }
