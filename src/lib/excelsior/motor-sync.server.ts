@@ -1,6 +1,7 @@
 import { ExcelsiorMotorClient } from "./motor-client.server";
 import {
   basePolicyNumber,
+  billingAmountFromIssuanceProposal,
   billingSettlementWindow,
   extractBasePolicies,
   flattenApiItems,
@@ -9,6 +10,7 @@ import {
   planBillingRefresh,
   selectMissingEndorsementDocuments,
   type JsonRecord,
+  type NormalizedBillingItem,
 } from "./motor-sync.core";
 
 class SyncCancelledError extends Error {
@@ -77,6 +79,7 @@ async function assertRunActive(runId: string) {
 
 interface BillingContext {
   window: { start: string; end: string };
+  valueBackfillItems: NormalizedBillingItem[];
   valueBackfillDocuments: string[];
   openInstallments: Array<{
     numero_documento: string;
@@ -113,28 +116,77 @@ async function loadBillingContext(syncStartedAt: Date): Promise<BillingContext> 
   const { data: billing, error: billingError } = await supabaseAdmin
     .from("policy_billing")
     .select(
-      "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, data_vencimento, status_pagamento, situacao_emissao, valor_total",
+      "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, data_vencimento, data_quitacao, status_pagamento, situacao_emissao, valor_total",
     );
   if (billingError) throw billingError;
 
-  const openInstallments: BillingContext["openInstallments"] = [];
-  const valueBackfillDocuments = new Set<string>();
-  for (const row of (billing ?? []) as Array<{
+  type BillingRow = {
     numero_apolice: string;
     numero_endosso: string;
     numero_parcela: string;
     id_parcela_seguradora: string | null;
     numero_proposta: string | null;
     data_vencimento: string | null;
+    data_quitacao: string | null;
     status_pagamento: string | null;
     situacao_emissao: string | null;
     valor_total: number | null;
-  }>) {
+  };
+  const billingRows = (billing ?? []) as BillingRow[];
+  const missingValueRows = billingRows.filter(
+    (row) =>
+      (row.status_pagamento ?? "").trim().toLowerCase().startsWith("total") &&
+      row.valor_total == null,
+  );
+  const storedProposalByDocument = new Map<string, unknown>();
+  if (missingValueRows.length > 0) {
+    const policyNumbers = [...new Set(missingValueRows.map((row) => row.numero_apolice))];
+    const { data: endorsements, error: endorsementsError } = await supabaseAdmin
+      .from("endorsements")
+      .select("numero_apolice, numero_endosso, proposta")
+      .in("numero_apolice", policyNumbers);
+    if (endorsementsError) throw endorsementsError;
+    for (const endorsement of endorsements ?? []) {
+      const sequence = String(endorsement.numero_endosso)
+        .replace(/\D/g, "")
+        .slice(-6)
+        .padStart(6, "0");
+      storedProposalByDocument.set(
+        `${endorsement.numero_apolice.slice(0, -6)}${sequence}`,
+        endorsement.proposta,
+      );
+    }
+  }
+
+  const openInstallments: BillingContext["openInstallments"] = [];
+  const valueBackfillItems: NormalizedBillingItem[] = [];
+  const valueBackfillDocuments = new Set<string>();
+  for (const row of billingRows) {
     const payment = (row.status_pagamento ?? "").trim().toLowerCase();
     const endorsement = String(row.numero_endosso).replace(/\D/g, "").slice(-6).padStart(6, "0");
     const document = `${row.numero_apolice.slice(0, -6)}${endorsement}`;
     if (payment.startsWith("total") && row.valor_total == null) {
-      valueBackfillDocuments.add(document);
+      const storedAmount = billingAmountFromIssuanceProposal(
+        storedProposalByDocument.get(document),
+        row.numero_parcela,
+      );
+      if (storedAmount !== null) {
+        valueBackfillItems.push({
+          numero_documento: document,
+          numero_endosso: endorsement,
+          numero_parcela: row.numero_parcela,
+          id_parcela: row.id_parcela_seguradora,
+          numero_proposta: row.numero_proposta,
+          status_pagamento: row.status_pagamento ?? "Total",
+          situacao_emissao: row.situacao_emissao ?? "Ativa",
+          data_quitacao: row.data_quitacao,
+          data_vencimento: row.data_vencimento,
+          valor_total: storedAmount,
+          policy_installment_sequence: false,
+        });
+      } else {
+        valueBackfillDocuments.add(document);
+      }
     }
     if (!payment.startsWith("abert")) continue;
     openInstallments.push({
@@ -159,6 +211,7 @@ async function loadBillingContext(syncStartedAt: Date): Promise<BillingContext> 
 
   return {
     window,
+    valueBackfillItems,
     valueBackfillDocuments: [...valueBackfillDocuments],
     openInstallments,
   };
@@ -265,6 +318,7 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
 
   let settledResponse: unknown = { items: [] };
   let settledListSucceeded = false;
+  const settledValues = new Set<string>();
   try {
     settledResponse = await client.listSettledBilling(context.window.start, context.window.end);
     settledListSucceeded = true;
@@ -273,6 +327,11 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
     });
     if (flattenApiItems(settledResponse).length > settled.length) {
       throw new Error("A listagem de quitadas contém parcela(s) sem identidade persistível.");
+    }
+    for (const item of settled) {
+      if (item.valor_total !== null) {
+        settledValues.add(`${item.numero_documento}#${item.numero_parcela}`);
+      }
     }
     const result = await persistBillingSyncPayload(
       runId,
@@ -287,6 +346,19 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
       documentNumber: `__SETTLED_WINDOW__#${context.window.start}#${context.window.end}`,
       message: errorMessage("Listagem de parcelas quitadas", error),
     });
+  }
+  await assertRunActive(runId);
+
+  const historicalValueBackfills = context.valueBackfillItems.filter(
+    (item) => !settledValues.has(`${item.numero_documento}#${item.numero_parcela}`),
+  );
+  if (historicalValueBackfills.length > 0) {
+    const result = await persistBillingSyncPayload(
+      runId,
+      { atualizacoes: historicalValueBackfills },
+      { finalizeLeg: false },
+    );
+    persisted += Number(result.upserted ?? 0);
   }
   await assertRunActive(runId);
 
@@ -329,6 +401,7 @@ async function syncBilling(runId: string, client: ExcelsiorMotorClient, syncStar
     abertasEmLote: flattenApiItems(openResponse).length,
     listagemAbertasConcluida: openListSucceeded,
     consultasIndividuais: detailDocuments.length,
+    valoresHistoricosRecuperados: historicalValueBackfills.length,
     valoresPendentes: context.valueBackfillDocuments.length,
     detalhesEnfileirados: detailDocuments.length,
     listagemQuitadasConcluida: settledListSucceeded,

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   basePolicyNumber,
+  billingAmountFromIssuanceProposal,
   billingPersistenceIdentity,
   billingSettlementWindow,
   buildEndorsementDocumentNumbers,
@@ -252,6 +253,35 @@ test("normaliza valor_total da cobrança para persistência", () => {
     { defaultPaymentStatus: "Total" },
   );
   assert.equal(normalized.valor_total, 1234.56);
+});
+
+test("recupera valor histórico pela composição exata da emissão persistida", () => {
+  const amount = billingAmountFromIssuanceProposal(
+    {
+      endosso_A: {
+        proposta_endosso_A: {
+          proposta: {
+            pagamento: {
+              parcelas: [
+                {
+                  numero_parcela: 1,
+                  composicao_premio_parcela: [
+                    { valor_premio: "13.9467" },
+                    { valor_premio: "0.1330" },
+                    { valor_premio: "1.7434" },
+                    { valor_premio: "10.4601" },
+                    { valor_premio: "8.7168" },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+    "1",
+  );
+  assert.equal(amount, 35);
 });
 
 test("parcela comercial da apólice-base é persistida no endosso correspondente", () => {

@@ -72,6 +72,55 @@ export function normalizeBillingAmount(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/**
+ * Recupera o total exato de uma parcela a partir do JSON de emissão já
+ * persistido. É usado somente para documentos históricos que deixaram de ser
+ * expostos pela cobrança (por exemplo, endossos substituídos) antes de o banco
+ * passar a armazenar `valor_total`.
+ */
+export function billingAmountFromIssuanceProposal(
+  value: unknown,
+  installmentNumber?: string | null,
+): number | null {
+  const expectedInstallment = normalizeBillingInstallmentNumber(installmentNumber);
+  const candidates: Array<{ installment: string | null; total: number }> = [];
+  const visit = (current: unknown, depth = 0) => {
+    if (depth > 12) return;
+    if (Array.isArray(current)) {
+      for (const child of current) visit(child, depth + 1);
+      return;
+    }
+    if (!isJsonRecord(current)) return;
+
+    const composition = current.composicao_premio_parcela;
+    if (Array.isArray(composition)) {
+      let total = 0;
+      let hasAmount = false;
+      for (const component of composition) {
+        if (!isJsonRecord(component)) continue;
+        const amount = normalizeBillingAmount(component.valor_premio);
+        if (amount === null) continue;
+        total += amount;
+        hasAmount = true;
+      }
+      if (hasAmount) {
+        candidates.push({
+          installment: normalizeBillingInstallmentNumber(current.numero_parcela),
+          total: Math.round(total * 10_000) / 10_000,
+        });
+      }
+    }
+    for (const child of Object.values(current)) visit(child, depth + 1);
+  };
+  visit(value);
+
+  const exact = expectedInstallment
+    ? candidates.find((candidate) => candidate.installment === expectedInstallment)
+    : null;
+  if (exact) return exact.total;
+  return candidates.length === 1 ? candidates[0]!.total : null;
+}
+
 /** Canoniza sequenciais numéricos sem alterar identificadores alfanuméricos. */
 export function normalizeBillingInstallmentNumber(value: unknown): string | null {
   const text = normalizedText(value);

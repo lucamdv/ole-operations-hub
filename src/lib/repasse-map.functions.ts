@@ -165,11 +165,37 @@ export const generateRepasseMap = createServerFn({ method: "POST" })
           .filter((value): value is string => !!value),
       ),
     ];
+    const policyNumbers = [
+      ...new Set(documents.map((document) => `${document.slice(0, -6)}000000`)),
+    ];
+    const storedEmissionByDocument = new Map<string, unknown>();
+    if (policyNumbers.length > 0) {
+      const { data: storedEndorsements, error: storedEndorsementsError } = await supabaseAdmin
+        .from("endorsements")
+        .select("numero_apolice, numero_endosso, proposta")
+        .in("numero_apolice", policyNumbers);
+      if (storedEndorsementsError) throw storedEndorsementsError;
+      for (const endorsement of storedEndorsements ?? []) {
+        const sequence = String(endorsement.numero_endosso)
+          .replace(/\D/g, "")
+          .slice(-6)
+          .padStart(6, "0");
+        storedEmissionByDocument.set(
+          `${endorsement.numero_apolice.slice(0, -6)}${sequence}`,
+          endorsement.proposta,
+        );
+      }
+    }
     const warnings: string[] = [];
     const documentResponses = await mapWithConcurrency(documents, 6, async (document) => {
       try {
         return [document, await client.getIssuanceDocument(document)] as const;
       } catch (error) {
+        const storedEmission = storedEmissionByDocument.get(document);
+        if (storedEmission) {
+          warnings.push(`${document}: data de emissão recuperada do espelho local.`);
+          return [document, storedEmission] as const;
+        }
         warnings.push(
           `${document}: data de emissão indisponível (${error instanceof Error ? error.message : String(error)}).`,
         );

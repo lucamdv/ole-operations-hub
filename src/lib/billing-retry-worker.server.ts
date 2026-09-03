@@ -20,6 +20,22 @@ function settledWindow(documentNumber: string) {
   return match ? { start: match[1]!, end: match[2]! } : null;
 }
 
+async function hasMissingSettledValue(documentNumber: string) {
+  const digits = documentNumber.replace(/\D/g, "");
+  if (digits.length < 6) return false;
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data, error } = await supabaseAdmin
+    .from("policy_billing")
+    .select("id")
+    .eq("numero_apolice", `${digits.slice(0, -6)}000000`)
+    .eq("numero_endosso", digits.slice(-6))
+    .ilike("status_pagamento", "Total%")
+    .is("valor_total", null)
+    .limit(1);
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
 async function finishRecoveredRuns(runIds: Set<string>) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { markSyncLeg } = await import("@/lib/sync-legs.server");
@@ -114,6 +130,13 @@ export async function processBillingFallbacks(maxItems = 2) {
         { atualizacoes: updates },
         { finalizeLeg: false },
       );
+      if (
+        !window &&
+        fallback.numero_documento !== "__OPEN_INSTALLMENTS__" &&
+        (await hasMissingSettledValue(fallback.numero_documento))
+      ) {
+        throw new Error("A Excelsior respondeu sem valor_total para a parcela quitada.");
+      }
       if (window) await completeBillingReconciliation(window.start);
       await resolveBillingFallback(fallback.id, fallback.run_id, fallback.numero_documento);
       resolved += 1;
