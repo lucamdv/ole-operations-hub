@@ -9,6 +9,7 @@ import {
   buildEndorsementDocumentNumbers,
   dedupeBillingItems,
   extractBasePolicies,
+  isOpenActiveBillingState,
   normalizeBillingResponse,
   normalizeBillingInstallmentNumber,
   normalizeEmissionDocument,
@@ -17,6 +18,14 @@ import {
   selectBillingDocumentsToRefresh,
   shouldApplyBillingStatus,
 } from "../src/lib/excelsior/motor-sync.core.ts";
+
+test("fallback de abertas considera somente parcelas abertas com emissão ativa", () => {
+  assert.equal(isOpenActiveBillingState("Aberta", "Ativa"), true);
+  assert.equal(isOpenActiveBillingState("ABERTA", "ATIVO"), true);
+  assert.equal(isOpenActiveBillingState("Aberta", "Cancelada"), false);
+  assert.equal(isOpenActiveBillingState("Total", "Ativa"), false);
+  assert.equal(isOpenActiveBillingState("Aberta", null), false);
+});
 
 test("sequenciais numéricos de parcela têm uma identidade canônica", () => {
   assert.equal(normalizeBillingInstallmentNumber("0001"), "1");

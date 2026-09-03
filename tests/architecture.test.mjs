@@ -244,6 +244,7 @@ test("falha de cobrança entra em fila durável sem regravar dados locais antigo
   assert.doesNotMatch(source, /localFallback/);
   assert.match(source, /valueBackfillDocuments/);
   assert.match(source, /valueBackfillItems/);
+  assert.match(source, /isOpenActiveBillingState\(row\.status_pagamento, row\.situacao_emissao\)/);
   assert.match(source, /billingAmountFromIssuanceProposal/);
   assert.match(source, /detalhesEnfileirados: detailDocuments\.length/);
   assert.match(source, /Consulta individual transferida para recuperação automática/);

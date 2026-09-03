@@ -5,6 +5,7 @@ import {
   billingSettlementWindow,
   extractBasePolicies,
   flattenApiItems,
+  isOpenActiveBillingState,
   normalizeBillingResponse,
   normalizeEmissionDocument,
   planBillingRefresh,
@@ -188,7 +189,7 @@ async function loadBillingContext(syncStartedAt: Date): Promise<BillingContext> 
         valueBackfillDocuments.add(document);
       }
     }
-    if (!payment.startsWith("abert")) continue;
+    if (!isOpenActiveBillingState(row.status_pagamento, row.situacao_emissao)) continue;
     openInstallments.push({
       numero_documento: document,
       numero_parcela: row.numero_parcela,

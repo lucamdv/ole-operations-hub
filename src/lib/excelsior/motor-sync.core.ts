@@ -277,6 +277,14 @@ interface BillingState {
   issuanceStatus: string;
 }
 
+/** Parcela elegível para reconciliação de abertas: pagamento aberto e emissão ativa. */
+export function isOpenActiveBillingState(paymentStatus: unknown, issuanceStatus: unknown): boolean {
+  return (
+    normalizedText(paymentStatus).toLowerCase().startsWith("abert") &&
+    normalizedText(issuanceStatus).toLowerCase().startsWith("ativ")
+  );
+}
+
 function billingState(value: unknown): BillingState | null {
   const document = billingDocumentNumber(value);
   if (!document) return null;
