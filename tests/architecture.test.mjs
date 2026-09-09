@@ -212,6 +212,23 @@ test("analytics exibe somente os KPIs definidos para cada cadência", async () =
   assert.doesNotMatch(profileSettings, /Visualização de gráficos/);
 });
 
+test("analytics preserva exportação e adapta a grade aos gráficos visíveis", async () => {
+  const source = await read("src/routes/_authenticated/analytics.tsx");
+  const pairedGrids = source.match(/className="grid grid-cols-1 items-stretch[^"]+"/g) ?? [];
+  assert.equal(pairedGrids.length, 6);
+  for (const grid of pairedGrids) {
+    assert.ok(grid.includes("empty:hidden"), "grupos vazios não devem reservar espaço");
+    assert.ok(
+      grid.includes("[&>*:only-child]:col-span-full"),
+      "um gráfico sozinho deve ocupar a linha inteira",
+    );
+  }
+  assert.match(source, /data-export="chart"/);
+  assert.match(source, /if \(!visible \|\| \(empty && hideWhenEmpty\)\) return null/);
+  assert.match(source, /aria-label="Legenda dos tipos de emissão"/);
+  assert.match(source, /<Cell key=\{item.name\} fill=\{item.color\}/);
+});
+
 test("cliente do MOTOR mantém credenciais apenas no servidor e usa HTTPS", async () => {
   const source = await read("src/lib/excelsior/motor-client.server.ts");
   assert.match(source, /process\.env\.EXCELSIOR_API_USERNAME/);

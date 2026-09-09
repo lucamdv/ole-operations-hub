@@ -127,6 +127,15 @@ function AnalyticsPage() {
 
   const findings = latest?.findings ?? [];
   const sev = useMemo(() => countBySeverity(findings), [findings]);
+  const severityData = useMemo(
+    () =>
+      [
+        { name: "Erros", value: sev.erros, color: "var(--destructive)" },
+        { name: "Alertas", value: sev.alertas, color: "var(--warning)" },
+        { name: "Info", value: sev.infos, color: "var(--info)" },
+      ].filter((item) => item.value > 0),
+    [sev],
+  );
   const series = useMemo(() => runSeries(history).slice(-12), [history]);
   const errorTypes = useMemo(() => errorTypeBreakdown(findings).slice(0, 10), [findings]);
   const apoliceRank = useMemo(() => groupByApolice(findings).slice(0, 10), [findings]);
@@ -295,7 +304,7 @@ function AnalyticsPage() {
   const lastRunAt = latest?.run.data_auditoria ?? latest?.run.created_at;
 
   return (
-    <div className="space-y-6">
+    <div className="mx-auto w-full max-w-[1320px] space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -599,18 +608,17 @@ function AnalyticsPage() {
           )}
 
           <div ref={chartsRef} className="space-y-6">
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+            <div className="grid grid-cols-1 items-stretch gap-4 sm:gap-6 empty:hidden xl:grid-cols-2 [&>*:only-child]:col-span-full">
               <ChartCard
-                className="lg:col-span-2"
                 title="Tendência de runs"
                 visible={preferences.charts.runTrend}
                 hideWhenEmpty={preferences.hideEmptyCharts}
                 empty={!hasData["Tendência de runs"]}
                 subtitle="Aprovados vs reprovados nas últimas 12 auditorias"
               >
-                <div className="h-[210px] sm:h-[280px]">
+                <div className="h-[230px] w-full min-w-0 sm:h-[280px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={series}>
+                    <AreaChart data={series} margin={cartesianChartMargin}>
                       <defs>
                         <linearGradient id="gApr" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor="var(--success)" stopOpacity={0.5} />
@@ -626,8 +634,8 @@ function AnalyticsPage() {
                         strokeDasharray="3 3"
                         vertical={false}
                       />
-                      <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={11} />
-                      <YAxis stroke="var(--muted-foreground)" fontSize={11} />
+                      <XAxis {...chartXAxisProps} dataKey="label" />
+                      <YAxis {...chartYAxisProps} />
                       <Tooltip {...tooltipProps} />
                       <Area
                         type="monotone"
@@ -655,34 +663,34 @@ function AnalyticsPage() {
                 empty={!hasData["Severidade"]}
                 subtitle="Distribuição na última auditoria"
               >
-                <div className="h-[170px] sm:h-[200px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={[
-                          { name: "Erros", value: sev.erros, color: "var(--destructive)" },
-                          { name: "Alertas", value: sev.alertas, color: "var(--warning)" },
-                          { name: "Info", value: sev.infos, color: "var(--info)" },
-                        ].filter((d) => d.value > 0)}
-                        dataKey="value"
-                        innerRadius={50}
-                        outerRadius={80}
-                        paddingAngle={3}
-                        stroke="none"
-                      >
-                        {["var(--destructive)", "var(--warning)", "var(--info)"].map((c, i) => (
-                          <Cell key={i} fill={c} />
-                        ))}
-                      </Pie>
-                      <Tooltip {...tooltipProps} />
-                    </PieChart>
-                  </ResponsiveContainer>
+                <div className="mx-auto grid w-full max-w-[480px] flex-1 items-center gap-3 sm:grid-cols-[minmax(0,1fr)_9rem] sm:gap-4">
+                  <div className="h-[210px] w-full min-w-0 sm:h-[240px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={severityData}
+                          dataKey="value"
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={54}
+                          outerRadius={84}
+                          paddingAngle={3}
+                          stroke="none"
+                        >
+                          {severityData.map((item) => (
+                            <Cell key={item.name} fill={item.color} />
+                          ))}
+                        </Pie>
+                        <Tooltip {...tooltipProps} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <SeverityLegend sev={sev} />
                 </div>
-                <SeverityLegend sev={sev} />
               </ChartCard>
             </div>
 
-            <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
+            <div className="grid grid-cols-1 items-stretch gap-4 sm:gap-6 empty:hidden xl:grid-cols-2 [&>*:only-child]:col-span-full">
               <ChartCard
                 title="Conformidade ao longo do tempo"
                 visible={preferences.charts.conformity}
@@ -690,23 +698,23 @@ function AnalyticsPage() {
                 empty={!hasData["Conformidade ao longo do tempo"]}
                 subtitle="% aprovado por run"
               >
-                <div className="h-[170px] sm:h-[220px]">
+                <div className="h-[220px] w-full min-w-0 sm:h-[240px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart
                       data={series.map((s) => ({
                         ...s,
                         conf: s.total ? (s.approved / s.total) * 100 : 0,
                       }))}
+                      margin={cartesianChartMargin}
                     >
                       <CartesianGrid
                         stroke="var(--border)"
                         strokeDasharray="3 3"
                         vertical={false}
                       />
-                      <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={11} />
+                      <XAxis {...chartXAxisProps} dataKey="label" />
                       <YAxis
-                        stroke="var(--muted-foreground)"
-                        fontSize={11}
+                        {...chartYAxisProps}
                         domain={[0, 100]}
                         tickFormatter={(v) => `${v}%`}
                       />
@@ -730,16 +738,16 @@ function AnalyticsPage() {
                 empty={!hasData["Volume processado"]}
                 subtitle="Apólices auditadas por run"
               >
-                <div className="h-[170px] sm:h-[220px]">
+                <div className="h-[220px] w-full min-w-0 sm:h-[240px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={series}>
+                    <BarChart data={series} margin={cartesianChartMargin}>
                       <CartesianGrid
                         stroke="var(--border)"
                         strokeDasharray="3 3"
                         vertical={false}
                       />
-                      <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={11} />
-                      <YAxis stroke="var(--muted-foreground)" fontSize={11} />
+                      <XAxis {...chartXAxisProps} dataKey="label" />
+                      <YAxis {...chartYAxisProps} />
                       <Tooltip {...tooltipProps} />
                       <Bar dataKey="total" fill="var(--primary)" radius={[4, 4, 0, 0]} />
                     </BarChart>
@@ -748,7 +756,7 @@ function AnalyticsPage() {
               </ChartCard>
             </div>
 
-            <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
+            <div className="grid grid-cols-1 items-stretch gap-4 sm:gap-6 empty:hidden xl:grid-cols-2 [&>*:only-child]:col-span-full">
               <ChartCard
                 title="Top 10 tipos de erro"
                 visible={preferences.charts.errorTypes}
@@ -759,7 +767,7 @@ function AnalyticsPage() {
                 {errorTypes.length === 0 ? (
                   <EmptyMsg text="Nenhum tipo de erro nesta run." />
                 ) : (
-                  <div className="h-[230px] sm:h-[300px]">
+                  <div className="h-[260px] w-full min-w-0 sm:h-[300px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={errorTypes} layout="vertical" margin={{ left: 8, right: 16 }}>
                         <CartesianGrid
@@ -767,13 +775,23 @@ function AnalyticsPage() {
                           strokeDasharray="3 3"
                           horizontal={false}
                         />
-                        <XAxis type="number" stroke="var(--muted-foreground)" fontSize={11} />
+                        <XAxis
+                          type="number"
+                          stroke="var(--muted-foreground)"
+                          fontSize={11}
+                          axisLine={false}
+                          tickLine={false}
+                          tickMargin={8}
+                        />
                         <YAxis
                           type="category"
                           dataKey="tipo"
                           stroke="var(--muted-foreground)"
                           fontSize={10}
-                          width={140}
+                          width={132}
+                          axisLine={false}
+                          tickLine={false}
+                          tickMargin={8}
                           tickFormatter={(v: string) => (v.length > 22 ? v.slice(0, 22) + "…" : v)}
                         />
                         <Tooltip {...tooltipProps} />
@@ -794,16 +812,16 @@ function AnalyticsPage() {
                 {monthly.length === 0 ? (
                   <EmptyMsg text="Sem datas de vigência nos findings." />
                 ) : (
-                  <div className="h-[230px] sm:h-[300px]">
+                  <div className="h-[260px] w-full min-w-0 sm:h-[300px]">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={monthly}>
+                      <BarChart data={monthly} margin={cartesianChartMargin}>
                         <CartesianGrid
                           stroke="var(--border)"
                           strokeDasharray="3 3"
                           vertical={false}
                         />
-                        <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={10} />
-                        <YAxis stroke="var(--muted-foreground)" fontSize={11} />
+                        <XAxis {...chartXAxisProps} dataKey="label" fontSize={10} />
+                        <YAxis {...chartYAxisProps} />
                         <Tooltip {...tooltipProps} />
                         <Bar dataKey="count" fill="var(--info)" radius={[4, 4, 0, 0]} />
                       </BarChart>
@@ -823,7 +841,7 @@ function AnalyticsPage() {
               {repasse.length === 0 ? (
                 <EmptyMsg text="Sem documentos pagos e ativos sincronizados." />
               ) : (
-                <div className="h-[370px] sm:h-[440px]">
+                <div className="h-[380px] w-full min-w-0 sm:h-[440px]">
                   <ResponsiveContainer width="100%" height="100%">
                     <ComposedChart
                       data={repasse}
@@ -961,7 +979,7 @@ function AnalyticsPage() {
               <Heatmap runs={heatmap.runs} rows={heatmap.rows} />
             </ChartCard>
 
-            <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
+            <div className="grid grid-cols-1 items-stretch gap-4 sm:gap-6 empty:hidden xl:grid-cols-2 [&>*:only-child]:col-span-full">
               <ChartCard
                 title="Apólices mais problemáticas"
                 visible={preferences.charts.problemPolicies}
@@ -1059,7 +1077,7 @@ function AnalyticsPage() {
               </ChartCard>
             </div>
 
-            <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
+            <div className="grid grid-cols-1 items-stretch gap-4 sm:gap-6 empty:hidden xl:grid-cols-2 [&>*:only-child]:col-span-full">
               <ChartCard
                 title="Carteira por nº de endossos"
                 visible={preferences.charts.portfolioEndorsements}
@@ -1070,16 +1088,16 @@ function AnalyticsPage() {
                 {endorsementsDist.length === 0 ? (
                   <EmptyMsg text="Sem apólices na carteira." />
                 ) : (
-                  <div className="h-[190px] sm:h-[260px]">
+                  <div className="h-[230px] w-full min-w-0 sm:h-[280px]">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={endorsementsDist}>
+                      <BarChart data={endorsementsDist} margin={cartesianChartMargin}>
                         <CartesianGrid
                           stroke="var(--border)"
                           strokeDasharray="3 3"
                           vertical={false}
                         />
-                        <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={11} />
-                        <YAxis stroke="var(--muted-foreground)" fontSize={11} />
+                        <XAxis {...chartXAxisProps} dataKey="label" />
+                        <YAxis {...chartYAxisProps} />
                         <Tooltip {...tooltipProps} />
                         <Bar dataKey="count" fill="var(--info)" radius={[4, 4, 0, 0]} />
                       </BarChart>
@@ -1098,20 +1116,16 @@ function AnalyticsPage() {
                 {issuances.length === 0 ? (
                   <EmptyMsg text="Sem emissões registradas." />
                 ) : (
-                  <div className="h-[190px] sm:h-[260px]">
+                  <div className="h-[230px] w-full min-w-0 sm:h-[280px]">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={issuances}>
+                      <BarChart data={issuances} margin={cartesianChartMargin}>
                         <CartesianGrid
                           stroke="var(--border)"
                           strokeDasharray="3 3"
                           vertical={false}
                         />
-                        <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={10} />
-                        <YAxis
-                          stroke="var(--muted-foreground)"
-                          fontSize={11}
-                          allowDecimals={false}
-                        />
+                        <XAxis {...chartXAxisProps} dataKey="label" fontSize={10} />
+                        <YAxis {...chartYAxisProps} allowDecimals={false} />
                         <Tooltip {...tooltipProps} formatter={(v) => formatInt(Number(v))} />
                         <Bar
                           dataKey="apolices"
@@ -1126,7 +1140,7 @@ function AnalyticsPage() {
               </ChartCard>
             </div>
 
-            <div className="grid md:grid-cols-2 gap-4 sm:gap-6">
+            <div className="grid grid-cols-1 items-stretch gap-4 sm:gap-6 empty:hidden xl:grid-cols-2 [&>*:only-child]:col-span-full">
               <ChartCard
                 title="Endossos emitidos por mês"
                 visible={preferences.charts.endorsementsIssued}
@@ -1137,20 +1151,16 @@ function AnalyticsPage() {
                 {issuances.length === 0 ? (
                   <EmptyMsg text="Sem endossos registrados." />
                 ) : (
-                  <div className="h-[190px] sm:h-[260px]">
+                  <div className="h-[230px] w-full min-w-0 sm:h-[280px]">
                     <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={issuances}>
+                      <BarChart data={issuances} margin={cartesianChartMargin}>
                         <CartesianGrid
                           stroke="var(--border)"
                           strokeDasharray="3 3"
                           vertical={false}
                         />
-                        <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={10} />
-                        <YAxis
-                          stroke="var(--muted-foreground)"
-                          fontSize={11}
-                          allowDecimals={false}
-                        />
+                        <XAxis {...chartXAxisProps} dataKey="label" fontSize={10} />
+                        <YAxis {...chartYAxisProps} allowDecimals={false} />
                         <Tooltip {...tooltipProps} formatter={(v) => formatInt(Number(v))} />
                         <Bar
                           dataKey="endossosTotal"
@@ -1174,51 +1184,67 @@ function AnalyticsPage() {
                 {issuances.length === 0 ? (
                   <EmptyMsg text="Sem emissões registradas." />
                 ) : (
-                  <div className="h-[190px] sm:h-[260px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <BarChart data={issuances}>
-                        <CartesianGrid
-                          stroke="var(--border)"
-                          strokeDasharray="3 3"
-                          vertical={false}
-                        />
-                        <XAxis dataKey="label" stroke="var(--muted-foreground)" fontSize={10} />
-                        <YAxis
-                          stroke="var(--muted-foreground)"
-                          fontSize={11}
-                          allowDecimals={false}
-                        />
-                        <Tooltip {...tooltipProps} formatter={(v) => formatInt(Number(v))} />
-                        <Legend wrapperStyle={{ fontSize: 11 }} />
-                        <Bar
-                          dataKey="apolices"
-                          name="Apólice"
-                          stackId="emi"
-                          fill="var(--primary)"
-                        />
-                        <Bar dataKey="endossoA" name="Endosso A" stackId="emi" fill="var(--info)" />
-                        <Bar
-                          dataKey="endossoB"
-                          name="Endosso B"
-                          stackId="emi"
-                          fill="var(--success)"
-                        />
-                        <Bar
-                          dataKey="endossoC"
-                          name="Endosso C"
-                          stackId="emi"
-                          fill="var(--warning)"
-                        />
-                        <Bar
-                          dataKey="endossoD"
-                          name="Endosso D"
-                          stackId="emi"
-                          fill="var(--destructive)"
-                          radius={[4, 4, 0, 0]}
-                        />
-                      </BarChart>
-                    </ResponsiveContainer>
-                  </div>
+                  <>
+                    <div className="h-[230px] w-full min-w-0 sm:h-[280px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={issuances} margin={cartesianChartMargin}>
+                          <CartesianGrid
+                            stroke="var(--border)"
+                            strokeDasharray="3 3"
+                            vertical={false}
+                          />
+                          <XAxis {...chartXAxisProps} dataKey="label" fontSize={10} />
+                          <YAxis {...chartYAxisProps} allowDecimals={false} />
+                          <Tooltip {...tooltipProps} formatter={(v) => formatInt(Number(v))} />
+                          <Bar
+                            dataKey="apolices"
+                            name="Apólice"
+                            stackId="emi"
+                            fill="var(--primary)"
+                          />
+                          <Bar
+                            dataKey="endossoA"
+                            name="Endosso A"
+                            stackId="emi"
+                            fill="var(--info)"
+                          />
+                          <Bar
+                            dataKey="endossoB"
+                            name="Endosso B"
+                            stackId="emi"
+                            fill="var(--success)"
+                          />
+                          <Bar
+                            dataKey="endossoC"
+                            name="Endosso C"
+                            stackId="emi"
+                            fill="var(--warning)"
+                          />
+                          <Bar
+                            dataKey="endossoD"
+                            name="Endosso D"
+                            stackId="emi"
+                            fill="var(--destructive)"
+                            radius={[4, 4, 0, 0]}
+                          />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                    <ul
+                      aria-label="Legenda dos tipos de emissão"
+                      className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11px] text-muted-foreground"
+                    >
+                      {issuanceLegendItems.map((item) => (
+                        <li key={item.name} className="inline-flex items-center gap-1.5">
+                          <span
+                            className="h-2 w-2 shrink-0 rounded-full"
+                            style={{ background: item.color }}
+                          />
+                          {item.name}
+                        </li>
+                      ))}
+                    </ul>
+                  </>
                 )}
               </ChartCard>
             </div>
@@ -1250,6 +1276,33 @@ const tooltipProps = {
     fontSize: 12,
   },
   cursor: { fill: "var(--accent)", opacity: 0.3 },
+} as const;
+
+const cartesianChartMargin = { top: 8, right: 16, left: 0, bottom: 4 } as const;
+
+const issuanceLegendItems = [
+  { name: "Apólice", color: "var(--primary)" },
+  { name: "Endosso A", color: "var(--info)" },
+  { name: "Endosso B", color: "var(--success)" },
+  { name: "Endosso C", color: "var(--warning)" },
+  { name: "Endosso D", color: "var(--destructive)" },
+] as const;
+
+const chartXAxisProps = {
+  stroke: "var(--muted-foreground)",
+  fontSize: 11,
+  axisLine: false,
+  tickLine: false,
+  tickMargin: 10,
+} as const;
+
+const chartYAxisProps = {
+  stroke: "var(--muted-foreground)",
+  fontSize: 11,
+  axisLine: false,
+  tickLine: false,
+  tickMargin: 8,
+  width: 42,
 } as const;
 
 function SectionTitle({ title, subtitle }: { title: string; subtitle?: string }) {
@@ -1363,12 +1416,18 @@ function ChartCard({
   if (!visible || (empty && hideWhenEmpty)) return null;
 
   return (
-    <div data-export="chart" data-title={title} className={`panel p-5 ${className ?? ""}`}>
-      <div className="mb-4">
-        <div className="text-[13px] font-semibold">{title}</div>
-        {subtitle && <div className="text-[11px] text-muted-foreground">{subtitle}</div>}
+    <div
+      data-export="chart"
+      data-title={title}
+      className={`panel flex h-full min-w-0 flex-col overflow-hidden p-4 sm:p-5 ${className ?? ""}`}
+    >
+      <div className="mb-4 min-h-12 shrink-0">
+        <div className="text-[13px] font-semibold leading-5">{title}</div>
+        {subtitle && (
+          <div className="mt-0.5 text-[11px] leading-4 text-muted-foreground">{subtitle}</div>
+        )}
       </div>
-      {children}
+      <div className="flex min-w-0 flex-1 flex-col">{children}</div>
     </div>
   );
 }
@@ -1380,11 +1439,11 @@ function SeverityLegend({ sev }: { sev: { erros: number; alertas: number; infos:
     { name: "Info", value: sev.infos, color: "var(--info)" },
   ];
   return (
-    <div className="mt-3 space-y-1.5">
+    <div className="grid grid-cols-3 gap-2 sm:grid-cols-1 sm:gap-2">
       {items.map((it) => (
-        <div key={it.name} className="flex items-center gap-2 text-[11.5px]">
-          <span className="h-2 w-2 rounded-full" style={{ background: it.color }} />
-          <span className="text-muted-foreground flex-1">{it.name}</span>
+        <div key={it.name} className="flex min-w-0 items-center gap-2 text-[11.5px]">
+          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: it.color }} />
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">{it.name}</span>
           <span className="font-mono text-foreground">{it.value}</span>
         </div>
       ))}
@@ -1457,7 +1516,7 @@ function Heatmap({
 
 function EmptyMsg({ text }: { text: string }) {
   return (
-    <div className="h-[160px] flex items-center justify-center text-[12px] text-muted-foreground">
+    <div className="flex min-h-[240px] flex-1 items-center justify-center px-4 text-center text-[12px] text-muted-foreground">
       {text}
     </div>
   );
