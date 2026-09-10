@@ -51,7 +51,8 @@ const SpreadsheetRow = memo(function SpreadsheetRow({
   onCellChange,
 }: SpreadsheetRowProps) {
   const isHeader =
-    (sheet.id === "analytic" && (rowIndex === 0 || rowIndex === 1)) ||
+    ((sheet.id === "analytic" || sheet.id === "brokerAnalytic") &&
+      (rowIndex === 0 || rowIndex === 1)) ||
     (sheet.id === "rules" && rowIndex === 0);
   return (
     <div className="grid min-w-max" style={{ gridTemplateColumns: `42px ${template}` }}>

@@ -29,7 +29,7 @@ function solid(argb: string): Fill {
 
 function setCellValue(target: ExcelJS.Cell, source: RepasseCell) {
   if (source.formula) {
-    target.value = { formula: source.formula, result: source.value ?? 0 };
+    target.value = { formula: source.formula, result: source.value ?? "" };
   } else {
     target.value = source.value;
   }
@@ -120,14 +120,14 @@ function isoDate(value: unknown) {
 }
 
 function styleAnalytic(worksheet: Worksheet, rowCount: number) {
-  worksheet.mergeCells("B1:M1");
+  worksheet.mergeCells("B1:N1");
   worksheet.getRow(1).height = 72;
   worksheet.getRow(2).height = 32.25;
   worksheet.getCell("B1").fill = solid(BLUE_DARK);
   worksheet.getCell("B1").font = { name: "Arial", size: 14, bold: true, color: { argb: WHITE } };
   worksheet.getCell("B1").alignment = centered;
 
-  for (let column = 2; column <= 13; column++) {
+  for (let column = 2; column <= 14; column++) {
     const header = worksheet.getCell(2, column);
     header.fill = solid(BLUE);
     header.font = { name: "Arial", size: 9, bold: true, color: { argb: WHITE } };
@@ -137,20 +137,21 @@ function styleAnalytic(worksheet: Worksheet, rowCount: number) {
 
   for (let row = 3; row <= rowCount; row++) {
     worksheet.getRow(row).height = 15.75;
-    for (let column = 2; column <= 13; column++) {
+    for (let column = 2; column <= 14; column++) {
       const target = worksheet.getCell(row, column);
       target.font = { name: "Arial", size: 10, color: { argb: BLACK } };
       target.border = thinBorder;
       target.alignment = { vertical: "middle", wrapText: false };
       if (row % 2 === 0) target.fill = solid(GRAY_LIGHT);
     }
-    for (const column of [5, 11, 12, 13]) {
+    for (const column of [5, 12, 13, 14]) {
       const target = worksheet.getCell(row, column);
       const date = isoDate(target.value);
       if (date) target.value = date;
       target.numFmt = "dd/mm/yyyy";
     }
     for (const column of [8, 9, 10]) worksheet.getCell(row, column).numFmt = "$#,##0.0000";
+    worksheet.getCell(row, 11).numFmt = "0.00%";
     worksheet.getCell(row, 2).numFmt = "@";
     worksheet.getCell(row, 3).numFmt = "@";
     worksheet.getCell(row, 4).numFmt = "@";
@@ -158,7 +159,7 @@ function styleAnalytic(worksheet: Worksheet, rowCount: number) {
     worksheet.getCell(row, 3).alignment = { vertical: "middle", wrapText: true };
     worksheet.getCell(row, 4).alignment = { vertical: "middle", wrapText: true };
   }
-  worksheet.autoFilter = { from: "B2", to: `M${Math.max(3, rowCount)}` };
+  worksheet.autoFilter = { from: "B2", to: `N${Math.max(3, rowCount)}` };
   worksheet.views = [{ state: "frozen", xSplit: 1, ySplit: 2, topLeftCell: "B3" }];
   worksheet.pageSetup = {
     orientation: "landscape",
@@ -221,7 +222,9 @@ export async function createRepasseXlsx(workbookModel: RepasseWorkbook) {
     });
     populateSheet(worksheet, sheet);
     if (sheet.id === "summary") styleSummary(worksheet);
-    if (sheet.id === "analytic") styleAnalytic(worksheet, sheet.rows.length);
+    if (sheet.id === "analytic" || sheet.id === "brokerAnalytic") {
+      styleAnalytic(worksheet, sheet.rows.length);
+    }
     if (sheet.id === "rules") styleRules(worksheet);
   }
 

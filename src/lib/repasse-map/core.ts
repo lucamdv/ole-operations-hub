@@ -18,6 +18,7 @@ export const REPASSE_ANALYTIC_HEADERS = [
   "Valor emitido (USD)",
   "Valor Pago (USD)",
   "Valor da corretagem (USD)",
+  "% do prêmio referente ao corretor",
   "Data do pagamento",
   "Data de processamento do pagamento (Data que a Olé foi informada do pagamento)",
   "Data de reconhecimento da alocação de pagamento (data em que a Olé reconheceu o pagamento)",
@@ -75,6 +76,8 @@ export interface RepasseSourceRow {
   emittedValue: number;
   paidValue: number;
   brokerageValue: number | null;
+  brokeragePercentage: number | null;
+  hasBroker: boolean;
   paymentDate: string;
 }
 
@@ -156,6 +159,35 @@ function deepValue(value: unknown, keys: readonly string[], depth = 0): unknown 
   return null;
 }
 
+function deepScalarValue(value: unknown, keys: readonly string[], depth = 0): unknown {
+  if (depth > 8) return null;
+  if (isJsonRecord(value)) {
+    for (const key of keys) {
+      const candidate = value[key];
+      if (
+        (typeof candidate === "string" ||
+          typeof candidate === "number" ||
+          typeof candidate === "boolean") &&
+        String(candidate).trim() !== ""
+      ) {
+        return candidate;
+      }
+    }
+    for (const child of Object.values(value)) {
+      const found = deepScalarValue(child, keys, depth + 1);
+      if (found !== null) return found;
+    }
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const found = deepScalarValue(child, keys, depth + 1);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
 function numericValue(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   const text = String(value ?? "").trim();
@@ -167,31 +199,135 @@ function numericValue(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function amountFromComposition(record: JsonRecord) {
+function premiumCompositionSections(value: unknown, field: string) {
   const compositions: unknown[][] = [];
   const visit = (value: unknown, depth = 0) => {
-    if (depth > 5) return;
+    if (depth > 8) return;
     if (isJsonRecord(value)) {
-      const composition = value.composicao_premio_parcela;
+      const composition = value[field];
       if (Array.isArray(composition)) compositions.push(composition);
       for (const child of Object.values(value)) visit(child, depth + 1);
     } else if (Array.isArray(value)) {
       for (const child of value) visit(child, depth + 1);
     }
   };
-  visit(record);
+  visit(value);
+  return compositions;
+}
+
+function amountFromComposition(record: JsonRecord) {
+  const compositions = premiumCompositionSections(record, "composicao_premio_parcela");
 
   let total = 0;
-  let brokerage = 0;
   for (const composition of compositions) {
     for (const item of composition) {
       if (!isJsonRecord(item)) continue;
       const amount = numericValue(item.valor_premio) ?? 0;
       total += amount;
-      if (normalizedText(item.tipo_premio) === "comissao_corretagem") brokerage += amount;
     }
   }
-  return { total, brokerage };
+  return total;
+}
+
+function brokerageFromPremiumComposition(value: unknown) {
+  for (const field of ["composicao_premio_cobertura", "composicao_premio_parcela"]) {
+    let brokerage = 0;
+    let hasBroker = false;
+    for (const composition of premiumCompositionSections(value, field)) {
+      for (const item of composition) {
+        if (!isJsonRecord(item)) continue;
+        if (normalizedText(item.tipo_premio) !== "comissao_corretagem") continue;
+        hasBroker = true;
+        brokerage +=
+          numericValue(
+            directValue(item, [
+              "valor_premio",
+              "valor_corretagem",
+              "valor_comissao_corretagem",
+              "valor",
+            ]),
+          ) ?? 0;
+      }
+    }
+    if (hasBroker) return { hasBroker, brokerage };
+  }
+  return { hasBroker: false, brokerage: 0 };
+}
+
+function digits(value: unknown) {
+  const normalized = String(value ?? "").replace(/\D/g, "");
+  return normalized || null;
+}
+
+function identificationValue(value: unknown) {
+  if (!isJsonRecord(value)) return null;
+  return digits(
+    directValue(value, [
+      "valor_identificacao",
+      "numero_documento",
+      "documento",
+      "valor",
+      "cpf",
+      "cpf_cnpj",
+    ]),
+  );
+}
+
+function insuredDocumentFrom(value: unknown, depth = 0): string | null {
+  if (depth > 8) return null;
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const found = insuredDocumentFrom(child, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (!isJsonRecord(value)) return null;
+
+  const direct = digits(
+    directValue(value, [
+      "cpf_segurado",
+      "cpf_cnpj_segurado",
+      "documento_segurado",
+      "documento_seg",
+    ]),
+  );
+  if (direct) return direct;
+
+  const role = normalizedText(directValue(value, ["papel_parte", "papel", "role"]));
+  if (role === "segurado") {
+    const partyDirect = digits(directValue(value, ["cpf", "cpf_cnpj", "documento"]));
+    if (partyDirect) return partyDirect;
+
+    const documents = [value.documentos_identificacao, value.documentos]
+      .filter(Array.isArray)
+      .flat() as unknown[];
+    const cpf = documents.find(
+      (document) =>
+        isJsonRecord(document) &&
+        normalizedText(
+          directValue(document, ["tipo_identificacao", "tipo_documento", "tipo"]),
+        ).includes("cpf"),
+    );
+    const preferred = identificationValue(cpf);
+    if (preferred) return preferred;
+    for (const document of documents) {
+      const fallback = identificationValue(document);
+      if (fallback) return fallback;
+    }
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (normalizedText(key) === "segurado" && isJsonRecord(child)) {
+      const found = insuredDocumentFrom({ ...child, papel_parte: "SEGURADO" }, depth + 1);
+      if (found) return found;
+    }
+  }
+  for (const child of Object.values(value)) {
+    const found = insuredDocumentFrom(child, depth + 1);
+    if (found) return found;
+  }
+  return null;
 }
 
 function documentParts(documentNumber: string) {
@@ -365,20 +501,12 @@ export function repasseSourceRow(
   const { policyNumber, endorsement } = documentParts(documentNumber);
   const proposalKeys = ["numero_proposta", "numero_proposta_seguradora", "proposta"];
   const proposalNumber = String(
-    deepValue(billing, proposalKeys) ?? deepValue(emissionResponse, proposalKeys) ?? "",
+    deepScalarValue(billing, proposalKeys) ?? deepScalarValue(emissionResponse, proposalKeys) ?? "",
   ).trim();
-  const insuredKeys = [
-    "cpf_segurado",
-    "cpf_cnpj_segurado",
-    "documento_segurado",
-    "documento_seg",
-    "cpf",
-  ];
-  const insuredDocument = String(
-    deepValue(billing, insuredKeys) ?? deepValue(emissionResponse, insuredKeys) ?? "",
-  ).replace(/\D/g, "");
+  const insuredDocument =
+    insuredDocumentFrom(billing) ?? insuredDocumentFrom(emissionResponse) ?? "";
 
-  const composition = amountFromComposition(billing);
+  const compositionTotal = amountFromComposition(billing);
   const emittedValue =
     numericValue(
       deepValue(billing, [
@@ -389,7 +517,7 @@ export function repasseSourceRow(
         "premio_total",
         "valor_parcela",
       ]),
-    ) ?? composition.total;
+    ) ?? compositionTotal;
   const paidValue =
     numericValue(
       deepValue(billing, [
@@ -401,15 +529,9 @@ export function repasseSourceRow(
         "total_pago",
       ]),
     ) ?? emittedValue;
-  const brokerage =
-    numericValue(
-      deepValue(billing, [
-        "valor_corretagem",
-        "valor_comissao_corretagem",
-        "comissao_corretagem",
-        "corretagem",
-      ]),
-    ) ?? composition.brokerage;
+  const billingBrokerage = brokerageFromPremiumComposition(billing);
+  const emissionBrokerage = brokerageFromPremiumComposition(emissionResponse);
+  const brokerage = billingBrokerage.hasBroker ? billingBrokerage : emissionBrokerage;
 
   const movementType =
     String(deepValue(billing, ["tipo_movimento"]) ?? "").trim() ||
@@ -430,7 +552,10 @@ export function repasseSourceRow(
     movementReason,
     emittedValue,
     paidValue,
-    brokerageValue: brokerage > 0 ? brokerage : null,
+    brokerageValue: brokerage.hasBroker ? brokerage.brokerage : null,
+    brokeragePercentage:
+      brokerage.hasBroker && emittedValue > 0 ? brokerage.brokerage / emittedValue : null,
+    hasBroker: brokerage.hasBroker,
     paymentDate,
   };
 }
@@ -486,7 +611,10 @@ function buildSummarySheet(rows: RepasseSourceRow[], start: string, end: string)
   grid[5]![3] = cell("BASE DE CALCULO");
   grid[5]![4] = cell("DESCRIÇÃO");
   grid[6]![1] = cell("(+) Valor total dos prêmios faturados e pagos");
-  grid[6]![2] = cell(summary.paid, "SUM(Analitico_Dados!I3:I1048576)");
+  grid[6]![2] = cell(
+    summary.paid,
+    "SUM(Analitico_Dados!I3:I1048576,Analitico_Dados_Corretores!I3:I1048576)",
+  );
   grid[6]![4] = cell("Valor total pago pelos clientes");
   grid[7]![1] = cell("(-) IOF");
   grid[7]![2] = cell(-summary.iof, "C7*D8*-1");
@@ -545,7 +673,7 @@ function buildSummarySheet(rows: RepasseSourceRow[], start: string, end: string)
   grid[27]![2] = cell(summary.ceded, "$C$26*0.9");
   grid[27]![3] = cell(0.9);
   grid[28]![1] = cell("(-) Prêmio Retido Corretores");
-  grid[28]![2] = cell(summary.brokerage, "SUM(Analitico_Dados!J3:J1048576)");
+  grid[28]![2] = cell(summary.brokerage, "SUM(Analitico_Dados_Corretores!J3:J1048576)");
 
   grid[30]![1] = cell("Total do Repasse à Excelsior");
   grid[30]![2] = cell(summary.total, "(C16*-1)+C23+C26");
@@ -568,11 +696,12 @@ function buildSummarySheet(rows: RepasseSourceRow[], start: string, end: string)
   };
 }
 
-function buildAnalyticSheet(rows: RepasseSourceRow[]): RepasseSheet {
-  const grid = blankMatrix(Math.max(43, rows.length + 2), 15);
-  grid[0]![1] = cell(
-    "DETALHAMENTO - Todas as apólices e endossos que geraram movimento financeiro no período de exercício",
-  );
+function buildAnalyticSheet(
+  rows: RepasseSourceRow[],
+  options: { id: "analytic" | "brokerAnalytic"; name: string; title: string },
+): RepasseSheet {
+  const grid = blankMatrix(Math.max(43, rows.length + 2), 16);
+  grid[0]![1] = cell(options.title);
   REPASSE_ANALYTIC_HEADERS.forEach((header, index) => {
     grid[1]![index + 1] = cell(header);
   });
@@ -588,6 +717,7 @@ function buildAnalyticSheet(rows: RepasseSourceRow[]): RepasseSheet {
       row.emittedValue,
       row.paidValue,
       row.brokerageValue ?? "-",
+      row.brokeragePercentage ?? "-",
       row.paymentDate,
       row.paymentDate,
       row.paymentDate,
@@ -595,12 +725,16 @@ function buildAnalyticSheet(rows: RepasseSourceRow[]): RepasseSheet {
     values.forEach((value, column) => {
       target[column + 1] = cell(value);
     });
+    if (row.hasBroker) {
+      const excelRow = index + 3;
+      target[10] = cell(row.brokeragePercentage, `IF(H${excelRow}=0,"",J${excelRow}/H${excelRow})`);
+    }
   });
   return {
-    id: "analytic",
-    name: "Analitico_Dados",
+    id: options.id,
+    name: options.name,
     rows: grid,
-    columnWidths: [3, 33, 23, 16, 18, 23, 24, 18, 17, 27, 19, 50, 50, 27, 37],
+    columnWidths: [3, 33, 23, 16, 18, 23, 24, 18, 17, 27, 22, 19, 50, 50, 27, 37],
   };
 }
 
@@ -617,13 +751,26 @@ export function buildRepasseWorkbook(
   rows: RepasseSourceRow[],
   period: { start: string; end: string },
 ): RepasseWorkbook {
+  const brokerRows = rows.filter((row) => row.hasBroker);
+  const regularRows = rows.filter((row) => !row.hasBroker);
   return {
     period,
     generatedAt: new Date().toISOString(),
     sourceRows: rows.length,
     sheets: [
       buildSummarySheet(rows, period.start, period.end),
-      buildAnalyticSheet(rows),
+      buildAnalyticSheet(regularRows, {
+        id: "analytic",
+        name: "Analitico_Dados",
+        title:
+          "DETALHAMENTO - Apólices e endossos sem comissão de corretagem que geraram movimento financeiro no período",
+      }),
+      buildAnalyticSheet(brokerRows, {
+        id: "brokerAnalytic",
+        name: "Analitico_Dados_Corretores",
+        title:
+          "DETALHAMENTO - Apólices e endossos com comissão de corretagem que geraram movimento financeiro no período",
+      }),
       buildRulesSheet(),
     ],
   };
@@ -642,14 +789,22 @@ function setFormulaResult(sheet: RepasseSheet, row: number, column: number, valu
 export function recalculateRepasseWorkbook(workbook: RepasseWorkbook): RepasseWorkbook {
   const copy = structuredClone(workbook);
   const summary = copy.sheets.find((sheet) => sheet.id === "summary");
-  const analytic = copy.sheets.find((sheet) => sheet.id === "analytic");
-  if (!summary || !analytic) return copy;
+  const analyticSheets = copy.sheets.filter(
+    (sheet) => sheet.id === "analytic" || sheet.id === "brokerAnalytic",
+  );
+  if (!summary || analyticSheets.length === 0) return copy;
 
   let paid = 0;
   let brokerage = 0;
-  for (let row = 2; row < analytic.rows.length; row++) {
-    paid += numericCell(analytic, row, 8);
-    brokerage += numericCell(analytic, row, 9);
+  for (const analytic of analyticSheets) {
+    for (let row = 2; row < analytic.rows.length; row++) {
+      const emitted = numericCell(analytic, row, 7);
+      const rowBrokerage = numericCell(analytic, row, 9);
+      paid += numericCell(analytic, row, 8);
+      if (analytic.id === "brokerAnalytic") brokerage += rowBrokerage;
+      const percentage = analytic.rows[row]?.[10];
+      if (percentage?.formula) percentage.value = emitted > 0 ? rowBrokerage / emitted : null;
+    }
   }
   const values = exactSummary(paid, brokerage);
   setFormulaResult(summary, 6, 2, values.paid);
@@ -686,7 +841,9 @@ export function updateRepasseCell(
   if (!target) return workbook;
   target.value = value;
   delete target.formula;
-  return sheetId === "analytic" ? recalculateRepasseWorkbook(copy) : copy;
+  return sheetId === "analytic" || sheetId === "brokerAnalytic"
+    ? recalculateRepasseWorkbook(copy)
+    : copy;
 }
 
 export function coerceEditedCell(value: string, previous: RepasseCellValue): RepasseCellValue {
@@ -701,13 +858,17 @@ export function formatDateBr(value: string) {
 }
 
 export function summaryPreview(workbook: RepasseWorkbook) {
-  const analytic = workbook.sheets.find((sheet) => sheet.id === "analytic");
-  if (!analytic) return computeRepasse(0, 0);
+  const analyticSheets = workbook.sheets.filter(
+    (sheet) => sheet.id === "analytic" || sheet.id === "brokerAnalytic",
+  );
+  if (analyticSheets.length === 0) return computeRepasse(0, 0);
   let paid = 0;
   let brokerage = 0;
-  for (let row = 2; row < analytic.rows.length; row++) {
-    paid += numericCell(analytic, row, 8);
-    brokerage += numericCell(analytic, row, 9);
+  for (const analytic of analyticSheets) {
+    for (let row = 2; row < analytic.rows.length; row++) {
+      paid += numericCell(analytic, row, 8);
+      if (analytic.id === "brokerAnalytic") brokerage += numericCell(analytic, row, 9);
+    }
   }
   return computeRepasse(paid, brokerage);
 }

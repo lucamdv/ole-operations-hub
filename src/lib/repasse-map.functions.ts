@@ -35,7 +35,7 @@ const workbookSchema = z.object({
   sheets: z
     .array(
       z.object({
-        id: z.enum(["summary", "analytic", "rules"]),
+        id: z.enum(["summary", "analytic", "brokerAnalytic", "rules"]),
         name: z.string().min(1).max(31),
         columnWidths: z.array(z.number().positive().max(200)).max(32),
         rows: z
@@ -52,17 +52,18 @@ const workbookSchema = z.object({
           .max(50_002),
       }),
     )
-    .length(3),
+    .length(4),
 });
 
 const expectedSheets = new Map([
   ["summary", "Capa_Resumo"],
   ["analytic", "Analitico_Dados"],
+  ["brokerAnalytic", "Analitico_Dados_Corretores"],
   ["rules", "Regras do Contrato2025"],
 ]);
 
 const safeTemplateFormulas = new Set([
-  "SUM(Analitico_Dados!I3:I1048576)",
+  "SUM(Analitico_Dados!I3:I1048576,Analitico_Dados_Corretores!I3:I1048576)",
   "C7*D8*-1",
   "$C$7-($C$8*-1)",
   "C9",
@@ -78,7 +79,7 @@ const safeTemplateFormulas = new Set([
   "(C9)-(C15)-(C21*-1)+ C29",
   "$C$26*0.1",
   "$C$26*0.9",
-  "SUM(Analitico_Dados!J3:J1048576)",
+  "SUM(Analitico_Dados_Corretores!J3:J1048576)",
   "(C16*-1)+C23+C26",
 ]);
 
@@ -92,7 +93,11 @@ function validatedWorkbook(input: RepasseWorkbook) {
     seen.add(sheet.id);
     for (const row of sheet.rows) {
       for (const item of row) {
-        if (item.formula && !safeTemplateFormulas.has(item.formula)) {
+        if (
+          item.formula &&
+          !safeTemplateFormulas.has(item.formula) &&
+          !/^IF\(H([1-9]\d*)=0,"",J\1\/H\1\)$/.test(item.formula)
+        ) {
           throw new Error("A exportação contém uma fórmula não reconhecida pelo modelo.");
         }
       }

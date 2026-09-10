@@ -117,7 +117,7 @@ function RepasseMapPage() {
       const file = await exportFn({ data: { workbook: result.workbook } });
       downloadBase64File(file.base64, file.mimeType, file.filename);
       toast.success("XLSX exportado", {
-        description: "As três abas e suas edições foram incluídas.",
+        description: "As quatro abas e suas edições foram incluídas.",
       });
     } catch (error) {
       toast.error("Falha ao exportar XLSX", {

@@ -6,7 +6,7 @@ export interface RepasseCell {
   formula?: string;
 }
 
-export type RepasseSheetId = "summary" | "analytic" | "rules";
+export type RepasseSheetId = "summary" | "analytic" | "brokerAnalytic" | "rules";
 
 export interface RepasseSheet {
   id: RepasseSheetId;
