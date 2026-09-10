@@ -34,8 +34,9 @@ export function AutomacaoTab() {
         <ScheduleCard key={s.job} schedule={s} />
       ))}
       <p className="text-[11.5px] text-muted-foreground pt-2">
-        Os disparos acontecem no servidor, no fuso America/São_Paulo — não é necessário manter a
-        plataforma aberta. Você continua podendo rodar manualmente a qualquer momento.
+        Os disparos são avaliados a cada minuto pelo worker interno, no fuso configurado — não é
+        necessário manter a plataforma aberta. Você continua podendo rodar manualmente a qualquer
+        momento.
       </p>
     </div>
   );
@@ -78,8 +79,9 @@ function ScheduleCard({ schedule }: { schedule: AutomationSchedule }) {
           <input
             type="checkbox"
             checked={schedule.enabled}
+            disabled={mut.isPending}
             onChange={(e) => mut.mutate({ job: schedule.job, enabled: e.target.checked })}
-            className="h-4 w-4 accent-[var(--primary)]"
+            className="h-4 w-4 accent-[var(--primary)] disabled:cursor-wait disabled:opacity-50"
           />
         </label>
       </div>

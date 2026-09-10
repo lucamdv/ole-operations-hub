@@ -1,4 +1,3 @@
-import { useWebhookMode } from "@/hooks/use-webhook-mode";
 import { useEffect, useRef, useState } from "react";
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -78,7 +77,6 @@ function resolvedLegStatus(runStatus: string, legStatus: string | null | undefin
 export function useRunPolicySync() {
   const qc = useQueryClient();
   const fireFn = useServerFn(runPolicySync);
-  const { mode } = useWebhookMode();
   const statusFn = useServerFn(getPolicySyncStatus);
   const cancelFn = useServerFn(cancelPolicySync);
   const latestFn = useServerFn(getLatestPolicySync);
@@ -203,7 +201,7 @@ export function useRunPolicySync() {
   }, []);
 
   const mutation = useMutation({
-    mutationFn: () => fireFn({ data: { mode } }),
+    mutationFn: () => fireFn(),
     onMutate: () => {
       setEmissoes("running");
       setCobrancas("running");

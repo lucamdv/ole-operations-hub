@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -41,6 +41,8 @@ import {
 } from "@/components/exceptions/ignore-reason-dialog";
 
 export const Route = createFileRoute("/_authenticated/alertas")({
+  validateSearch: (search: Record<string, unknown>): { q?: string } =>
+    typeof search.q === "string" && search.q ? { q: search.q.slice(0, 200) } : {},
   head: () => ({
     meta: [
       { title: "Alertas · OLÉ COPILOT" },
@@ -65,6 +67,7 @@ type Tab = "abertos" | "resolvidos" | "excecoes";
 type AgeFilter = "all" | "novo" | "1a7" | "mais7";
 
 function AlertasPage() {
+  const { q: initialSearch = "" } = Route.useSearch();
   const { data: latest, isLoading, error } = useLatestAudit();
   const { data: recurrence } = useFindingRecurrence();
   const { rules } = useEscalationRules();
@@ -77,7 +80,7 @@ function AlertasPage() {
   const [tab, setTab] = useState<Tab>("abertos");
   const [urg, setUrg] = useState<Urgency | "all">("all");
   const [tipo, setTipo] = useState<string>("all");
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(initialSearch);
   const [onlyRecurring, setOnlyRecurring] = useState(false);
   const [onlyReopened, setOnlyReopened] = useState(false);
   const [age, setAge] = useState<AgeFilter>("all");
@@ -89,6 +92,10 @@ function AlertasPage() {
     apolice: string;
     total: number;
   } | null>(null);
+
+  useEffect(() => {
+    setSearch(initialSearch);
+  }, [initialSearch]);
 
   const run = latest?.run ?? null;
 

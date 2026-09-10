@@ -11,6 +11,17 @@ test("Vercel não possui cron automático de 5 em 5 minutos", async () => {
   assert.equal(Object.hasOwn(config, "crons"), false);
 });
 
+test("pesquisa global usa apólices e auditoria reais, sem catálogo mockado", async () => {
+  const palette = await read("src/components/layout/command-palette.tsx");
+  const policies = await read("src/lib/policies.functions.ts");
+  assert.doesNotMatch(palette, /lib\/mock\/data|\bPOLICIES\b/);
+  assert.match(palette, /policiesQuery/);
+  assert.match(palette, /latestAuditQuery/);
+  assert.match(palette, /policy\.corretor_nome/);
+  assert.match(palette, /policy\.coberturas/);
+  assert.match(policies, /endorsements\(id, numero_endosso, ordem\)/);
+});
+
 test("Vercel mantém Fluid Compute e a duração máxima do plano", async () => {
   const vercel = JSON.parse(await read("vercel.json"));
   const vite = await read("vite.config.ts");
@@ -81,11 +92,23 @@ test("scheduler permanece protegido mesmo sem cron da Vercel", async () => {
   assert.match(source, /return json\(\{ ok: false, error: "unauthorized" \}, 401\)/);
 });
 
+test("worker interno avalia os agendamentos automáticos a cada tick do Supabase", async () => {
+  const billingWorkerRoute = await read("src/routes/api/public/hooks/billing-retry.ts");
+  const scheduler = await read("src/lib/automation-scheduler.server.ts");
+  assert.match(billingWorkerRoute, /runDueAutomations\(\)/);
+  assert.match(billingWorkerRoute, /Promise\.allSettled/);
+  assert.match(scheduler, /from\("automation_schedules"\)/);
+  assert.match(scheduler, /last_triggered_at/);
+  assert.match(scheduler, /runPolicySyncImpl\(\)/);
+  assert.match(scheduler, /runAuditImpl\("scheduler"\)/);
+});
+
 test("sincronização da carteira não depende mais do webhook n8n", async () => {
   const serverFn = await read("src/lib/policies.functions.ts");
   const runner = await read("src/lib/policy-sync-runner.server.ts");
+  const hook = await read("src/hooks/use-policies.ts");
   const envExample = await read(".env.example");
-  assert.doesNotMatch(`${serverFn}\n${runner}`, /N8N_MOTOR_POLICIES_URL/);
+  assert.doesNotMatch(`${serverFn}\n${runner}\n${hook}`, /N8N_MOTOR_POLICIES_URL|useWebhookMode/);
   assert.doesNotMatch(envExample, /^N8N_MOTOR_POLICIES_URL=/m);
   assert.match(runner, /executeDirectMotorSync/);
 });

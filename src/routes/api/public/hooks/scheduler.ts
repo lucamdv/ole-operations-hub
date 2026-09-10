@@ -1,29 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { runPolicySyncImpl } from "@/lib/policy-sync-runner.server";
-import { runAuditImpl } from "@/lib/audit-run.server";
-import { zonedParts, zonedTimeToUtc } from "@/lib/automation/next-run";
+import { runDueAutomations } from "@/lib/automation-scheduler.server";
 
 /**
- * Agendador compatível com Vercel Cron (GET) e chamadas externas/n8n (POST).
- *
- * O endpoint é idempotente por natureza: só dispara quando o horário
- * configurado do dia já passou e o disparo do dia ainda não ocorreu (trava
- * via update condicional de last_triggered_at). Portanto, no máximo um
- * disparo automático por job por dia, independentemente de quantas chamadas
- * chegarem. O header `x-hook-secret` é sempre obrigatório: sem o segredo
- * configurado (SCHEDULER_HOOK_SECRET ou POLICY_SYNC_HOOK_SECRET) o endpoint
- * falha fechado e não executa nada.
+ * Entrada protegida para chamadas manuais/externas. O mesmo avaliador também é
+ * acionado pelo tick interno do Supabase usado pelo worker de cobrança.
  */
-
-interface ScheduleRow {
-  job: string;
-  enabled: boolean;
-  run_at_time: string;
-  weekdays: number[];
-  timezone: string;
-  last_triggered_at: string | null;
-}
-
 async function handleScheduler(request: Request, viaVercelCron = false) {
   const expected = viaVercelCron
     ? process.env.CRON_SECRET
@@ -43,84 +24,12 @@ async function handleScheduler(request: Request, viaVercelCron = false) {
   const valid = viaVercelCron ? provided === `Bearer ${expected}` : provided === expected;
   if (!valid) return json({ ok: false, error: "unauthorized" }, 401);
 
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data, error } = await supabaseAdmin
-    .from("automation_schedules")
-    .select("job, enabled, run_at_time, weekdays, timezone, last_triggered_at");
-  if (error) return json({ ok: false, error: error.message }, 500);
-
-  const now = new Date();
-  const results: Array<{ job: string; fired: boolean; reason?: string; error?: string }> = [];
-
-  for (const row of (data ?? []) as unknown as ScheduleRow[]) {
-    if (row.job !== "audit" && row.job !== "policy_sync") continue;
-    if (!row.enabled) {
-      results.push({ job: row.job, fired: false, reason: "disabled" });
-      continue;
-    }
-    const tz = row.timezone || "America/Sao_Paulo";
-    const cur = zonedParts(now, tz);
-    if (!(row.weekdays ?? []).includes(cur.weekday)) {
-      results.push({ job: row.job, fired: false, reason: "weekday" });
-      continue;
-    }
-    const target = zonedTimeToUtc(cur.dateKey, row.run_at_time, tz);
-    if (now.getTime() < target.getTime()) {
-      results.push({ job: row.job, fired: false, reason: "not_due" });
-      continue;
-    }
-    // Já disparou hoje (no fuso local)?
-    if (row.last_triggered_at) {
-      const lastKey = zonedParts(new Date(row.last_triggered_at), tz).dateKey;
-      if (lastKey === cur.dateKey) {
-        results.push({ job: row.job, fired: false, reason: "already_today" });
-        continue;
-      }
-    }
-
-    // Trava: só um request consegue mudar last_triggered_at deste ciclo.
-    const lockQuery = supabaseAdmin
-      .from("automation_schedules")
-      .update({
-        last_triggered_at: now.toISOString(),
-        last_status: "running",
-        last_error: null,
-      } as never)
-      .eq("job", row.job);
-    const { data: locked, error: lockErr } = await (
-      row.last_triggered_at
-        ? lockQuery.eq("last_triggered_at", row.last_triggered_at)
-        : lockQuery.is("last_triggered_at", null)
-    ).select("job");
-
-    if (lockErr) {
-      results.push({ job: row.job, fired: false, error: lockErr.message });
-      continue;
-    }
-    if (!locked || locked.length === 0) {
-      results.push({ job: row.job, fired: false, reason: "locked" });
-      continue;
-    }
-
-    try {
-      if (row.job === "audit") await runAuditImpl("scheduler");
-      else await runPolicySyncImpl();
-      await supabaseAdmin
-        .from("automation_schedules")
-        .update({ last_status: "success" } as never)
-        .eq("job", row.job);
-      results.push({ job: row.job, fired: true });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      await supabaseAdmin
-        .from("automation_schedules")
-        .update({ last_status: "error", last_error: msg } as never)
-        .eq("job", row.job);
-      results.push({ job: row.job, fired: false, error: msg });
-    }
+  try {
+    const result = await runDueAutomations();
+    return json({ ok: true, ...result });
+  } catch (error) {
+    return json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 500);
   }
-
-  return json({ ok: true, at: now.toISOString(), results });
 }
 
 export const Route = createFileRoute("/api/public/hooks/scheduler")({

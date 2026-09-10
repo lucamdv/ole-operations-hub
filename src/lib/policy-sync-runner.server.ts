@@ -2,7 +2,6 @@ import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { getExcelsiorMotorConfig } from "@/lib/excelsior/motor-client.server";
 import { executeDirectMotorSync } from "@/lib/excelsior/motor-sync.server";
 import { keepRequestAlive } from "@/lib/request-lifecycle.server";
-import type { WebhookMode } from "@/lib/webhook-mode";
 
 const STALE_RUN_AFTER_MS = 6 * 60 * 1_000;
 
@@ -41,7 +40,7 @@ async function recoverInterruptedRun(run: {
 
 // Implementação interna (sem auth). Usada tanto pela serverFn protegida quanto
 // pelo hook público /api/public/hooks/policy-sync (que já valida shared-secret).
-export async function runPolicySyncImpl(_webhookMode?: WebhookMode | null) {
+export async function runPolicySyncImpl() {
   const { data: activeRun, error: activeRunError } = await supabaseAdmin
     .from("policy_sync_runs")
     .select("id, created_at, emissoes_status, cobrancas_status")

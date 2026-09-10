@@ -38,7 +38,7 @@ export function IntegracoesTab() {
   const pingAudit = useServerFn(pingAuditWebhook);
 
   const motorMut = useMutation({
-    mutationFn: () => pingMotor({ data: { mode } }),
+    mutationFn: () => pingMotor(),
     onSuccess: (r) => (r.ok ? toast.success(r.message) : toast.error(r.message)),
     onError: (e: Error) => toast.error(e.message),
   });
@@ -69,8 +69,9 @@ export function IntegracoesTab() {
                 </div>
               </div>
               <p className="text-[12px] text-muted-foreground mt-1.5">
-                Esta preferência vale para a auditoria, a extração de endossos e as solicitações de
-                correção dos alertas. Em produção, os disparos usam o caminho
+                Esta preferência vale somente para os fluxos n8n que permanecem ativos: auditoria,
+                extração avulsa de endossos e solicitações de correção dos alertas. Em produção, os
+                disparos usam o caminho
                 <code className="mx-1 px-1 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
                   /webhook/
                 </code>
@@ -79,8 +80,8 @@ export function IntegracoesTab() {
                   /webhook-test/
                 </code>
                 (exige “Listen for test event”). Essa preferência é salva apenas neste
-                usuário/navegador e não afeta a sincronização direta da carteira, os outros usuários
-                nem os disparos automáticos.
+                usuário/navegador e não afeta o MOTOR direto de apólices, endossos e cobranças, os
+                outros usuários nem os disparos automáticos.
               </p>
               <div
                 className={`text-[11.5px] mt-2 ${mode === "production" ? "text-success" : "text-warning"}`}

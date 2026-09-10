@@ -1,5 +1,4 @@
 import { createServerFn } from "@tanstack/react-start";
-import type { WebhookMode } from "@/lib/webhook-mode";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
 import type { Json } from "@/integrations/supabase/types";
@@ -13,6 +12,14 @@ export interface PolicyListItem {
   endorsements_count: number;
   updated_at: string;
   segurado_nome: string | null;
+  corretor_nome: string | null;
+  produto: string | null;
+  coberturas: string[];
+  endorsements: Array<{
+    id: string;
+    numero_endosso: string;
+    ordem: number;
+  }>;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -64,10 +71,9 @@ export interface LatestPolicySync extends PolicySyncStatus {
 
 export const runPolicySync = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d?: { mode?: WebhookMode }) => d ?? {})
-  .handler(async ({ data }) => {
+  .handler(async () => {
     const { runPolicySyncImpl } = await import("@/lib/policy-sync-runner.server");
-    return runPolicySyncImpl(data.mode);
+    return runPolicySyncImpl();
   });
 
 export const getPolicySyncStatus = createServerFn({ method: "GET" })
@@ -203,12 +209,12 @@ export const getPolicies = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async () => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { findSeguradoNome, computePremioLiquido, normalizeEndossoNum } =
+    const { translateProposta, computePremioLiquido, normalizeEndossoNum } =
       await import("@/lib/excelsior/translate");
     const { data, error } = await supabaseAdmin
       .from("policies")
       .select(
-        "id, numero_apolice, numero_endosso_atual, premio_liquido, proposta, updated_at, endorsements(numero_endosso, ordem)",
+        "id, numero_apolice, numero_endosso_atual, premio_liquido, proposta, updated_at, endorsements(id, numero_endosso, ordem)",
       )
       .order("updated_at", { ascending: false });
     if (error) throw new Error(error.message);
@@ -220,10 +226,20 @@ export const getPolicies = createServerFn({ method: "GET" })
         premio_liquido: number | string;
         proposta: JsonObject | null;
         updated_at: string;
-        endorsements: Array<{ numero_endosso: string; ordem: number }>;
+        endorsements: Array<{ id: string; numero_endosso: string; ordem: number }>;
       }>
     ).map((p) => {
       const { valor, moeda } = computePremioLiquido(p.proposta ?? {});
+      const translated = translateProposta(p.proposta ?? {});
+      const segurado = translated.partes.find((parte) => parte.papel === "SEGURADO");
+      const corretor = translated.partes.find((parte) => parte.papel === "CORRETOR");
+      const coberturas = [
+        ...new Set(
+          translated.itens.flatMap((item) =>
+            item.coberturas.map((cobertura) => cobertura.nome).filter(Boolean),
+          ),
+        ),
+      ];
       const endos = p.endorsements ?? [];
       // Último endosso = maior ordem (a apólice base tem ordem 0).
       const ultimo = endos.reduce<{ numero_endosso: string; ordem: number } | null>(
@@ -241,7 +257,18 @@ export const getPolicies = createServerFn({ method: "GET" })
         premio_moeda: moeda,
         endorsements_count: endos.length,
         updated_at: p.updated_at,
-        segurado_nome: findSeguradoNome(p.proposta ?? {}),
+        segurado_nome: segurado?.nome ?? null,
+        corretor_nome: corretor?.nome ?? null,
+        produto:
+          translated.dadosGerais.idProdutoOrigem ??
+          translated.dadosGerais.idProduto ??
+          translated.dadosGerais.tipoApolice,
+        coberturas,
+        endorsements: endos.map((endorsement) => ({
+          id: endorsement.id,
+          numero_endosso: normalizeEndossoNum(endorsement.numero_endosso),
+          ordem: endorsement.ordem,
+        })),
       };
     }) as PolicyListItem[];
   });

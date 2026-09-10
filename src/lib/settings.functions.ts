@@ -123,7 +123,6 @@ async function pingWebhook(url: string | undefined, label: string) {
 
 export const pingMotorPolicies = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d?: { mode?: WebhookMode }) => d ?? {})
   .handler(async ({ context }) => {
     await assertAdmin(context);
     try {

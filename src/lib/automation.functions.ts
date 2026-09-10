@@ -31,12 +31,7 @@ export const getAutomationSchedules = createServerFn({ method: "GET" })
 export const updateAutomationSchedule = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator(
-    (d: {
-      job: AutomationJob;
-      enabled?: boolean;
-      run_at_time?: string;
-      weekdays?: number[];
-    }) => d,
+    (d: { job: AutomationJob; enabled?: boolean; run_at_time?: string; weekdays?: number[] }) => d,
   )
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
@@ -49,20 +44,27 @@ export const updateAutomationSchedule = createServerFn({ method: "POST" })
       if (!/^\d{2}:\d{2}(:\d{2})?$/.test(data.run_at_time)) {
         throw new Error("Horário inválido (use HH:MM)");
       }
-      patch.run_at_time = data.run_at_time.length === 5 ? `${data.run_at_time}:00` : data.run_at_time;
+      patch.run_at_time =
+        data.run_at_time.length === 5 ? `${data.run_at_time}:00` : data.run_at_time;
     }
     if (data.weekdays) {
-      const wd = [...new Set(data.weekdays.filter((n) => Number.isInteger(n) && n >= 0 && n <= 6))].sort();
+      const wd = [
+        ...new Set(data.weekdays.filter((n) => Number.isInteger(n) && n >= 0 && n <= 6)),
+      ].sort();
       if (wd.length === 0) throw new Error("Selecione pelo menos um dia da semana");
       patch.weekdays = wd;
     }
     if (Object.keys(patch).length === 0) return { ok: true };
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin
+    const { data: updated, error } = await supabaseAdmin
       .from("automation_schedules")
       .update(patch as never)
-      .eq("job", data.job);
+      .eq("job", data.job)
+      .select(
+        "job, enabled, run_at_time, weekdays, timezone, last_triggered_at, last_status, last_error",
+      )
+      .single();
     if (error) throw new Error(error.message);
-    return { ok: true };
+    return { ok: true, schedule: updated as unknown as AutomationSchedule };
   });
