@@ -122,11 +122,21 @@ test("pagamento remove parcelas repetidas antes de calcular o total", () => {
     numero_parcela: 1,
     data_vencimento: "2026-08-10",
     agente_cobrador: "SEGURADORA",
-    composicao_premio_parcela: [{ moeda_premio: "USD", valor_premio: 100, valor_premio_brl: 550 }],
+    composicao_premio_parcela: [
+      {
+        natureza_premio: "PREMIO",
+        tipo_premio: "LIQUIDO",
+        moeda_premio: "USD",
+        valor_premio: 100,
+        valor_premio_brl: 550,
+      },
+    ],
   };
   const translated = translateProposta({ pagamento: { parcelas: [parcela, { ...parcela }] } });
 
   assert.equal(translated.pagamento.parcelas.length, 1);
   assert.equal(translated.pagamento.parcelas[0]?.valor, 100);
+  assert.equal(translated.pagamento.parcelas[0]?.composicao.length, 1);
+  assert.equal(translated.pagamento.parcelas[0]?.composicao[0]?.tipo, "LIQUIDO");
   assert.equal(translated.pagamento.totalBRL, 550);
 });

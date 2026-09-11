@@ -14,7 +14,6 @@ import {
 import { toast } from "sonner";
 import {
   getIntegrationsStatus,
-  pingAuditWebhook,
   pingMotorPolicies,
   type IntegrationStatus,
 } from "@/lib/settings.functions";
@@ -35,19 +34,12 @@ export function IntegracoesTab() {
   const { mode, setMode } = useWebhookMode();
 
   const pingMotor = useServerFn(pingMotorPolicies);
-  const pingAudit = useServerFn(pingAuditWebhook);
 
   const motorMut = useMutation({
     mutationFn: () => pingMotor(),
     onSuccess: (r) => (r.ok ? toast.success(r.message) : toast.error(r.message)),
     onError: (e: Error) => toast.error(e.message),
   });
-  const auditMut = useMutation({
-    mutationFn: () => pingAudit({ data: { mode } }),
-    onSuccess: (r) => (r.ok ? toast.success(r.message) : toast.error(r.message)),
-    onError: (e: Error) => toast.error(e.message),
-  });
-
   if (isLoading) {
     return <div className="text-[13px] text-muted-foreground">Carregando integrações…</div>;
   }
@@ -119,17 +111,8 @@ export function IntegracoesTab() {
         <IntegrationCard
           key={it.id}
           item={it}
-          onPing={
-            it.id === "motor_policies"
-              ? () => motorMut.mutate()
-              : it.id === "n8n_audit"
-                ? () => auditMut.mutate()
-                : undefined
-          }
-          pingPending={
-            (it.id === "motor_policies" && motorMut.isPending) ||
-            (it.id === "n8n_audit" && auditMut.isPending)
-          }
+          onPing={it.id === "motor_policies" ? () => motorMut.mutate() : undefined}
+          pingPending={it.id === "motor_policies" && motorMut.isPending}
           onRefresh={() => refetch()}
         />
       ))}

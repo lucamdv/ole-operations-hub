@@ -1,8 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowLeft } from "lucide-react";
-import { useEndorsementDetail } from "@/hooks/use-policies";
+import {
+  ArrowLeft,
+  CalendarRange,
+  ChevronLeft,
+  ChevronRight,
+  FileCheck2,
+  GitBranch,
+  PackageCheck,
+} from "lucide-react";
+import { useEndorsementDetail, usePolicy } from "@/hooks/use-policies";
 import { useEndorsementBilling } from "@/hooks/use-billing";
-import { JsonExplorer } from "@/components/json-explorer";
+import { JsonDocumentPanel } from "@/components/json-explorer";
 import {
   BillingBadge,
   CancelamentoCard,
@@ -10,8 +18,10 @@ import {
   CotacaoCard,
   DadosGeraisCard,
   DatasCard,
+  DocumentoFact,
   DocumentoHeader,
   EndossoSemDadosAviso,
+  fmtDateOnly,
   ItensCoberturas,
   LimiteApoliceCard,
   MotivoEndossoCard,
@@ -19,11 +29,7 @@ import {
   PartesList,
   Section,
 } from "@/components/apolice/cards";
-import {
-  normalizeEndossoNum,
-  parseDocumento,
-  translateProposta,
-} from "@/lib/excelsior/translate";
+import { normalizeEndossoNum, parseDocumento, translateProposta } from "@/lib/excelsior/translate";
 
 export const Route = createFileRoute("/_authenticated/apolices/$id/endossos/$num")({
   head: ({ params }) => ({
@@ -38,6 +44,7 @@ export const Route = createFileRoute("/_authenticated/apolices/$id/endossos/$num
 function EndossoDetail() {
   const { id, num } = Route.useParams();
   const { data: endo, isLoading } = useEndorsementDetail(id, num);
+  const { data: policy } = usePolicy(id);
   const { record: cobranca } = useEndorsementBilling(id, num);
 
   if (isLoading) {
@@ -50,42 +57,79 @@ function EndossoDetail() {
         <Link
           to="/apolices/$id"
           params={{ id }}
-          className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground hover:text-foreground transition"
+          className="inline-flex items-center gap-1.5 text-[12px] text-muted-foreground transition hover:text-foreground"
         >
           <ArrowLeft className="h-3.5 w-3.5" /> Voltar à apólice
         </Link>
-        <div className="panel p-12 text-center page-subtitle">
-          Endosso não encontrado.
-        </div>
+        <div className="panel p-12 text-center page-subtitle">Endosso não encontrado.</div>
       </div>
     );
   }
 
   const t = translateProposta(endo.proposta);
-  // Número real do documento: vem do envelope; fallback = apolice base + sequencial do param.
   const numeroDoc =
     t.numeroDocumento ?? endo.numero_apolice.slice(0, -6) + normalizeEndossoNum(num);
   const documento = parseDocumento(numeroDoc, t.tipoEndosso);
-  const seguradoNome = t.partes.find((p) => p.papel === "SEGURADO")?.nome ?? null;
+  const seguradoNome = t.partes.find((parte) => parte.papel === "SEGURADO")?.nome ?? null;
   const isCancelamento = t.tipoEndosso === "B" || t.tipoEndosso === "C";
+  const produto =
+    t.dadosGerais.idProdutoOrigem ?? t.dadosGerais.idProduto ?? t.dadosGerais.tipoApolice;
+  const totalCoberturas = t.itens.reduce((total, item) => total + item.coberturas.length, 0);
+  const siblings = policy?.endorsements ?? [];
+  const currentIndex = siblings.findIndex(
+    (item) => normalizeEndossoNum(item.numero_endosso) === normalizeEndossoNum(num),
+  );
+  const previous = currentIndex > 0 ? siblings[currentIndex - 1] : null;
+  const next =
+    currentIndex >= 0 && currentIndex < siblings.length - 1 ? siblings[currentIndex + 1] : null;
 
   return (
-    <div className="space-y-6">
-      <nav className="text-[12px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
-        <Link to="/apolices" className="hover:text-foreground transition">
-          Apólices
-        </Link>
-        <span>/</span>
-        <Link
-          to="/apolices/$id"
-          params={{ id }}
-          className="hover:text-foreground transition font-mono"
+    <div className="space-y-9 pb-10">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <nav
+          aria-label="Navegação do documento"
+          className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground"
         >
-          {id}
-        </Link>
-        <span>/</span>
-        <span className="text-foreground font-mono">Endosso {documento.sequencial}</span>
-      </nav>
+          <Link to="/apolices" className="transition hover:text-foreground">
+            Apólices
+          </Link>
+          <span aria-hidden="true">/</span>
+          <Link
+            to="/apolices/$id"
+            params={{ id }}
+            className="font-mono transition hover:text-foreground"
+          >
+            {id}
+          </Link>
+          <span aria-hidden="true">/</span>
+          <span className="font-mono font-medium text-foreground">
+            Endosso {documento.sequencial}
+          </span>
+        </nav>
+
+        <div className="flex items-center gap-2">
+          {previous ? (
+            <Link
+              to="/apolices/$id/endossos/$num"
+              params={{ id, num: previous.numero_endosso }}
+              aria-label={`Abrir endosso anterior, ${normalizeEndossoNum(previous.numero_endosso)}`}
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-border bg-surface px-2.5 text-[11.5px] font-medium text-muted-foreground transition hover:border-primary/30 hover:text-foreground"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" /> Anterior
+            </Link>
+          ) : null}
+          {next ? (
+            <Link
+              to="/apolices/$id/endossos/$num"
+              params={{ id, num: next.numero_endosso }}
+              aria-label={`Abrir próximo endosso, ${normalizeEndossoNum(next.numero_endosso)}`}
+              className="inline-flex h-8 items-center gap-1 rounded-lg border border-border bg-surface px-2.5 text-[11.5px] font-medium text-muted-foreground transition hover:border-primary/30 hover:text-foreground"
+            >
+              Próximo <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </Link>
+          ) : null}
+        </div>
+      </div>
 
       <DocumentoHeader
         documento={documento}
@@ -100,103 +144,121 @@ function EndossoDetail() {
             />
           ) : null
         }
+        extra={
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <DocumentoFact
+              icon={CalendarRange}
+              label="Vigência"
+              value={`${fmtDateOnly(t.datas.inicioVigencia)} → ${fmtDateOnly(t.datas.fimVigencia)}`}
+            />
+            <DocumentoFact
+              icon={PackageCheck}
+              label="Produto"
+              value={produto ?? "Não informado"}
+              mono
+            />
+            <DocumentoFact
+              icon={FileCheck2}
+              label="Proposta"
+              value={t.dadosGerais.numeroPropostaSeguradora ?? cobranca?.numero_proposta ?? "—"}
+              mono
+            />
+            <DocumentoFact
+              icon={GitBranch}
+              label="Posição no histórico"
+              value={
+                currentIndex >= 0
+                  ? `${currentIndex + 1} de ${siblings.length}`
+                  : documento.sequencial
+              }
+              hint={`${totalCoberturas} cobertura${totalCoberturas === 1 ? "" : "s"}`}
+            />
+          </div>
+        }
       />
 
-      <Section
-        title="Cobrança"
-        subtitle="Situação financeira registrada para este endosso"
-      >
-        <CobrancaCard record={cobranca} />
-      </Section>
+      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.55fr)_minmax(320px,0.75fr)]">
+        <Section
+          id="composicao"
+          title="Composição das parcelas"
+          subtitle="Detalhamento dos valores que formam o prêmio deste endosso."
+        >
+          <PagamentoCard pagamento={t.pagamento} />
+        </Section>
+        <Section
+          id="cobranca"
+          title="Situação financeira"
+          subtitle="Status operacional da cobrança vinculada a este endosso."
+        >
+          <CobrancaCard record={cobranca} />
+        </Section>
+      </div>
 
-      {/* Motivo da emissão — vale para todos os tipos de endosso */}
-      {t.motivoEndosso && (
+      {t.motivoEndosso ? (
         <Section
           title="Motivo do endosso"
-          subtitle="Justificativa registrada pela seguradora para a emissão deste documento"
+          subtitle="Justificativa registrada pela seguradora para a emissão deste documento."
         >
           <MotivoEndossoCard motivo={t.motivoEndosso} />
         </Section>
-      )}
+      ) : null}
 
-      {/* Endossos B/C: visualização de cancelamento/alteração */}
-      {isCancelamento ? (
-        <>
-          <Section title="Dados gerais">
-            <DadosGeraisCard dados={t.dadosGerais} />
-          </Section>
+      {t.isWrapperVazio ? <EndossoSemDadosAviso numeroApolice={documento.numeroApolice} /> : null}
 
-          {t.cancelamento && (
-            <Section
-              title={t.tipoEndosso === "C" ? "Cancelamento" : "Alteração"}
-              subtitle={
-                t.tipoEndosso === "C"
-                  ? "Este endosso cancela um documento da apólice"
-                  : "Este endosso altera um documento da apólice"
-              }
-            >
-              <CancelamentoCard cancelamento={t.cancelamento} tipoEndosso={t.tipoEndosso} />
-            </Section>
-          )}
+      {isCancelamento && t.cancelamento ? (
+        <Section
+          title={t.tipoEndosso === "C" ? "Cancelamento" : "Alteração"}
+          subtitle={
+            t.tipoEndosso === "C"
+              ? "Documento e condições afetados pelo cancelamento."
+              : "Documento e condições afetados por esta alteração."
+          }
+        >
+          <CancelamentoCard cancelamento={t.cancelamento} tipoEndosso={t.tipoEndosso} />
+        </Section>
+      ) : null}
 
-          <Section title="Datas">
-            <DatasCard datas={t.datas} />
-          </Section>
-        </>
-      ) : (
-        <>
-          {t.isWrapperVazio && <EndossoSemDadosAviso numeroApolice={documento.numeroApolice} />}
+      <div className="grid items-start gap-6 xl:grid-cols-2">
+        <Section title="Identificação do endosso" subtitle="Origem, produto e dados de subscrição.">
+          <DadosGeraisCard dados={t.dadosGerais} />
+        </Section>
+        <Section title="Vigência e emissão" subtitle="Datas contratuais e marcos deste documento.">
+          <DatasCard datas={t.datas} />
+        </Section>
+      </div>
 
-          {!t.isWrapperVazio && (
-            <>
-              <Section title="Dados gerais">
-                <DadosGeraisCard dados={t.dadosGerais} />
-              </Section>
+      {!t.isWrapperVazio && t.limiteApolice ? (
+        <Section title="Limite e cotação" subtitle="Referências financeiras do endosso.">
+          <div className="grid items-start gap-4 xl:grid-cols-2">
+            <LimiteApoliceCard limite={t.limiteApolice} />
+            <CotacaoCard cotacoes={t.cotacoes} />
+          </div>
+        </Section>
+      ) : null}
 
-              <Section title="Datas">
-                <DatasCard datas={t.datas} />
-              </Section>
+      {!t.isWrapperVazio && t.itens.length > 0 ? (
+        <Section
+          title="Itens e coberturas"
+          subtitle={`${t.itens.length} item${t.itens.length === 1 ? "" : "s"} · ${totalCoberturas} cobertura${totalCoberturas === 1 ? "" : "s"}`}
+        >
+          <ItensCoberturas itens={t.itens} />
+        </Section>
+      ) : null}
 
-              {t.limiteApolice && (
-                <Section title="Limite & Cotação">
-                  <LimiteApoliceCard limite={t.limiteApolice} />
-                  <CotacaoCard cotacoes={t.cotacoes} />
-                </Section>
-              )}
+      {!t.isWrapperVazio && t.partes.length > 0 ? (
+        <Section
+          title="Partes relacionadas"
+          subtitle={`${t.partes.length} participante${t.partes.length === 1 ? "" : "s"} neste documento.`}
+        >
+          <PartesList partes={t.partes} />
+        </Section>
+      ) : null}
 
-              {t.partes.length > 0 && (
-                <Section title="Partes">
-                  <PartesList partes={t.partes} />
-                </Section>
-              )}
-
-              {t.itens.length > 0 && (
-                <Section title="Itens & coberturas">
-                  <ItensCoberturas itens={t.itens} />
-                </Section>
-              )}
-
-              {t.pagamento.parcelas.length > 0 && (
-                <Section title="Pagamento">
-                  <PagamentoCard pagamento={t.pagamento} />
-                </Section>
-              )}
-            </>
-          )}
-
-          {/* Datas sempre úteis no endosso A (delta) */}
-          {t.isWrapperVazio &&
-            (t.datas.inicioVigencia || t.datas.fimVigencia || t.datas.assinatura) && (
-              <Section title="Datas do endosso">
-                <DatasCard datas={t.datas} />
-              </Section>
-            )}
-        </>
-      )}
-
-      <Section title="Dados brutos" subtitle="Payload completo retornado pelo MOTOR OLÉ">
-        <JsonExplorer data={endo.proposta} title="Endosso (raw)" defaultDepth={1} />
-      </Section>
+      <JsonDocumentPanel
+        data={endo.proposta}
+        fileName={`apolice-${id}-endosso-${normalizeEndossoNum(num)}.json`}
+        documentLabel="endosso"
+      />
     </div>
   );
 }

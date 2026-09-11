@@ -147,6 +147,7 @@ export interface ParcelaInfo {
   valorBRL: number | null;
   moeda: string | null;
   agenteCobrador: string | null;
+  composicao: ComposicaoPremioLinha[];
 }
 
 export interface PagamentoInfo {
@@ -445,9 +446,17 @@ function parsePagamento(p: Obj): PagamentoInfo {
     .filter(isObj)
     .map((parc) => {
       const comp = asArr(parc.composicao_premio_parcela).filter(isObj);
-      const totalBRL = comp.reduce((acc, l) => acc + (asNum(l.valor_premio_brl) ?? 0), 0);
-      const totalMoeda = comp.reduce((acc, l) => acc + (asNum(l.valor_premio) ?? 0), 0);
-      const moeda = comp.length > 0 ? (asStr(comp[0].moeda_premio) ?? "BRL") : "BRL";
+      const composicao: ComposicaoPremioLinha[] = comp.map((linha) => ({
+        natureza: asStr(linha.natureza_premio) ?? "—",
+        tipo: asStr(linha.tipo_premio) ?? "—",
+        moeda: asStr(linha.moeda_premio) ?? "BRL",
+        valor: asNum(linha.valor_premio) ?? 0,
+        valorBRL: asNum(linha.valor_premio_brl) ?? 0,
+        idPessoaOrigem: asStr(linha.id_pessoa_origem),
+      }));
+      const totalBRL = composicao.reduce((acc, linha) => acc + linha.valorBRL, 0);
+      const totalMoeda = composicao.reduce((acc, linha) => acc + linha.valor, 0);
+      const moeda = composicao[0]?.moeda ?? "BRL";
       return {
         numero: asNum(parc.numero_parcela),
         vencimento: asStr(parc.data_vencimento) ?? asStr(parc.vencimento),
@@ -455,6 +464,7 @@ function parsePagamento(p: Obj): PagamentoInfo {
         valorBRL: totalBRL || null,
         moeda,
         agenteCobrador: asStr(parc.agente_cobrador),
+        composicao,
       };
     });
   // O MOTOR pode repetir a mesma parcela no payload consolidado. Quando há

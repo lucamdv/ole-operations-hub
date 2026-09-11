@@ -1,10 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { assertAdmin } from "@/lib/assert-admin";
-import { resolveWebhookUrl, type WebhookMode } from "@/lib/webhook-mode";
 
 export interface IntegrationStatus {
-  id: "motor_policies" | "n8n_audit" | "audit_callback";
+  id: "motor_policies" | "audit_callback";
   label: string;
   configured: boolean;
   lastStatus: string | null;
@@ -19,20 +18,12 @@ export const getIntegrationsStatus = createServerFn({ method: "GET" })
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-    const [{ data: lastSync }, { data: lastAudit }] = await Promise.all([
-      supabaseAdmin
-        .from("policy_sync_runs")
-        .select("status, total_apolices, error_message, created_at, finished_at")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-      supabaseAdmin
-        .from("audit_runs")
-        .select("status, total_processado, error_message, created_at")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle(),
-    ]);
+    const { data: lastSync } = await supabaseAdmin
+      .from("policy_sync_runs")
+      .select("status, total_apolices, error_message, created_at, finished_at")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     const sync = lastSync as {
       status: string;
@@ -41,13 +32,6 @@ export const getIntegrationsStatus = createServerFn({ method: "GET" })
       created_at: string;
       finished_at: string | null;
     } | null;
-    const audit = lastAudit as {
-      status: string;
-      total_processado: number | null;
-      error_message: string | null;
-      created_at: string;
-    } | null;
-
     const { getRequestHost, getRequestHeader } = await import("@tanstack/react-start/server");
     const host = getRequestHost();
     const proto = getRequestHeader("x-forwarded-proto") || "https";
@@ -70,19 +54,6 @@ export const getIntegrationsStatus = createServerFn({ method: "GET" })
               : null,
       },
       {
-        id: "n8n_audit",
-        label: "N8N — Motor de Auditoria",
-        configured: !!process.env.N8N_AUDIT_WEBHOOK_URL,
-        lastStatus: audit?.status ?? null,
-        lastAt: audit?.created_at ?? null,
-        lastDetail:
-          audit?.status === "error"
-            ? audit?.error_message
-            : audit
-              ? `${audit.total_processado ?? 0} processadas`
-              : null,
-      },
-      {
         id: "audit_callback",
         label: "Callback de Auditoria (n8n → OLÉ)",
         configured: !!process.env.AUDIT_CALLBACK_SECRET,
@@ -95,31 +66,6 @@ export const getIntegrationsStatus = createServerFn({ method: "GET" })
       },
     ];
   });
-
-async function pingWebhook(url: string | undefined, label: string) {
-  if (!url) return { ok: false, status: 0, message: `${label}: secret não configurada` };
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ping: true, source: "ole-config-test", at: new Date().toISOString() }),
-      signal: AbortSignal.timeout(8_000),
-    });
-    return {
-      ok: res.ok,
-      status: res.status,
-      message: res.ok
-        ? `${label}: HTTP ${res.status} — webhook respondeu`
-        : `${label}: HTTP ${res.status}`,
-    };
-  } catch (err) {
-    return {
-      ok: false,
-      status: 0,
-      message: `${label}: ${err instanceof Error ? err.message : "falha de rede"}`,
-    };
-  }
-}
 
 export const pingMotorPolicies = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -140,15 +86,6 @@ export const pingMotorPolicies = createServerFn({ method: "POST" })
         message: `MOTOR OLÉ: ${error instanceof Error ? error.message : "falha de conexão"}`,
       };
     }
-  });
-
-export const pingAuditWebhook = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .inputValidator((d?: { mode?: WebhookMode }) => d ?? {})
-  .handler(async ({ context, data }) => {
-    await assertAdmin(context);
-    const raw = process.env.N8N_AUDIT_WEBHOOK_URL;
-    return pingWebhook(raw ? resolveWebhookUrl(raw, data.mode) : raw, "N8N Auditoria");
   });
 
 export interface DataCounters {

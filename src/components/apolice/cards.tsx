@@ -1,6 +1,18 @@
 import { ReactNode, useState } from "react";
 import { motion } from "framer-motion";
 import {
+  CalendarDays,
+  CheckCircle2,
+  CircleDollarSign,
+  Clock3,
+  CreditCard,
+  FileCheck2,
+  ReceiptText,
+  UserRound,
+  WalletCards,
+  type LucideIcon,
+} from "lucide-react";
+import {
   Accordion,
   AccordionContent,
   AccordionItem,
@@ -88,9 +100,16 @@ export function Field({
   mono?: boolean;
 }) {
   return (
-    <div className="space-y-0.5">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={cn("text-[13px] text-foreground", mono && "font-mono text-[12.5px]")}>
+    <div className="min-w-0 space-y-1">
+      <div className="text-[10px] font-medium uppercase tracking-[0.11em] text-muted-foreground">
+        {label}
+      </div>
+      <div
+        className={cn(
+          "break-words text-[13.5px] font-medium leading-snug text-foreground",
+          mono && "font-mono text-[12.5px] font-normal tabular-nums",
+        )}
+      >
         {value === null || value === undefined || value === "" ? (
           <span className="text-muted-foreground">—</span>
         ) : (
@@ -105,19 +124,63 @@ export function Section({
   title,
   subtitle,
   children,
+  id,
 }: {
   title: string;
   subtitle?: string;
   children: ReactNode;
+  id?: string;
 }) {
   return (
-    <section className="space-y-3">
-      <div>
-        <div className="text-[14px] font-semibold">{title}</div>
-        {subtitle && <div className="text-[11px] text-muted-foreground">{subtitle}</div>}
+    <section id={id} className="scroll-mt-24 space-y-4">
+      <div className="space-y-1">
+        <div className="text-[17px] font-semibold tracking-[-0.015em] text-foreground">{title}</div>
+        {subtitle && (
+          <div className="max-w-3xl text-[12px] leading-relaxed text-muted-foreground">
+            {subtitle}
+          </div>
+        )}
       </div>
       {children}
     </section>
+  );
+}
+
+export function DocumentoFact({
+  icon: Icon,
+  label,
+  value,
+  hint,
+  mono = false,
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: ReactNode;
+  hint?: ReactNode;
+  mono?: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 items-start gap-3 rounded-xl border border-border/70 bg-background/55 p-3.5">
+      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-primary/8 text-primary">
+        <Icon className="h-4 w-4" aria-hidden="true" />
+      </div>
+      <div className="min-w-0">
+        <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+          {label}
+        </div>
+        <div
+          className={cn(
+            "mt-1 truncate text-[13px] font-semibold text-foreground",
+            mono && "font-mono text-[12px] font-medium tabular-nums",
+          )}
+        >
+          {value === null || value === undefined || value === "" ? "—" : value}
+        </div>
+        {hint ? (
+          <div className="mt-0.5 truncate text-[10.5px] text-muted-foreground">{hint}</div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -200,14 +263,15 @@ export function DocumentoHeader({
 }) {
   const isApolice = documento.tipo === "APOLICE";
   return (
-    <motion.div
+    <motion.section
       initial={{ opacity: 0, y: -4 }}
       animate={{ opacity: 1, y: 0 }}
-      className="panel bg-gradient-surface p-5"
+      className="panel-elevated relative overflow-hidden"
     >
-      <div className="flex items-start justify-between gap-6 flex-wrap">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 mb-2 flex-wrap">
+      <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-primary via-primary/55 to-transparent" />
+      <div className="grid gap-7 p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end lg:p-7">
+        <div className="min-w-0 space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
             <EndossoBadge
               tipo={documento.tipo}
               tipoEndosso={documento.tipoEndosso}
@@ -215,33 +279,43 @@ export function DocumentoHeader({
             />
             {badge}
             {!isApolice && (
-              <span className="text-[11px] text-muted-foreground">
+              <span className="text-[11.5px] text-muted-foreground">
                 da apólice <span className="font-mono">{documento.numeroApolice}</span>
               </span>
             )}
           </div>
-          <div className="font-mono text-[18px] sm:text-[22px] font-semibold tracking-tight break-all">
-            {documento.numeroCompleto}
-          </div>
-          {seguradoNome && (
-            <div className="text-[13px] text-muted-foreground mt-1">
-              Segurado: <span className="text-foreground">{seguradoNome}</span>
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              Número do documento
             </div>
-          )}
+            <h1 className="mt-1.5 break-all font-mono text-[23px] font-semibold tracking-[-0.035em] text-foreground sm:text-[30px] lg:text-[34px]">
+              {documento.numeroCompleto}
+            </h1>
+          </div>
+          {seguradoNome ? (
+            <div className="flex items-center gap-2 text-[13px] text-muted-foreground">
+              <UserRound className="h-4 w-4 text-primary" aria-hidden="true" />
+              <span>Segurado</span>
+              <span className="truncate font-semibold text-foreground">{seguradoNome}</span>
+            </div>
+          ) : null}
         </div>
         {premioValor !== undefined && (
-          <div className="text-right">
-            <div className="text-[10.5px] uppercase tracking-wider text-muted-foreground">
+          <div className="min-w-[220px] rounded-2xl border border-primary/15 bg-primary/[0.055] p-4 lg:text-right">
+            <div className="flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.12em] text-muted-foreground lg:justify-end">
+              <CircleDollarSign className="h-4 w-4 text-primary" aria-hidden="true" />
               Prêmio total
             </div>
-            <div className="text-[18px] sm:text-[22px] font-semibold text-foreground font-mono">
+            <div className="mt-2 font-mono text-[23px] font-semibold tracking-[-0.035em] text-foreground sm:text-[27px]">
               {fmtNum(premioValor ?? 0, premioMoeda ?? "BRL")}
             </div>
           </div>
         )}
       </div>
-      {extra && <div className="mt-6">{extra}</div>}
-    </motion.div>
+      {extra ? (
+        <div className="border-t border-border/70 bg-surface-2/35 p-4 sm:p-5">{extra}</div>
+      ) : null}
+    </motion.section>
   );
 }
 
@@ -715,42 +789,122 @@ export function ItensCoberturas({ itens }: { itens: ItemInfo[] }) {
 export function PagamentoCard({ pagamento }: { pagamento: PagamentoInfo }) {
   if (pagamento.parcelas.length === 0)
     return (
-      <div className="panel p-5 text-[12px] text-muted-foreground">Sem parcelas registradas.</div>
+      <div className="panel-quiet flex min-h-40 items-center justify-center gap-3 p-6 text-[12.5px] text-muted-foreground">
+        <WalletCards className="h-5 w-5" aria-hidden="true" />
+        Sem composição de parcelas registrada neste documento.
+      </div>
     );
   const moeda = pagamento.parcelas.find((p) => p.moeda)?.moeda ?? "BRL";
   const totalMoeda = pagamento.parcelas.reduce((acc, p) => acc + (p.valor ?? 0), 0);
   return (
-    <div className="panel overflow-hidden">
-      <table className="data-table text-[12px]">
-        <thead className="bg-surface-2/60 text-muted-foreground">
-          <tr>
-            <th className="text-left font-medium px-3 py-2">#</th>
-            <th className="text-left font-medium px-3 py-2">Vencimento</th>
-            <th className="text-left font-medium px-3 py-2">Agente</th>
-            <th className="text-right font-medium px-3 py-2">Valor</th>
-          </tr>
-        </thead>
-        <tbody>
-          {pagamento.parcelas.map((p, i) => (
-            <tr key={i} className="border-t border-border/60">
-              <td className="px-3 py-2 font-mono">{p.numero ?? i + 1}</td>
-              <td className="px-3 py-2 font-mono">{fmtDate(p.vencimento)}</td>
-              <td className="px-3 py-2 font-mono text-muted-foreground">
-                {p.agenteCobrador ?? "—"}
-              </td>
-              <td className="px-3 py-2 text-right font-mono">
-                {fmtNum(p.valor, p.moeda ?? "BRL")}
-              </td>
-            </tr>
-          ))}
-          <tr className="border-t border-border bg-surface-2/40 font-semibold">
-            <td colSpan={3} className="px-3 py-2 text-right">
-              Total
-            </td>
-            <td className="px-3 py-2 text-right font-mono">{fmtNum(totalMoeda, moeda)}</td>
-          </tr>
-        </tbody>
-      </table>
+    <div className="panel-elevated overflow-hidden">
+      <div className="flex flex-wrap items-end justify-between gap-4 border-b border-border/70 bg-surface-2/35 p-5">
+        <div>
+          <div className="flex items-center gap-2 text-[10.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">
+            <WalletCards className="h-4 w-4 text-primary" aria-hidden="true" />
+            Plano financeiro
+          </div>
+          <div className="mt-1.5 text-[13px] text-muted-foreground">
+            {pagamento.parcelas.length} {pagamento.parcelas.length === 1 ? "parcela" : "parcelas"}{" "}
+            no documento
+          </div>
+        </div>
+        <div className="text-left sm:text-right">
+          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            Total das parcelas
+          </div>
+          <div className="mt-1 font-mono text-[24px] font-semibold tracking-[-0.03em] text-foreground">
+            {fmtNum(totalMoeda, moeda)}
+          </div>
+          {moeda !== "BRL" && pagamento.totalBRL > 0 ? (
+            <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+              Equivalente a {fmtNum(pagamento.totalBRL, "BRL")}
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="space-y-4 p-4 sm:p-5">
+        {pagamento.parcelas.map((parcela, index) => (
+          <article
+            key={`${parcela.numero ?? index}-${parcela.vencimento ?? "sem-data"}`}
+            className="overflow-hidden rounded-2xl border border-border bg-background/65"
+          >
+            <div className="grid gap-4 border-b border-border/70 p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-primary/10 font-mono text-[13px] font-semibold text-primary">
+                  {String(parcela.numero ?? index + 1).padStart(2, "0")}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[14px] font-semibold text-foreground">
+                    Parcela {parcela.numero ?? index + 1}
+                  </div>
+                  <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11.5px] text-muted-foreground">
+                    <span className="inline-flex items-center gap-1.5">
+                      <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+                      Vence em {fmtDateOnly(parcela.vencimento)}
+                    </span>
+                    {parcela.agenteCobrador ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <FileCheck2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        {parcela.agenteCobrador}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+              <div className="sm:text-right">
+                <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                  Valor da parcela
+                </div>
+                <div className="mt-1 font-mono text-[20px] font-semibold tracking-[-0.025em] text-foreground">
+                  {fmtNum(parcela.valor, parcela.moeda ?? "BRL")}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <ReceiptText className="h-4 w-4 text-primary" aria-hidden="true" />
+                <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-foreground">
+                  Composição da parcela
+                </div>
+              </div>
+              {parcela.composicao.length > 0 ? (
+                <div className="divide-y divide-border/60 rounded-xl border border-border/70 bg-surface-2/25">
+                  {parcela.composicao.map((linha, lineIndex) => (
+                    <div
+                      key={`${linha.natureza}-${linha.tipo}-${lineIndex}`}
+                      className="grid gap-2 px-3.5 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-medium text-foreground">
+                          {NATUREZA_PREMIO_LABEL[linha.natureza] ?? linha.natureza}
+                        </div>
+                        <div className="mt-0.5 font-mono text-[10.5px] text-muted-foreground">
+                          {linha.tipo}
+                        </div>
+                      </div>
+                      <div className="font-mono text-[14px] font-semibold tabular-nums text-foreground sm:text-right">
+                        {fmtNum(linha.valor, linha.moeda)}
+                        {linha.moeda !== "BRL" && linha.valorBRL ? (
+                          <div className="mt-0.5 text-[10.5px] font-normal text-muted-foreground">
+                            {fmtNum(linha.valorBRL, "BRL")}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl border border-dashed border-border px-4 py-3 text-[12px] text-muted-foreground">
+                  O MOTOR informou apenas o valor consolidado desta parcela.
+                </div>
+              )}
+            </div>
+          </article>
+        ))}
+      </div>
     </div>
   );
 }
@@ -833,7 +987,7 @@ export function BillingBadge({
 }
 
 /** Data pura (yyyy-mm-dd) sem deslocamento de fuso. */
-function fmtDateOnly(v: string | null | undefined): string {
+export function fmtDateOnly(v: string | null | undefined): string {
   if (!v) return "—";
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v);
   if (m) return `${m[3]}/${m[2]}/${m[1]}`;
@@ -858,15 +1012,21 @@ export function CobrancaCard({
 }) {
   if (!record) {
     return (
-      <div className="panel p-5 text-[12.5px] text-muted-foreground">
-        Sem dados de cobrança para este documento.
+      <div className="panel-quiet flex min-h-56 flex-col items-center justify-center gap-3 p-6 text-center text-[12.5px] text-muted-foreground">
+        <CreditCard className="h-6 w-6 text-muted-foreground/60" aria-hidden="true" />
+        <div>
+          <div className="font-medium text-foreground">Cobrança ainda não registrada</div>
+          <div className="mt-1">Não há situação financeira operacional para este documento.</div>
+        </div>
       </div>
     );
   }
+  const paymentStatus = statusPagamentoLabel(record.status_pagamento);
+  const settled = (record.status_pagamento ?? "").trim().toLowerCase().startsWith("total");
   return (
-    <div className="panel overflow-hidden">
-      <div className="px-5 py-3 border-b border-border bg-surface-2/50 flex items-center justify-between gap-3">
-        <span className="text-[11px] uppercase tracking-wider text-muted-foreground font-semibold">
+    <div className="panel-elevated h-full overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-border/70 bg-surface-2/35 px-5 py-4">
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.13em] text-muted-foreground">
           {titulo}
         </span>
         <BillingBadge
@@ -874,14 +1034,54 @@ export function CobrancaCard({
           situacaoEmissao={record.situacao_emissao}
         />
       </div>
-      <div className="p-5 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        <Field label="Status do pagamento" value={statusPagamentoLabel(record.status_pagamento)} />
-        <Field label="Situação da emissão" value={record.situacao_emissao || "—"} />
-        <Field label="Nº da proposta" value={record.numero_proposta ?? "—"} mono />
-        <Field label="Parcela" value={billingInstallmentLabel(record.numero_parcela)} mono />
-        <Field label="Vencimento" value={fmtDateOnly(record.data_vencimento)} mono />
-        <Field label="Quitação" value={fmtDate(record.data_quitacao)} mono />
-        <Field label="Endosso" value={normalizeBillingEndosso(record.numero_endosso)} mono />
+      <div className="space-y-5 p-5">
+        <div>
+          <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+            {settled ? (
+              <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />
+            ) : (
+              <Clock3 className="h-4 w-4 text-warning" aria-hidden="true" />
+            )}
+            Status do pagamento
+          </div>
+          <div
+            className={cn(
+              "mt-2 text-[26px] font-semibold tracking-[-0.035em]",
+              settled ? "text-success" : "text-foreground",
+            )}
+          >
+            {paymentStatus}
+          </div>
+          <div className="mt-1 text-[12px] text-muted-foreground">
+            Emissão {record.situacao_emissao || "sem situação informada"}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-xl border border-border bg-background/60 p-3.5">
+            <div className="text-[10px] font-medium uppercase tracking-[0.11em] text-muted-foreground">
+              Parcela
+            </div>
+            <div className="mt-1.5 font-mono text-[18px] font-semibold text-foreground">
+              {billingInstallmentLabel(record.numero_parcela)}
+            </div>
+          </div>
+          <div className="rounded-xl border border-border bg-background/60 p-3.5">
+            <div className="text-[10px] font-medium uppercase tracking-[0.11em] text-muted-foreground">
+              Vencimento
+            </div>
+            <div className="mt-1.5 font-mono text-[15px] font-semibold text-foreground">
+              {fmtDateOnly(record.data_vencimento)}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 border-t border-border/70 pt-4 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+          <Field label="Nº da proposta" value={record.numero_proposta} mono />
+          <Field label="Endosso" value={normalizeBillingEndosso(record.numero_endosso)} mono />
+          <Field label="Quitação" value={fmtDate(record.data_quitacao)} mono />
+          <Field label="Situação da emissão" value={record.situacao_emissao} />
+        </div>
       </div>
     </div>
   );
@@ -906,8 +1106,8 @@ export function CobrancasList({ rows: allRows }: { rows: BillingRecord[] }) {
     );
   }
   return (
-    <div className="panel overflow-hidden">
-      <div className="px-4 py-3 border-b border-border bg-surface-2/40">
+    <div className="panel-elevated overflow-hidden">
+      <div className="border-b border-border/70 bg-surface-2/35 px-4 py-3.5 sm:px-5">
         <BillingFilters
           tags={tags}
           onToggleTag={(t) =>
@@ -918,49 +1118,57 @@ export function CobrancasList({ rows: allRows }: { rows: BillingRecord[] }) {
           onSituacao={setSituacao}
         />
       </div>
-      <div className="grid grid-cols-12 px-4 py-2.5 text-[10.5px] uppercase tracking-wider text-muted-foreground bg-surface-2/60 border-b border-border">
-        <div className="col-span-2">Endosso</div>
-        <div className="col-span-1">Parcela</div>
-        <div className="col-span-2">Proposta</div>
-        <div className="col-span-2">Status</div>
-        <div className="col-span-2 text-right">Vencimento</div>
-        <div className="col-span-3 text-right">Quitação</div>
-      </div>
       {rows.length === 0 && (
         <div className="px-4 py-8 text-center text-[12px] text-muted-foreground">
           Nenhuma cobrança corresponde aos filtros.
         </div>
       )}
-
-      {rows.map((r) => (
-        <div
-          key={`${r.numero_apolice}-${r.numero_endosso}-${r.numero_parcela}`}
-          className="grid grid-cols-12 items-center px-4 py-2.5 border-b border-border/40 last:border-0 text-[12px]"
-        >
-          <div className="col-span-2 font-mono text-muted-foreground">
-            {normalizeBillingEndosso(r.numero_endosso)}
-          </div>
-          <div className="col-span-1 font-mono text-muted-foreground">
-            {billingInstallmentLabel(r.numero_parcela)}
-          </div>
-          <div className="col-span-2 font-mono text-[11.5px] text-muted-foreground truncate">
-            {r.numero_proposta ?? "—"}
-          </div>
-          <div className="col-span-2">
-            <BillingBadge
-              statusPagamento={r.status_pagamento}
-              situacaoEmissao={r.situacao_emissao}
-              size="sm"
-            />
-          </div>
-          <div className="col-span-2 text-right font-mono text-[11.5px]">
-            {fmtDateOnly(r.data_vencimento)}
-          </div>
-          <div className="col-span-3 text-right font-mono text-[11.5px]">
-            {fmtDate(r.data_quitacao)}
-          </div>
+      {rows.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="data-table min-w-[760px] text-[12px]">
+            <thead>
+              <tr>
+                <th className="px-4 py-3 text-left sm:px-5">Endosso</th>
+                <th className="px-3 py-3 text-left">Parcela</th>
+                <th className="px-3 py-3 text-left">Proposta</th>
+                <th className="px-3 py-3 text-left">Status</th>
+                <th className="px-3 py-3 text-right">Vencimento</th>
+                <th className="px-4 py-3 text-right sm:px-5">Quitação</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((record) => (
+                <tr
+                  key={`${record.numero_apolice}-${record.numero_endosso}-${record.numero_parcela}`}
+                >
+                  <td className="px-4 py-3.5 font-mono font-medium text-foreground sm:px-5">
+                    {normalizeBillingEndosso(record.numero_endosso)}
+                  </td>
+                  <td className="px-3 py-3.5 font-mono text-muted-foreground">
+                    {billingInstallmentLabel(record.numero_parcela)}
+                  </td>
+                  <td className="max-w-48 truncate px-3 py-3.5 font-mono text-[11.5px] text-muted-foreground">
+                    {record.numero_proposta ?? "—"}
+                  </td>
+                  <td className="px-3 py-3.5">
+                    <BillingBadge
+                      statusPagamento={record.status_pagamento}
+                      situacaoEmissao={record.situacao_emissao}
+                      size="sm"
+                    />
+                  </td>
+                  <td className="px-3 py-3.5 text-right font-mono text-[11.5px]">
+                    {fmtDateOnly(record.data_vencimento)}
+                  </td>
+                  <td className="px-4 py-3.5 text-right font-mono text-[11.5px] sm:px-5">
+                    {fmtDate(record.data_quitacao)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      ))}
+      ) : null}
     </div>
   );
 }

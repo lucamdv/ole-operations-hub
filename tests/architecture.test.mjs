@@ -113,6 +113,36 @@ test("sincronização da carteira não depende mais do webhook n8n", async () =>
   assert.match(runner, /executeDirectMotorSync/);
 });
 
+test("aba de integrações não exibe o antigo motor n8n", async () => {
+  const settings = await read("src/lib/settings.functions.ts");
+  const integrations = await read("src/components/settings/integracoes-tab.tsx");
+  assert.doesNotMatch(
+    `${settings}\n${integrations}`,
+    /n8n_audit|pingAuditWebhook|Motor de Auditoria/,
+  );
+  assert.match(settings, /MOTOR OLÉ — API direta da carteira/);
+});
+
+test("detalhes de apólice e endosso priorizam a composição financeira", async () => {
+  const cards = await read("src/components/apolice/cards.tsx");
+  const jsonExplorer = await read("src/components/json-explorer.tsx");
+  const policy = await read("src/routes/_authenticated/apolices.$id.index.tsx");
+  const endorsement = await read("src/routes/_authenticated/apolices.$id.endossos.$num.tsx");
+  const translator = await read("src/lib/excelsior/translate.ts");
+
+  assert.match(cards, /Composição da parcela/);
+  assert.match(cards, /Valor da parcela/);
+  assert.match(translator, /composicao: ComposicaoPremioLinha\[\]/);
+  assert.match(policy, /title="Composição das parcelas"/);
+  assert.match(endorsement, /title="Composição das parcelas"/);
+  assert.match(endorsement, /Abrir próximo endosso/);
+  assert.match(jsonExplorer, /Dados técnicos do MOTOR OLÉ/);
+  assert.match(jsonExplorer, /Baixar JSON completo/);
+  assert.match(jsonExplorer, /new Blob\(\[contents\]/);
+  assert.match(policy, /data=\{policy\.proposta\}/);
+  assert.match(endorsement, /data=\{endo\.proposta\}/);
+});
+
 test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manual", async () => {
   const alertPage = await read("src/routes/_authenticated/alertas.tsx");
   const incidentRow = await read("src/components/alertas/incident-row.tsx");
