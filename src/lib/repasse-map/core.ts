@@ -64,6 +64,12 @@ const CONTRACT_RULE_ROWS: RepasseCellValue[][] = [
     "Sinistralidade Referência",
     "Ultrapassar a sinistralidade referência pode autorizar a suspensão temporária de novas emissões de apólices, mediante a execução de um plano de contenção de sinistralidade. (item 4.2 do Anexo I do Acordo Op)",
   ],
+  [
+    null,
+    null,
+    "Nota 2026",
+    "Condições herdadas do modelo anterior. Confirmar os parâmetros no contrato de 2026 antes do uso externo.",
+  ],
 ];
 
 export interface RepasseSourceRow {
@@ -560,18 +566,28 @@ export function repasseSourceRow(
   };
 }
 
+const SUMMARY_MONEY_ROWS = new Set([
+  6, 7, 8, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 25, 26, 27, 28, 30,
+]);
+
+function round(value: number) {
+  return (Math.sign(value) * Math.round((Math.abs(value) + Number.EPSILON) * 100)) / 100;
+}
+
 function exactSummary(paid: number, brokerage: number) {
   const r = REPASSE_RULES;
-  const iof = paid * r.IOF_PCT;
-  const liquid = paid - iof;
-  const ole = liquid * r.FEE_OLE_PCT;
-  const acquisition = liquid * r.NOMAD_PCT;
-  const commissions = ole + acquisition;
-  const pis = commissions * r.PIS_COFINS_PCT;
-  const excelsiorFee = liquid * r.FEE_EXCELSIOR_PCT;
-  const supplementary = r.FIXO_SUPLEMENTAR_PISO - excelsiorFee;
-  const loading = excelsiorFee + supplementary;
-  const direct = liquid - commissions - excelsiorFee + brokerage;
+  paid = round(paid);
+  brokerage = round(brokerage);
+  const iof = round(paid * r.IOF_PCT);
+  const liquid = round(paid - iof);
+  const ole = round(liquid * r.FEE_OLE_PCT);
+  const acquisition = round(liquid * r.NOMAD_PCT);
+  const commissions = round(ole + acquisition);
+  const pis = round(commissions * r.PIS_COFINS_PCT);
+  const excelsiorFee = round(liquid * r.FEE_EXCELSIOR_PCT);
+  const supplementary = round(r.FIXO_SUPLEMENTAR_PISO - excelsiorFee);
+  const loading = round(excelsiorFee + supplementary);
+  const direct = round(liquid - commissions - excelsiorFee + brokerage);
   return {
     paid,
     iof,
@@ -580,16 +596,20 @@ function exactSummary(paid: number, brokerage: number) {
     acquisition,
     commissions,
     pis,
-    totalOle: commissions - pis,
+    totalOle: round(commissions - pis),
     excelsiorFee,
     supplementary,
     loading,
     direct,
-    retained: direct * 0.1,
-    ceded: direct * 0.9,
+    retained: round(direct * 0.1),
+    ceded: round(direct * 0.9),
     brokerage,
-    total: loading + direct + pis,
+    total: round(loading + direct + pis),
   };
+}
+
+function moneyCell(value: number, formula: string): RepasseCell {
+  return cell(value, `ROUND(${formula},2)`);
 }
 
 function buildSummarySheet(rows: RepasseSourceRow[], start: string, end: string): RepasseSheet {
@@ -611,72 +631,72 @@ function buildSummarySheet(rows: RepasseSourceRow[], start: string, end: string)
   grid[5]![3] = cell("BASE DE CALCULO");
   grid[5]![4] = cell("DESCRIÇÃO");
   grid[6]![1] = cell("(+) Valor total dos prêmios faturados e pagos");
-  grid[6]![2] = cell(
+  grid[6]![2] = moneyCell(
     summary.paid,
     "SUM(Analitico_Dados!I3:I1048576,Analitico_Dados_Corretores!I3:I1048576)",
   );
   grid[6]![4] = cell("Valor total pago pelos clientes");
   grid[7]![1] = cell("(-) IOF");
-  grid[7]![2] = cell(-summary.iof, "C7*D8*-1");
+  grid[7]![2] = moneyCell(-summary.iof, "C7*D8*-1");
   grid[7]![3] = cell(REPASSE_RULES.IOF_PCT);
   grid[7]![4] = cell("5.03% (0.38% IOF + 4.65% PIS/COFINS)");
   grid[8]![1] = cell("(=) Prêmio líquido de IOF");
-  grid[8]![2] = cell(summary.liquid, "$C$7-($C$8*-1)");
+  grid[8]![2] = moneyCell(summary.liquid, "$C$7-($C$8*-1)");
 
   grid[10]![1] = cell("TOTAL DE COMISSÕES E RETENÇÃO OLÉ");
   grid[11]![1] = cell("(=) Prêmio líquido de IOF");
-  grid[11]![2] = cell(summary.liquid, "C9");
+  grid[11]![2] = moneyCell(summary.liquid, "C9");
   grid[11]![4] = cell("Prêmio Líquido de IOF");
   grid[12]![1] = cell("(-) Remuneração Olé (30 a 35%)");
-  grid[12]![2] = cell(-summary.ole, "C12*0.35*-1");
+  grid[12]![2] = moneyCell(-summary.ole, "C12*0.35*-1");
   grid[12]![3] = cell(REPASSE_RULES.FEE_OLE_PCT);
   grid[12]![4] = cell("Comissão Olé");
   grid[13]![1] = cell("(-) Custo de Aquisição (20 a 25%)");
-  grid[13]![2] = cell(-summary.acquisition, "($C$9*0.2) * -1");
+  grid[13]![2] = moneyCell(-summary.acquisition, "($C$9*0.2) * -1");
   grid[13]![3] = cell(REPASSE_RULES.NOMAD_PCT);
   grid[13]![4] = cell("Comissão Canal de vendas");
   grid[14]![1] = cell("(=) Total de comissões Olé (50 a 55%)");
-  grid[14]![2] = cell(summary.commissions, "SUM(C13:C14)*-1");
+  grid[14]![2] = moneyCell(summary.commissions, "SUM(C13:C14)*-1");
   grid[14]![3] = cell(REPASSE_RULES.FEE_OLE_PCT + REPASSE_RULES.NOMAD_PCT, "SUM(D12:D14)");
   grid[14]![4] = cell("Valor total retido pela Olé");
   grid[15]![1] = cell("(-) PIS/COFINS Olé e Nomad");
-  grid[15]![2] = cell(-summary.pis, "C15*0.0465*-1");
+  grid[15]![2] = moneyCell(-summary.pis, "C15*0.0465*-1");
   grid[15]![3] = cell("4,65%");
   grid[15]![4] = cell("PIS/COFINS sobre a soma de comissões de Olé e Nomad");
   grid[16]![1] = cell("(=) Total de retenção Olé");
-  grid[16]![2] = cell(summary.totalOle, "C15+C16");
+  grid[16]![2] = moneyCell(summary.totalOle, "C15+C16");
 
   grid[18]![1] = cell("FEE EXCELSIOR");
   grid[19]![1] = cell("(=) Prêmio líquido de IOF");
-  grid[19]![2] = cell(summary.liquid, "C9");
+  grid[19]![2] = moneyCell(summary.liquid, "C9");
   grid[20]![1] = cell("(-) Fee Excelsior (5 a 10%)");
-  grid[20]![2] = cell(-summary.excelsiorFee, "C9*D21*-1");
+  grid[20]![2] = moneyCell(-summary.excelsiorFee, "C9*D21*-1");
   grid[20]![3] = cell(REPASSE_RULES.FEE_EXCELSIOR_PCT);
   grid[21]![1] = cell("(=) Fixo Suplementar");
-  grid[21]![2] = cell(summary.supplementary, "8333.33-(C21*-1)");
+  grid[21]![2] = moneyCell(summary.supplementary, "8333.33-(C21*-1)");
   grid[21]![3] = cell("8.333,33 ");
   grid[21]![4] = cell(
     "Garantia mínima contratual (Diferença entre 8.333,33 e os 5% do Fee Excelsior)",
   );
   grid[22]![1] = cell("(=) Total de carregamento Excelsior");
-  grid[22]![2] = cell(summary.loading, "(C21*-1)+C22");
+  grid[22]![2] = moneyCell(summary.loading, "(C21*-1)+C22");
   grid[22]![4] = cell("Fee Excelsior + PIS/COFINS do Fee Excelsior + Fixo Suplementar");
 
   grid[24]![1] = cell("PRÊMIO DIRETO SEGURADORA E RESSEGURADORA");
   grid[25]![1] = cell("(=) Prêmio Direto (40% do prêmio líquido de IOF)");
-  grid[25]![2] = cell(summary.direct, "(C9)-(C15)-(C21*-1)+ C29");
+  grid[25]![2] = moneyCell(summary.direct, "(C9)-(C15)-(C21*-1)+ C29");
   grid[25]![3] = cell(0.4);
   grid[26]![1] = cell("(-) Prêmio Retido Excelsior");
-  grid[26]![2] = cell(summary.retained, "$C$26*0.1");
+  grid[26]![2] = moneyCell(summary.retained, "$C$26*0.1");
   grid[26]![3] = cell(0.1);
   grid[27]![1] = cell("(-) Prêmio Cedido Munich RE");
-  grid[27]![2] = cell(summary.ceded, "$C$26*0.9");
+  grid[27]![2] = moneyCell(summary.ceded, "$C$26*0.9");
   grid[27]![3] = cell(0.9);
   grid[28]![1] = cell("(-) Prêmio Retido Corretores");
-  grid[28]![2] = cell(summary.brokerage, "SUM(Analitico_Dados_Corretores!J3:J1048576)");
+  grid[28]![2] = moneyCell(summary.brokerage, "SUM(Analitico_Dados_Corretores!J3:J1048576)");
 
   grid[30]![1] = cell("Total do Repasse à Excelsior");
-  grid[30]![2] = cell(summary.total, "(C16*-1)+C23+C26");
+  grid[30]![2] = moneyCell(summary.total, "(C16*-1)+C23+C26");
   grid[30]![4] = cell(
     "Total (Comissões, Garantia Mínima, Impostos, Valores pendentes de PIS/COFINS e Prêmio Direto e Repasses Munich RE)",
   );
@@ -741,7 +761,7 @@ function buildAnalyticSheet(
 function buildRulesSheet(): RepasseSheet {
   return {
     id: "rules",
-    name: "Regras do Contrato2025",
+    name: "Regras do Contrato2026",
     rows: CONTRACT_RULE_ROWS.map((row) => row.map((value) => cell(value))),
     columnWidths: [14, 11, 35, 59],
   };
@@ -786,8 +806,11 @@ function setFormulaResult(sheet: RepasseSheet, row: number, column: number, valu
 }
 
 /** Atualiza os resultados visíveis sem restaurar fórmulas substituídas manualmente. */
-export function recalculateRepasseWorkbook(workbook: RepasseWorkbook): RepasseWorkbook {
-  const copy = structuredClone(workbook);
+export function recalculateRepasseWorkbook(
+  workbook: RepasseWorkbook,
+  clone = true,
+): RepasseWorkbook {
+  const copy = clone ? structuredClone(workbook) : workbook;
   const summary = copy.sheets.find((sheet) => sheet.id === "summary");
   const analyticSheets = copy.sheets.filter(
     (sheet) => sheet.id === "analytic" || sheet.id === "brokerAnalytic",
@@ -839,11 +862,166 @@ export function updateRepasseCell(
   const sheet = copy.sheets.find((item) => item.id === sheetId);
   const target = sheet?.rows[rowIndex]?.[columnIndex];
   if (!target) return workbook;
-  target.value = value;
+  target.value =
+    sheetId === "summary" &&
+    columnIndex === 2 &&
+    SUMMARY_MONEY_ROWS.has(rowIndex) &&
+    typeof value === "number"
+      ? round(value)
+      : value;
   delete target.formula;
   return sheetId === "analytic" || sheetId === "brokerAnalytic"
-    ? recalculateRepasseWorkbook(copy)
+    ? recalculateRepasseWorkbook(copy, false)
     : copy;
+}
+
+export type RepasseStructureAction =
+  | "addCell"
+  | "removeCell"
+  | "addRow"
+  | "removeRow"
+  | "addColumn"
+  | "removeColumn"
+  | "removeDocument";
+
+export function repasseDocumentCount(workbook: RepasseWorkbook) {
+  return workbook.sheets
+    .filter((sheet) => sheet.id === "analytic" || sheet.id === "brokerAnalytic")
+    .reduce(
+      (count, sheet) =>
+        count + sheet.rows.slice(2).filter((row) => String(row[1]?.value ?? "").trim()).length,
+      0,
+    );
+}
+
+/** Preserva as colunas financeiras e a estrutura contratual; só extensões podem ser removidas. */
+export function editRepasseStructure(
+  workbook: RepasseWorkbook,
+  sheetId: RepasseSheet["id"],
+  action: RepasseStructureAction,
+  rowIndex: number,
+  columnIndex: number,
+): RepasseWorkbook {
+  const copy = structuredClone(workbook);
+  const sheet = copy.sheets.find((item) => item.id === sheetId);
+  if (!sheet || !sheet.rows[rowIndex]?.[columnIndex]) return workbook;
+  const analytic = sheetId === "analytic" || sheetId === "brokerAnalytic";
+  const templateRows = sheetId === "summary" ? 37 : sheetId === "rules" ? 10 : 2;
+  const templateColumns = sheetId === "summary" ? 8 : sheetId === "rules" ? 4 : 16;
+  const blankRow = () => {
+    const row = Array.from({ length: sheet.columnWidths.length }, () => cell(null));
+    if (sheetId === "brokerAnalytic") row[10] = cell(null, 'IF(H3=0,"",J3/H3)');
+    return row;
+  };
+
+  switch (action) {
+    case "addCell": {
+      const row = sheet.rows[rowIndex]!;
+      const firstBlank = row.findIndex(
+        (item, index) => index >= templateColumns && item.value === null,
+      );
+      if (firstBlank < 0) {
+        if (sheet.columnWidths.length >= 32) return workbook;
+        sheet.columnWidths.push(18);
+        for (const item of sheet.rows) item.push(cell(null));
+      }
+      break;
+    }
+    case "removeCell":
+      if (
+        (columnIndex < templateColumns && rowIndex < templateRows) ||
+        (analytic && rowIndex >= 2 && columnIndex === 1)
+      )
+        return workbook;
+      sheet.rows[rowIndex]![columnIndex] = cell(null);
+      break;
+    case "addRow":
+      if (sheet.rows.length >= 50_002) return workbook;
+      sheet.rows.splice(analytic ? Math.max(2, rowIndex + 1) : sheet.rows.length, 0, blankRow());
+      break;
+    case "removeRow":
+      if (rowIndex < templateRows) return workbook;
+      sheet.rows.splice(rowIndex, 1);
+      break;
+    case "addColumn":
+      if (sheet.columnWidths.length >= 32) return workbook;
+      sheet.columnWidths.push(18);
+      for (const row of sheet.rows) row.push(cell(null));
+      break;
+    case "removeColumn":
+      if (columnIndex < templateColumns) return workbook;
+      sheet.columnWidths.splice(columnIndex, 1);
+      for (const row of sheet.rows) row.splice(columnIndex, 1);
+      break;
+    case "removeDocument": {
+      if (!analytic || rowIndex < 2) return workbook;
+      const document = String(sheet.rows[rowIndex]?.[1]?.value ?? "").trim();
+      if (!document) return workbook;
+      for (const item of copy.sheets.filter(
+        (candidate) => candidate.id === "analytic" || candidate.id === "brokerAnalytic",
+      )) {
+        item.rows = [
+          ...item.rows.slice(0, 2),
+          ...item.rows.slice(2).filter((row) => String(row[1]?.value ?? "").trim() !== document),
+        ];
+      }
+      break;
+    }
+  }
+
+  // Linhas inseridas/removidas mudam o número Excel usado na fórmula do percentual.
+  for (const item of copy.sheets.filter((candidate) => candidate.id === "brokerAnalytic")) {
+    item.rows.forEach((row, index) => {
+      if (index >= 2 && row[10]?.formula) {
+        const excelRow = index + 1;
+        row[10]!.formula = `IF(H${excelRow}=0,"",J${excelRow}/H${excelRow})`;
+      }
+    });
+  }
+  return recalculateRepasseWorkbook(copy, false);
+}
+
+export function formatRepasseCell(sheet: RepasseSheet, rowIndex: number, columnIndex: number) {
+  const value = sheet.rows[rowIndex]?.[columnIndex]?.value;
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "number") return value;
+  if (
+    (sheet.id === "analytic" || sheet.id === "brokerAnalytic") &&
+    columnIndex === 10 &&
+    rowIndex >= 2
+  ) {
+    return `${Math.round(value * 100)}%`;
+  }
+  if (sheet.id === "summary" && columnIndex === 2 && SUMMARY_MONEY_ROWS.has(rowIndex)) {
+    return value.toFixed(2).replace(".", ",");
+  }
+  return String(value).replace(".", ",");
+}
+
+export function coerceRepasseEditedCell(
+  sheet: RepasseSheet,
+  rowIndex: number,
+  columnIndex: number,
+  input: string,
+) {
+  if (!input.trim()) return null;
+  if (
+    (sheet.id === "analytic" || sheet.id === "brokerAnalytic") &&
+    columnIndex === 10 &&
+    rowIndex >= 2
+  ) {
+    const percent = numericValue(input.replace("%", ""));
+    return percent === null ? input : percent / 100;
+  }
+  if (
+    ((sheet.id === "analytic" || sheet.id === "brokerAnalytic") &&
+      rowIndex >= 2 &&
+      [7, 8, 9].includes(columnIndex)) ||
+    (sheet.id === "summary" && columnIndex === 2 && SUMMARY_MONEY_ROWS.has(rowIndex))
+  ) {
+    return numericValue(input) ?? input;
+  }
+  return coerceEditedCell(input, sheet.rows[rowIndex]?.[columnIndex]?.value ?? null);
 }
 
 export function coerceEditedCell(value: string, previous: RepasseCellValue): RepasseCellValue {
@@ -858,6 +1036,7 @@ export function formatDateBr(value: string) {
 }
 
 export function summaryPreview(workbook: RepasseWorkbook) {
+  const summary = workbook.sheets.find((sheet) => sheet.id === "summary");
   const analyticSheets = workbook.sheets.filter(
     (sheet) => sheet.id === "analytic" || sheet.id === "brokerAnalytic",
   );
@@ -870,5 +1049,12 @@ export function summaryPreview(workbook: RepasseWorkbook) {
       if (analytic.id === "brokerAnalytic") brokerage += numericCell(analytic, row, 9);
     }
   }
-  return computeRepasse(paid, brokerage);
+  const calculated = computeRepasse(paid, brokerage);
+  return summary
+    ? {
+        ...calculated,
+        premioTotalPago: numericCell(summary, 6, 2),
+        excelsiorLiquido: numericCell(summary, 30, 2),
+      }
+    : calculated;
 }

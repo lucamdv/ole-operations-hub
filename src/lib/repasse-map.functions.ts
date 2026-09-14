@@ -59,29 +59,31 @@ const expectedSheets = new Map([
   ["summary", "Capa_Resumo"],
   ["analytic", "Analitico_Dados"],
   ["brokerAnalytic", "Analitico_Dados_Corretores"],
-  ["rules", "Regras do Contrato2025"],
+  ["rules", "Regras do Contrato2026"],
 ]);
 
-const safeTemplateFormulas = new Set([
-  "SUM(Analitico_Dados!I3:I1048576,Analitico_Dados_Corretores!I3:I1048576)",
-  "C7*D8*-1",
-  "$C$7-($C$8*-1)",
-  "C9",
-  "C12*0.35*-1",
-  "($C$9*0.2) * -1",
-  "SUM(C13:C14)*-1",
-  "SUM(D12:D14)",
-  "C15*0.0465*-1",
-  "C15+C16",
-  "C9*D21*-1",
-  "8333.33-(C21*-1)",
-  "(C21*-1)+C22",
-  "(C9)-(C15)-(C21*-1)+ C29",
-  "$C$26*0.1",
-  "$C$26*0.9",
-  "SUM(Analitico_Dados_Corretores!J3:J1048576)",
-  "(C16*-1)+C23+C26",
-]);
+const safeTemplateFormulas = new Set(
+  [
+    "SUM(Analitico_Dados!I3:I1048576,Analitico_Dados_Corretores!I3:I1048576)",
+    "C7*D8*-1",
+    "$C$7-($C$8*-1)",
+    "C9",
+    "C12*0.35*-1",
+    "($C$9*0.2) * -1",
+    "SUM(C13:C14)*-1",
+    "SUM(D12:D14)",
+    "C15*0.0465*-1",
+    "C15+C16",
+    "C9*D21*-1",
+    "8333.33-(C21*-1)",
+    "(C21*-1)+C22",
+    "(C9)-(C15)-(C21*-1)+ C29",
+    "$C$26*0.1",
+    "$C$26*0.9",
+    "SUM(Analitico_Dados_Corretores!J3:J1048576)",
+    "(C16*-1)+C23+C26",
+  ].map((formula) => (formula.startsWith("SUM(D12:D14)") ? formula : `ROUND(${formula},2)`)),
+);
 
 function validatedWorkbook(input: RepasseWorkbook) {
   const parsed = workbookSchema.parse(input) as RepasseWorkbook;

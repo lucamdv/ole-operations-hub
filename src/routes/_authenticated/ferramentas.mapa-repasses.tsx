@@ -6,9 +6,11 @@ import {
   Download,
   FileSpreadsheet,
   LoaderCircle,
+  Plus,
   RefreshCcw,
   ShieldCheck,
   TableProperties,
+  Trash2,
   TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -16,7 +18,13 @@ import { SpreadsheetGrid } from "@/components/repasse-map/spreadsheet-grid";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { downloadBase64File, exportRepasseSheetCsv } from "@/lib/repasse-map/export-csv";
-import { summaryPreview, updateRepasseCell } from "@/lib/repasse-map/core";
+import {
+  editRepasseStructure,
+  repasseDocumentCount,
+  summaryPreview,
+  updateRepasseCell,
+  type RepasseStructureAction,
+} from "@/lib/repasse-map/core";
 import { exportRepasseMapXlsx, generateRepasseMap } from "@/lib/repasse-map.functions";
 import type {
   RepasseCellValue,
@@ -55,6 +63,14 @@ function money(value: number) {
   }).format(value);
 }
 
+function columnName(index: number) {
+  let name = "";
+  for (let value = index + 1; value > 0; value = Math.floor((value - 1) / 26)) {
+    name = String.fromCharCode(65 + ((value - 1) % 26)) + name;
+  }
+  return name;
+}
+
 function RepasseMapPage() {
   const initialPeriod = useMemo(previousMonthPeriod, []);
   const generateFn = useServerFn(generateRepasseMap);
@@ -64,11 +80,30 @@ function RepasseMapPage() {
   const [result, setResult] = useState<RepasseGenerationResult | null>(null);
   const [baseline, setBaseline] = useState<RepasseWorkbook | null>(null);
   const [activeSheetId, setActiveSheetId] = useState<RepasseSheetId>("summary");
+  const [selection, setSelection] = useState<{
+    sheetId: RepasseSheetId;
+    rowIndex: number;
+    columnIndex: number;
+  } | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
   const preview = result ? summaryPreview(result.workbook) : null;
   const activeSheet = result?.workbook.sheets.find((sheet) => sheet.id === activeSheetId);
+  const selectedCell = selection?.sheetId === activeSheetId ? selection : null;
+  const selectedDocument =
+    activeSheetId === "analytic" || activeSheetId === "brokerAnalytic"
+      ? String(activeSheet?.rows[selectedCell?.rowIndex ?? -1]?.[1]?.value ?? "").trim()
+      : "";
+  const baseRows = activeSheetId === "summary" ? 37 : activeSheetId === "rules" ? 10 : 2;
+  const baseColumns = activeSheetId === "summary" ? 8 : activeSheetId === "rules" ? 4 : 16;
+  const hasFreeCell =
+    activeSheet?.rows[selectedCell?.rowIndex ?? -1]?.some(
+      (item, index) => index >= baseColumns && item.value === null,
+    ) ?? false;
+  const selectedAddress = selectedCell
+    ? `${columnName(selectedCell.columnIndex)}${selectedCell.rowIndex + 1}`
+    : "nenhuma";
 
   async function handleGenerate() {
     if (!start || !end || start > end) {
@@ -81,6 +116,7 @@ function RepasseMapPage() {
       setResult(next);
       setBaseline(structuredClone(next.workbook));
       setActiveSheetId("summary");
+      setSelection(null);
       toast.success("Mapa gerado", {
         description: `${next.stats.rowsGenerated} parcela(s) quitada(s) no período.`,
       });
@@ -92,6 +128,49 @@ function RepasseMapPage() {
     } finally {
       setIsGenerating(false);
     }
+  }
+
+  function handleStructureAction(action: RepasseStructureAction) {
+    if (!result || !activeSheet || !selectedCell) return;
+    const next = editRepasseStructure(
+      result.workbook,
+      activeSheetId,
+      action,
+      selectedCell.rowIndex,
+      selectedCell.columnIndex,
+    );
+    if (next === result.workbook) {
+      toast.error("Área protegida", {
+        description: "Selecione uma linha de dados ou uma coluna/célula adicionada ao modelo.",
+      });
+      return;
+    }
+    setResult({ ...result, workbook: next });
+    const nextSheet = next.sheets.find((item) => item.id === activeSheetId)!;
+    const rowIndex =
+      action === "addRow"
+        ? activeSheetId === "analytic" || activeSheetId === "brokerAnalytic"
+          ? Math.max(2, selectedCell.rowIndex + 1)
+          : nextSheet.rows.length - 1
+        : Math.min(selectedCell.rowIndex, nextSheet.rows.length - 1);
+    const freeCell =
+      activeSheet.rows[selectedCell.rowIndex]?.findIndex(
+        (item, index) => index >= baseColumns && item.value === null,
+      ) ?? -1;
+    const columnIndex =
+      action === "addCell" && freeCell >= 0
+        ? freeCell
+        : action === "addColumn" || action === "addCell"
+          ? nextSheet.columnWidths.length - 1
+          : Math.min(selectedCell.columnIndex, nextSheet.columnWidths.length - 1);
+    setSelection({ sheetId: activeSheetId, rowIndex, columnIndex });
+    toast.success(
+      action === "removeDocument"
+        ? "Documento removido do mapa"
+        : action === "addCell"
+          ? "Célula pronta para edição"
+          : "Planilha atualizada",
+    );
   }
 
   function handleCellChange(
@@ -196,7 +275,10 @@ function RepasseMapPage() {
       ) : (
         <>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <Metric label="Linhas elegíveis" value={String(result.stats.rowsGenerated)} />
+            <Metric
+              label="Parcelas no mapa"
+              value={String(repasseDocumentCount(result.workbook))}
+            />
             <Metric
               label="Documentos consultados"
               value={String(result.stats.documentsConsulted)}
@@ -224,12 +306,13 @@ function RepasseMapPage() {
                 variant="ghost"
                 size="sm"
                 disabled={!baseline}
-                onClick={() =>
-                  baseline &&
+                onClick={() => {
+                  if (!baseline) return;
                   setResult((current) =>
                     current ? { ...current, workbook: structuredClone(baseline) } : current,
-                  )
-                }
+                  );
+                  setSelection(null);
+                }}
               >
                 <RefreshCcw /> Descartar edições
               </Button>
@@ -263,9 +346,121 @@ function RepasseMapPage() {
           <SpreadsheetGrid
             sheets={result.workbook.sheets}
             activeSheetId={activeSheetId}
-            onActiveSheetChange={setActiveSheetId}
+            onActiveSheetChange={(id) => {
+              setActiveSheetId(id);
+              setSelection(null);
+            }}
             onCellChange={handleCellChange}
+            selectedCell={selectedCell}
+            onSelectCell={(rowIndex, columnIndex) =>
+              setSelection({ sheetId: activeSheetId, rowIndex, columnIndex })
+            }
           />
+
+          <section className="panel overflow-hidden p-0" aria-label="Ajustes da planilha">
+            <div className="border-b border-border bg-surface-2/60 px-5 py-4">
+              <h2 className="text-[14px] font-semibold">Ajustar {activeSheet?.name}</h2>
+              <p className="mt-1 text-[11.5px] text-muted-foreground">
+                Selecione uma célula na planilha acima. Local atual:{" "}
+                <strong>{selectedAddress}</strong>. As alterações aparecem na prévia e nos arquivos
+                exportados.
+              </p>
+            </div>
+            <div className="grid gap-4 p-5 lg:grid-cols-2">
+              <div className="space-y-3">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Adicionar
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      !selectedCell ||
+                      ((activeSheet?.columnWidths.length ?? 0) >= 32 && !hasFreeCell)
+                    }
+                    onClick={() => handleStructureAction("addCell")}
+                  >
+                    <Plus /> Célula vazia
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!selectedCell}
+                    onClick={() => handleStructureAction("addRow")}
+                  >
+                    <Plus /> Linha{" "}
+                    {activeSheetId === "analytic" || activeSheetId === "brokerAnalytic"
+                      ? "abaixo"
+                      : "ao final"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!selectedCell || (activeSheet?.columnWidths.length ?? 0) >= 32}
+                    onClick={() => handleStructureAction("addColumn")}
+                  >
+                    <Plus /> Coluna ao final
+                  </Button>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Novas células e colunas são livres; as colunas originais mantêm os cálculos e
+                  identificadores no lugar.
+                </p>
+              </div>
+              <div className="space-y-3">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Remover
+                </h3>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      !selectedCell ||
+                      (selectedCell.columnIndex < baseColumns &&
+                        selectedCell.rowIndex < baseRows) ||
+                      ((activeSheetId === "analytic" || activeSheetId === "brokerAnalytic") &&
+                        selectedCell.rowIndex >= 2 &&
+                        selectedCell.columnIndex === 1)
+                    }
+                    onClick={() => handleStructureAction("removeCell")}
+                  >
+                    <Trash2 /> Célula
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!selectedCell || selectedCell.rowIndex < baseRows}
+                    onClick={() => handleStructureAction("removeRow")}
+                  >
+                    <Trash2 /> Linha
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!selectedCell || selectedCell.columnIndex < baseColumns}
+                    onClick={() => handleStructureAction("removeColumn")}
+                  >
+                    <Trash2 /> Coluna
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={!selectedDocument}
+                    onClick={() => handleStructureAction("removeDocument")}
+                  >
+                    <Trash2 /> Documento{" "}
+                    {selectedDocument ? `${selectedDocument.slice(0, 12)}…` : "selecionado"}
+                  </Button>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Remover documento exclui todas as suas parcelas das duas abas analíticas. Use
+                  “Descartar edições” para restaurar o mapa gerado.
+                </p>
+              </div>
+            </div>
+          </section>
         </>
       )}
     </div>

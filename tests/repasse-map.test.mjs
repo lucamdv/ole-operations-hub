@@ -4,10 +4,15 @@ import ExcelJS from "exceljs";
 
 import {
   buildRepasseWorkbook,
+  coerceRepasseEditedCell,
+  editRepasseStructure,
   filterEligibleBillingItems,
+  formatRepasseCell,
   mergeRepasseBillingItems,
+  repasseDocumentCount,
   repasseBillingDocumentNumber,
   repasseSourceRow,
+  summaryPreview,
   updateRepasseCell,
 } from "../src/lib/repasse-map/core.ts";
 import { createRepasseXlsx } from "../src/lib/repasse-map/xlsx.server.ts";
@@ -219,7 +224,7 @@ test("gera quatro abas, separa corretores sem duplicar e recalcula a capa", () =
 
   assert.deepEqual(
     workbook.sheets.map((sheet) => sheet.name),
-    ["Capa_Resumo", "Analitico_Dados", "Analitico_Dados_Corretores", "Regras do Contrato2025"],
+    ["Capa_Resumo", "Analitico_Dados", "Analitico_Dados_Corretores", "Regras do Contrato2026"],
   );
   assert.equal(workbook.sheets[0].rows[6][2].value, 124);
   assert.equal(workbook.sheets[0].rows[28][2].value, 10);
@@ -231,7 +236,7 @@ test("gera quatro abas, separa corretores sem duplicar e recalcula a capa", () =
 
   const edited = updateRepasseCell(workbook, "analytic", 2, 8, 100);
   assert.equal(edited.sheets[0].rows[6][2].value, 200);
-  assert.equal(edited.sheets[0].rows[30][2].formula, "(C16*-1)+C23+C26");
+  assert.equal(edited.sheets[0].rows[30][2].formula, "ROUND((C16*-1)+C23+C26,2)");
 
   const editedBrokerage = updateRepasseCell(edited, "brokerAnalytic", 2, 9, 25);
   assert.equal(editedBrokerage.sheets[0].rows[28][2].value, 25);
@@ -264,19 +269,133 @@ test("exporta o XLSX com a quarta aba, fórmulas consolidadas e percentual forma
 
   assert.deepEqual(
     exported.worksheets.map((sheet) => sheet.name),
-    ["Capa_Resumo", "Analitico_Dados", "Analitico_Dados_Corretores", "Regras do Contrato2025"],
+    ["Capa_Resumo", "Analitico_Dados", "Analitico_Dados_Corretores", "Regras do Contrato2026"],
   );
   assert.equal(
     exported.getWorksheet("Capa_Resumo").getCell("C7").value.formula,
-    "SUM(Analitico_Dados!I3:I1048576,Analitico_Dados_Corretores!I3:I1048576)",
+    "ROUND(SUM(Analitico_Dados!I3:I1048576,Analitico_Dados_Corretores!I3:I1048576),2)",
   );
   assert.equal(
     exported.getWorksheet("Capa_Resumo").getCell("C29").value.formula,
-    "SUM(Analitico_Dados_Corretores!J3:J1048576)",
+    "ROUND(SUM(Analitico_Dados_Corretores!J3:J1048576),2)",
   );
   const brokerSheet = exported.getWorksheet("Analitico_Dados_Corretores");
   assert.equal(brokerSheet.getCell("D3").value, "12345678900");
   assert.equal(brokerSheet.getCell("J3").value, 10);
   assert.equal(brokerSheet.getCell("K3").value.formula, 'IF(H3=0,"",J3/H3)');
-  assert.equal(brokerSheet.getCell("K3").numFmt, "0.00%");
+  assert.equal(brokerSheet.getCell("K3").numFmt, "0%");
+});
+
+test("capa preserva centavos em valores e fórmulas, e percentual é exibido como 30%", async () => {
+  const model = buildRepasseWorkbook(
+    [
+      {
+        policyNumber: DOCUMENT,
+        proposalNumber: "1",
+        insuredDocument: "12345678900",
+        emissionDate: "2026-08-01",
+        movementType: "Emissão",
+        movementReason: "Emissão",
+        emittedValue: 100,
+        paidValue: 123.456,
+        brokerageValue: 29.88888,
+        brokeragePercentage: 0.2988888,
+        hasBroker: true,
+        paymentDate: "2026-08-02",
+      },
+    ],
+    { start: "2026-08-01", end: "2026-08-31" },
+  );
+  const summary = model.sheets[0];
+  const broker = model.sheets[2];
+  assert.equal(summary.rows[6][2].value, 123.46);
+  assert.equal(summary.rows[28][2].value, 29.89);
+  assert.ok(summary.rows[6][2].formula.startsWith("ROUND("));
+  assert.equal(formatRepasseCell(summary, 6, 2), "123,46");
+  assert.equal(summaryPreview(model).premioTotalPago, 123.46);
+  assert.equal(formatRepasseCell(broker, 2, 10), "30%");
+  assert.equal(coerceRepasseEditedCell(broker, 2, 10, "30%"), 0.3);
+  const exported = new ExcelJS.Workbook();
+  await exported.xlsx.load(await createRepasseXlsx(model));
+  assert.equal(exported.getWorksheet("Capa_Resumo").getCell("C7").value.result, 123.46);
+  assert.equal(exported.getWorksheet("Analitico_Dados_Corretores").getCell("K3").numFmt, "0%");
+});
+
+test("edição estrutural remove documento de ambas as abas e atualiza a capa", async () => {
+  const row = (policyNumber, hasBroker, paidValue) => ({
+    policyNumber,
+    proposalNumber: "1",
+    insuredDocument: "12345678900",
+    emissionDate: "2026-08-01",
+    movementType: "Emissão",
+    movementReason: "Emissão",
+    emittedValue: paidValue,
+    paidValue,
+    brokerageValue: hasBroker ? 10 : null,
+    brokeragePercentage: hasBroker ? 10 / paidValue : null,
+    hasBroker,
+    paymentDate: "2026-08-02",
+  });
+  const original = buildRepasseWorkbook(
+    [
+      row(DOCUMENT, false, 50),
+      row(DOCUMENT, true, 100),
+      row(DOCUMENT.replace(/0$/, "1"), true, 25),
+    ],
+    { start: "2026-08-01", end: "2026-08-31" },
+  );
+  assert.equal(repasseDocumentCount(original), 3);
+  const added = editRepasseStructure(original, "brokerAnalytic", "addRow", 2, 1);
+  assert.equal(added.sheets[2].rows[4][10].formula, 'IF(H5=0,"",J5/H5)');
+  const blankBrokerSheet = added.sheets[2];
+  assert.equal(coerceRepasseEditedCell(blankBrokerSheet, 3, 8, "100,25"), 100.25);
+  let filledRow = updateRepasseCell(added, "brokerAnalytic", 3, 1, "DOCUMENTO-NOVO");
+  filledRow = updateRepasseCell(filledRow, "brokerAnalytic", 3, 7, 100.25);
+  filledRow = updateRepasseCell(
+    filledRow,
+    "brokerAnalytic",
+    3,
+    8,
+    coerceRepasseEditedCell(blankBrokerSheet, 3, 8, "100,25"),
+  );
+  filledRow = updateRepasseCell(filledRow, "brokerAnalytic", 3, 9, 25);
+  assert.equal(filledRow.sheets[0].rows[6][2].value, 275.25);
+  assert.equal(filledRow.sheets[2].rows[3][10].value, 25 / 100.25);
+  const filledExport = new ExcelJS.Workbook();
+  await filledExport.xlsx.load(await createRepasseXlsx(filledRow));
+  assert.equal(filledExport.getWorksheet("Analitico_Dados_Corretores").getCell("I4").value, 100.25);
+  const removed = editRepasseStructure(added, "analytic", "removeDocument", 2, 1);
+  assert.equal(repasseDocumentCount(removed), 1);
+  assert.equal(removed.sheets[0].rows[6][2].value, 25);
+  assert.equal(removed.sheets[0].rows[28][2].value, 10);
+  assert.equal(repasseDocumentCount(original), 3);
+  const withColumn = editRepasseStructure(removed, "rules", "addColumn", 0, 0);
+  assert.equal(withColumn.sheets[3].columnWidths.length, 5);
+  const withCell = editRepasseStructure(removed, "brokerAnalytic", "addCell", 3, 1);
+  assert.equal(withCell.sheets[2].columnWidths.length, 17);
+  const filled = updateRepasseCell(withCell, "brokerAnalytic", 3, 16, "Conferido");
+  assert.equal(filled.sheets[2].rows[3][16].value, "Conferido");
+  assert.equal(
+    editRepasseStructure(filled, "brokerAnalytic", "removeCell", 3, 16).sheets[2].rows[3][16].value,
+    null,
+  );
+  const withoutLastRow = editRepasseStructure(removed, "brokerAnalytic", "removeRow", 3, 1);
+  assert.equal(repasseDocumentCount(withoutLastRow), 0);
+  assert.equal(withoutLastRow.sheets[0].rows[6][2].value, 0);
+  assert.equal(
+    editRepasseStructure(withColumn, "rules", "removeColumn", 0, 4).sheets[3].columnWidths.length,
+    4,
+  );
+  assert.equal(editRepasseStructure(withColumn, "rules", "removeColumn", 0, 1), withColumn);
+  assert.equal(editRepasseStructure(removed, "brokerAnalytic", "removeCell", 3, 1), removed);
+  const withSummaryColumn = editRepasseStructure(removed, "summary", "addColumn", 6, 2);
+  const summaryExport = new ExcelJS.Workbook();
+  await summaryExport.xlsx.load(await createRepasseXlsx(withSummaryColumn));
+  assert.notEqual(summaryExport.getWorksheet("Capa_Resumo").getColumn(9).hidden, true);
+  const exported = new ExcelJS.Workbook();
+  await exported.xlsx.load(await createRepasseXlsx(removed));
+  assert.equal(
+    exported.getWorksheet("Analitico_Dados_Corretores").getCell("K4").value.formula,
+    'IF(H4=0,"",J4/H4)',
+  );
 });

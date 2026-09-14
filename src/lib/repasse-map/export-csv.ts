@@ -1,8 +1,7 @@
-import type { RepasseCellValue, RepasseSheet } from "./types";
+import { formatRepasseCell } from "./core";
+import type { RepasseSheet } from "./types";
 
-function csvValue(value: RepasseCellValue) {
-  if (value === null) return "";
-  const text = typeof value === "number" ? String(value).replace(".", ",") : value;
+function csvValue(text: string) {
   return `"${text.replace(/"/g, '""')}"`;
 }
 
@@ -17,7 +16,11 @@ function filenameDate(value: string) {
 
 export function exportRepasseSheetCsv(sheet: RepasseSheet, period: { start: string; end: string }) {
   const content = sheet.rows
-    .map((row) => row.map((item) => csvValue(item.value)).join(";"))
+    .map((row, rowIndex) =>
+      row
+        .map((_, columnIndex) => csvValue(formatRepasseCell(sheet, rowIndex, columnIndex)))
+        .join(";"),
+    )
     .join("\r\n");
   const blob = new Blob(["\uFEFF", content], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);

@@ -48,7 +48,6 @@ function populateSheet(worksheet: Worksheet, sheet: RepasseSheet) {
 }
 
 function styleSummary(worksheet: Worksheet) {
-  worksheet.getColumn(9).hidden = true;
   worksheet.getRow(1).height = 30;
   for (let row = 2; row <= 30; row++) worksheet.getRow(row).height = 13.2;
   worksheet.getRow(31).height = 26.4;
@@ -151,7 +150,7 @@ function styleAnalytic(worksheet: Worksheet, rowCount: number) {
       target.numFmt = "dd/mm/yyyy";
     }
     for (const column of [8, 9, 10]) worksheet.getCell(row, column).numFmt = "$#,##0.0000";
-    worksheet.getCell(row, 11).numFmt = "0.00%";
+    worksheet.getCell(row, 11).numFmt = "0%";
     worksheet.getCell(row, 2).numFmt = "@";
     worksheet.getCell(row, 3).numFmt = "@";
     worksheet.getCell(row, 4).numFmt = "@";
@@ -181,8 +180,9 @@ function styleRules(worksheet: Worksheet) {
   worksheet.getRow(7).height = 39.75;
   worksheet.getRow(8).height = 48.75;
   worksheet.getRow(9).height = 44.25;
+  worksheet.getRow(10).height = 32;
 
-  for (let row = 1; row <= 9; row++) {
+  for (let row = 1; row <= 10; row++) {
     for (let column = 1; column <= 4; column++) {
       const target = worksheet.getCell(row, column);
       target.font = { name: "Arial", size: 8, color: { argb: BLACK } };
