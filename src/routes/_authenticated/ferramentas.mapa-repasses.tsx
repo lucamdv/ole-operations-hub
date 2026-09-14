@@ -6,11 +6,9 @@ import {
   Download,
   FileSpreadsheet,
   LoaderCircle,
-  Plus,
   RefreshCcw,
   ShieldCheck,
   TableProperties,
-  Trash2,
   TriangleAlert,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -63,14 +61,6 @@ function money(value: number) {
   }).format(value);
 }
 
-function columnName(index: number) {
-  let name = "";
-  for (let value = index + 1; value > 0; value = Math.floor((value - 1) / 26)) {
-    name = String.fromCharCode(65 + ((value - 1) % 26)) + name;
-  }
-  return name;
-}
-
 function RepasseMapPage() {
   const initialPeriod = useMemo(previousMonthPeriod, []);
   const generateFn = useServerFn(generateRepasseMap);
@@ -91,19 +81,7 @@ function RepasseMapPage() {
   const preview = result ? summaryPreview(result.workbook) : null;
   const activeSheet = result?.workbook.sheets.find((sheet) => sheet.id === activeSheetId);
   const selectedCell = selection?.sheetId === activeSheetId ? selection : null;
-  const selectedDocument =
-    activeSheetId === "analytic" || activeSheetId === "brokerAnalytic"
-      ? String(activeSheet?.rows[selectedCell?.rowIndex ?? -1]?.[1]?.value ?? "").trim()
-      : "";
-  const baseRows = activeSheetId === "summary" ? 37 : activeSheetId === "rules" ? 10 : 2;
   const baseColumns = activeSheetId === "summary" ? 8 : activeSheetId === "rules" ? 4 : 16;
-  const hasFreeCell =
-    activeSheet?.rows[selectedCell?.rowIndex ?? -1]?.some(
-      (item, index) => index >= baseColumns && item.value === null,
-    ) ?? false;
-  const selectedAddress = selectedCell
-    ? `${columnName(selectedCell.columnIndex)}${selectedCell.rowIndex + 1}`
-    : "nenhuma";
 
   async function handleGenerate() {
     if (!start || !end || start > end) {
@@ -130,14 +108,18 @@ function RepasseMapPage() {
     }
   }
 
-  function handleStructureAction(action: RepasseStructureAction) {
-    if (!result || !activeSheet || !selectedCell) return;
+  function handleStructureAction(
+    action: RepasseStructureAction,
+    rowIndex: number,
+    columnIndex: number,
+  ) {
+    if (!result || !activeSheet) return;
     const next = editRepasseStructure(
       result.workbook,
       activeSheetId,
       action,
-      selectedCell.rowIndex,
-      selectedCell.columnIndex,
+      rowIndex,
+      columnIndex,
     );
     if (next === result.workbook) {
       toast.error("Área protegida", {
@@ -147,23 +129,23 @@ function RepasseMapPage() {
     }
     setResult({ ...result, workbook: next });
     const nextSheet = next.sheets.find((item) => item.id === activeSheetId)!;
-    const rowIndex =
+    const nextRowIndex =
       action === "addRow"
         ? activeSheetId === "analytic" || activeSheetId === "brokerAnalytic"
-          ? Math.max(2, selectedCell.rowIndex + 1)
+          ? Math.max(2, rowIndex + 1)
           : nextSheet.rows.length - 1
-        : Math.min(selectedCell.rowIndex, nextSheet.rows.length - 1);
+        : Math.min(rowIndex, nextSheet.rows.length - 1);
     const freeCell =
-      activeSheet.rows[selectedCell.rowIndex]?.findIndex(
+      activeSheet.rows[rowIndex]?.findIndex(
         (item, index) => index >= baseColumns && item.value === null,
       ) ?? -1;
-    const columnIndex =
+    const nextColumnIndex =
       action === "addCell" && freeCell >= 0
         ? freeCell
         : action === "addColumn" || action === "addCell"
           ? nextSheet.columnWidths.length - 1
-          : Math.min(selectedCell.columnIndex, nextSheet.columnWidths.length - 1);
-    setSelection({ sheetId: activeSheetId, rowIndex, columnIndex });
+          : Math.min(columnIndex, nextSheet.columnWidths.length - 1);
+    setSelection({ sheetId: activeSheetId, rowIndex: nextRowIndex, columnIndex: nextColumnIndex });
     toast.success(
       action === "removeDocument"
         ? "Documento removido do mapa"
@@ -298,7 +280,8 @@ function RepasseMapPage() {
                 Quitações totais por data_quitacao entre{" "}
                 <strong>{result.workbook.period.start}</strong> e{" "}
                 <strong>{result.workbook.period.end}</strong>, reconciliadas com o Supabase. Edite
-                qualquer célula abaixo antes de exportar.
+                qualquer célula abaixo antes de exportar. Clique com o botão direito para adicionar
+                ou remover itens.
               </span>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -355,112 +338,8 @@ function RepasseMapPage() {
             onSelectCell={(rowIndex, columnIndex) =>
               setSelection({ sheetId: activeSheetId, rowIndex, columnIndex })
             }
+            onStructureAction={handleStructureAction}
           />
-
-          <section className="panel overflow-hidden p-0" aria-label="Ajustes da planilha">
-            <div className="border-b border-border bg-surface-2/60 px-5 py-4">
-              <h2 className="text-[14px] font-semibold">Ajustar {activeSheet?.name}</h2>
-              <p className="mt-1 text-[11.5px] text-muted-foreground">
-                Selecione uma célula na planilha acima. Local atual:{" "}
-                <strong>{selectedAddress}</strong>. As alterações aparecem na prévia e nos arquivos
-                exportados.
-              </p>
-            </div>
-            <div className="grid gap-4 p-5 lg:grid-cols-2">
-              <div className="space-y-3">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Adicionar
-                </h3>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={
-                      !selectedCell ||
-                      ((activeSheet?.columnWidths.length ?? 0) >= 32 && !hasFreeCell)
-                    }
-                    onClick={() => handleStructureAction("addCell")}
-                  >
-                    <Plus /> Célula vazia
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={!selectedCell}
-                    onClick={() => handleStructureAction("addRow")}
-                  >
-                    <Plus /> Linha{" "}
-                    {activeSheetId === "analytic" || activeSheetId === "brokerAnalytic"
-                      ? "abaixo"
-                      : "ao final"}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={!selectedCell || (activeSheet?.columnWidths.length ?? 0) >= 32}
-                    onClick={() => handleStructureAction("addColumn")}
-                  >
-                    <Plus /> Coluna ao final
-                  </Button>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Novas células e colunas são livres; as colunas originais mantêm os cálculos e
-                  identificadores no lugar.
-                </p>
-              </div>
-              <div className="space-y-3">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Remover
-                </h3>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={
-                      !selectedCell ||
-                      (selectedCell.columnIndex < baseColumns &&
-                        selectedCell.rowIndex < baseRows) ||
-                      ((activeSheetId === "analytic" || activeSheetId === "brokerAnalytic") &&
-                        selectedCell.rowIndex >= 2 &&
-                        selectedCell.columnIndex === 1)
-                    }
-                    onClick={() => handleStructureAction("removeCell")}
-                  >
-                    <Trash2 /> Célula
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={!selectedCell || selectedCell.rowIndex < baseRows}
-                    onClick={() => handleStructureAction("removeRow")}
-                  >
-                    <Trash2 /> Linha
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={!selectedCell || selectedCell.columnIndex < baseColumns}
-                    onClick={() => handleStructureAction("removeColumn")}
-                  >
-                    <Trash2 /> Coluna
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="destructive"
-                    disabled={!selectedDocument}
-                    onClick={() => handleStructureAction("removeDocument")}
-                  >
-                    <Trash2 /> Documento{" "}
-                    {selectedDocument ? `${selectedDocument.slice(0, 12)}…` : "selecionado"}
-                  </Button>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Remover documento exclui todas as suas parcelas das duas abas analíticas. Use
-                  “Descartar edições” para restaurar o mapa gerado.
-                </p>
-              </div>
-            </div>
-          </section>
         </>
       )}
     </div>
