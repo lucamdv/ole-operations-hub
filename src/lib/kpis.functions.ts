@@ -7,6 +7,8 @@ import type {
   DailyKpis,
   FindingLite,
   MonthlyReincidencia,
+  RecurrenceGranularity,
+  RecurrenceKpi,
   ResolutionSlaLite,
   RunLite,
   WeeklyKpis,
@@ -24,11 +26,38 @@ export interface OperationKpis {
   yearPrev: YearlyPoint;
   /** Corte do acumulado do ano, em DD/MM. */
   ytdLabel: string;
+  recurrence: RecurrenceKpi;
 }
+
+const RecurrencePeriodSchema = z
+  .object({
+    granularity: z.enum(["week", "month"]),
+    startDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    endDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  })
+  .refine((value) => value.startDate <= value.endDate, {
+    message: "O início da recorrência deve ser anterior ao fim.",
+  });
 
 const OperationKpisSchema = z.object({
   slaHours: z.number().min(1).max(720).default(24),
+  recurrence: RecurrencePeriodSchema.optional(),
 });
+
+function addDateDays(date: string, days: number) {
+  const [year, month, day] = date.split("-").map(Number);
+  return new Date(Date.UTC(year!, month! - 1, day! + days)).toISOString().slice(0, 10);
+}
+
+function currentWeekPeriod(referenceDate: string): {
+  granularity: RecurrenceGranularity;
+  startDate: string;
+  endDate: string;
+} {
+  const weekday = new Date(`${referenceDate}T12:00:00.000Z`).getUTCDay();
+  const startDate = addDateDays(referenceDate, -((weekday + 6) % 7));
+  return { granularity: "week", startDate, endDate: addDateDays(startDate, 6) };
+}
 
 export const getOperationKpis = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
@@ -41,6 +70,7 @@ export const getOperationKpis = createServerFn({ method: "GET" })
       deriveDaily,
       deriveFirstResponse,
       deriveMonthlyReincidencia,
+      deriveRecurrenceKpi,
       deriveResolutionSla,
       deriveWeekly,
       emptyYear,
@@ -54,57 +84,76 @@ export const getOperationKpis = createServerFn({ method: "GET" })
 
     const now = Date.now();
     const nowYear = Number(fortalezaDateKey(now).slice(0, 4));
-    const historyStart = `${nowYear - 1}-01-01T00:00:00.000Z`;
+    // O histórico completo é necessário para saber se um tipo de erro já era
+    // conhecido antes do período personalizado de reincidência.
+    const pageSize = 1000;
+    const runRows: Array<{
+      id: string;
+      created_at: string;
+      data_auditoria: string | null;
+    }> = [];
+    for (let from = 0; ; from += pageSize) {
+      const { data: page, error: runErr } = await supabaseAdmin
+        .from("audit_runs")
+        .select("id, created_at, data_auditoria")
+        .eq("status", "success")
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (runErr) throw new Error(runErr.message);
+      runRows.push(...(page ?? []));
+      if ((page?.length ?? 0) < pageSize) break;
+    }
 
-    // Histórico necessário para as janelas semanal, mensal e anual.
-    const { data: runRows, error: runErr } = await supabaseAdmin
-      .from("audit_runs")
-      .select("id, created_at, data_auditoria")
-      .eq("status", "success")
-      .gte("created_at", historyStart)
-      .order("created_at", { ascending: true })
-      .limit(2000);
-    if (runErr) throw new Error(runErr.message);
-
-    const runsAsc: RunLite[] = (
-      (runRows ?? []) as Array<{
-        id: string;
-        created_at: string;
-        data_auditoria: string | null;
-      }>
-    )
+    const runsAsc: RunLite[] = runRows
       .map((run) => ({ id: run.id, at: run.data_auditoria ?? run.created_at }))
       .sort((left, right) => +new Date(left.at) - +new Date(right.at));
     const runIds = new Set(runsAsc.map((run) => run.id));
 
     const byRun = new Map<string, FindingLite[]>();
     if (runsAsc.length > 0) {
-      const [{ data: ignores, error: ignoreError }, { data: findings, error: findingsError }] =
-        await Promise.all([
-          context.supabase.from("audit_ignores").select("apolice, tipo_erro"),
-          supabaseAdmin
-            .from("audit_findings")
-            .select("run_id, apolice, tipo_erro, endosso, detalhes")
-            .gte("created_at", historyStart)
-            .order("created_at", { ascending: true })
-            .limit(10000),
-        ]);
+      const [ignoreResult, findingsResult] = await Promise.all([
+        context.supabase.from("audit_ignores").select("apolice, tipo_erro"),
+        (async () => {
+          const findings: Array<{
+            run_id: string;
+            apolice: string;
+            tipo_erro: string;
+            endosso: string | null;
+            detalhes: unknown;
+          }> = [];
+          for (let from = 0; ; from += pageSize) {
+            const { data: page, error } = await supabaseAdmin
+              .from("audit_findings")
+              .select("run_id, apolice, tipo_erro, endosso, detalhes")
+              .order("created_at", { ascending: true })
+              .order("id", { ascending: true })
+              .range(from, from + pageSize - 1);
+            if (error) return { data: findings, error };
+            findings.push(...(page ?? []));
+            if ((page?.length ?? 0) < pageSize) break;
+          }
+          return { data: findings, error: null };
+        })(),
+      ]);
+      const { data: ignores, error: ignoreError } = ignoreResult;
+      const { data: findings, error: findingsError } = findingsResult;
       if (ignoreError) throw new Error(ignoreError.message);
       if (findingsError) throw new Error(findingsError.message);
 
       const sets = buildIgnoreSets(
         (ignores ?? []) as Array<{ apolice: string; tipo_erro: string | null }>,
       );
-      const all = (findings ?? []) as Array<{
-        run_id: string;
-        apolice: string;
-        tipo_erro: string;
-        endosso: string | null;
-        detalhes: Record<string, unknown> | null;
-      }>;
+      const all = findings ?? [];
       for (const finding of filterFindings(sets, all)) {
         if (!runIds.has(finding.run_id)) continue;
-        const rawLevel = (finding.detalhes ?? {})["nivel"];
+        const details =
+          finding.detalhes &&
+          typeof finding.detalhes === "object" &&
+          !Array.isArray(finding.detalhes)
+            ? (finding.detalhes as Record<string, unknown>)
+            : {};
+        const rawLevel = details["nivel"];
         const lite: FindingLite = {
           run_id: finding.run_id,
           apolice: finding.apolice,
@@ -165,6 +214,11 @@ export const getOperationKpis = createServerFn({ method: "GET" })
     weekly.inadimplentesDelta = weekly.inadimplentes - weekly.inadimplentesSemanaAnterior;
 
     const monthlyReincidencia = deriveMonthlyReincidencia(runsAsc, byRun);
+    const recurrence = deriveRecurrenceKpi(
+      runsAsc,
+      byRun,
+      data.recurrence ?? currentWeekPeriod(fortalezaDateKey(now)),
+    );
 
     // Carteira e prêmio emitido agregados por ano.
     const cutoff = ytdCutoff();
@@ -264,5 +318,6 @@ export const getOperationKpis = createServerFn({ method: "GET" })
       yearCur: yearly.find((year) => year.year === nowYear) ?? emptyYear(nowYear),
       yearPrev: yearly.find((year) => year.year === nowYear - 1) ?? emptyYear(nowYear - 1),
       ytdLabel: cutoff.split("-").reverse().join("/"),
+      recurrence,
     };
   });

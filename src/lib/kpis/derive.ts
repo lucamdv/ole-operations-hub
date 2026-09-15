@@ -97,6 +97,23 @@ export interface MonthlyReincidencia {
   deltaMm3: number | null;
 }
 
+export type RecurrenceGranularity = "week" | "month";
+
+export interface RecurrenceByType {
+  tipoErro: string;
+  reincidencias: number;
+}
+
+export interface RecurrenceKpi {
+  granularity: RecurrenceGranularity;
+  startDate: string;
+  endDate: string;
+  runs: number;
+  total: number;
+  tiposConhecidos: number;
+  porTipo: RecurrenceByType[];
+}
+
 export interface YearlyPoint {
   year: number;
   /** Contratos emitidos no ano (ano fechado). */
@@ -262,6 +279,72 @@ function monthLabel(month: string): string {
   return new Intl.DateTimeFormat("pt-BR", { month: "short", year: "2-digit" })
     .format(new Date(y, m - 1, 1))
     .replace(".", "");
+}
+
+function normalizedErrorType(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("pt-BR");
+}
+
+/**
+ * Reincidência absoluta por tipo de erro em um período civil.
+ *
+ * Um achado é reincidente quando o mesmo tipo já havia aparecido antes do
+ * início do período selecionado. A apólice pode ser diferente. A mesma
+ * ocorrência (apólice + tipo + endosso) persistindo em várias auditorias do
+ * período é contada uma única vez, para não inflar o indicador.
+ */
+export function deriveRecurrenceKpi(
+  runsAsc: RunLite[],
+  byRun: Map<string, FindingLite[]>,
+  period: {
+    granularity: RecurrenceGranularity;
+    startDate: string;
+    endDate: string;
+  },
+): RecurrenceKpi {
+  const knownLabels = new Map<string, string>();
+  const historicalTypes = new Set<string>();
+  const recurrentOccurrences = new Map<string, Set<string>>();
+  let periodRuns = 0;
+
+  for (const run of runsAsc) {
+    const day = fortalezaDateKey(run.at);
+    const findings = byRun.get(run.id) ?? [];
+    if (day >= period.startDate && day <= period.endDate) periodRuns += 1;
+
+    for (const finding of findings) {
+      const type = normalizedErrorType(finding.tipo_erro);
+      if (!type) continue;
+      if (!knownLabels.has(type)) knownLabels.set(type, finding.tipo_erro.trim());
+
+      if (day < period.startDate) {
+        historicalTypes.add(type);
+        continue;
+      }
+      if (day > period.endDate || !historicalTypes.has(type)) continue;
+
+      const occurrences = recurrentOccurrences.get(type) ?? new Set<string>();
+      occurrences.add(`${finding.apolice.trim()}::${type}::${(finding.endosso ?? "").trim()}`);
+      recurrentOccurrences.set(type, occurrences);
+    }
+  }
+
+  const porTipo = Array.from(knownLabels, ([type, tipoErro]) => ({
+    tipoErro,
+    reincidencias: recurrentOccurrences.get(type)?.size ?? 0,
+  })).sort(
+    (left, right) =>
+      right.reincidencias - left.reincidencias ||
+      left.tipoErro.localeCompare(right.tipoErro, "pt-BR"),
+  );
+
+  return {
+    ...period,
+    runs: periodRuns,
+    total: porTipo.reduce((sum, item) => sum + item.reincidencias, 0),
+    tiposConhecidos: porTipo.length,
+    porTipo,
+  };
 }
 
 /** runs em ordem crescente de data; findings de todas elas (já sem exceções). */

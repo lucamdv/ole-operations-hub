@@ -9,7 +9,6 @@ import {
   CartesianGrid,
   Cell,
   ComposedChart,
-  LabelList,
   Legend,
   Line,
   LineChart,
@@ -27,9 +26,12 @@ import { useAuditHistory, useLatestAudit } from "@/hooks/use-audit";
 import { usePolicies } from "@/hooks/use-policies";
 import { useAnalyticsAggregates } from "@/hooks/use-analytics";
 import { useOperationKpis } from "@/hooks/use-operation-kpis";
-import { formatDuracaoHoras } from "@/lib/audit/resolution-filter";
 import { useKpiTargets } from "@/hooks/use-kpi-targets";
-import { statusMax, yoyPct } from "@/lib/kpis/derive";
+import {
+  fortalezaDateKey,
+  type RecurrenceGranularity,
+  type RecurrenceKpi,
+} from "@/lib/kpis/derive";
 
 import {
   buildHeatmap,
@@ -69,40 +71,85 @@ export const Route = createFileRoute("/_authenticated/analytics")({
   component: AnalyticsPage,
 });
 
+const DAY_MS = 86_400_000;
+
+function utcDateKey(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function addDateDays(value: string, days: number) {
+  const [year, month, day] = value.split("-").map(Number);
+  return utcDateKey(new Date(Date.UTC(year!, month! - 1, day! + days)));
+}
+
+function isoWeekValue(value: string) {
+  const date = new Date(`${value}T12:00:00.000Z`);
+  const weekday = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - weekday);
+  const year = date.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(year, 0, 1));
+  const week = Math.ceil(((date.getTime() - yearStart.getTime()) / DAY_MS + 1) / 7);
+  return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
+function recurrencePeriod(granularity: RecurrenceGranularity, value: string) {
+  if (granularity === "month") {
+    const [year, month] = value.split("-").map(Number);
+    const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
+    const endDate = utcDateKey(new Date(Date.UTC(year!, month!, 0)));
+    return { granularity, startDate, endDate };
+  }
+
+  const match = /^(\d{4})-W(\d{2})$/.exec(value);
+  const year = Number(match?.[1]);
+  const week = Number(match?.[2]);
+  const januaryFourth = new Date(Date.UTC(year, 0, 4));
+  const mondayWeekOne = addDateDays(
+    utcDateKey(januaryFourth),
+    -((januaryFourth.getUTCDay() + 6) % 7),
+  );
+  const startDate = addDateDays(mondayWeekOne, (week - 1) * 7);
+  return { granularity, startDate, endDate: addDateDays(startDate, 6) };
+}
+
+function formatPeriodDate(value: string) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(new Date(`${value}T12:00:00.000Z`));
+}
+
 function AnalyticsPage() {
   const latestQ = useLatestAudit();
   const historyQ = useAuditHistory();
   const policiesQ = usePolicies();
   const aggregatesQ = useAnalyticsAggregates();
   const { targets } = useKpiTargets();
-  const opsQ = useOperationKpis(targets.resolucaoSlaHoras);
+  const today = fortalezaDateKey();
+  const [recurrenceGranularity, setRecurrenceGranularity] = useState<RecurrenceGranularity>("week");
+  const [recurrenceWeek, setRecurrenceWeek] = useState(() => isoWeekValue(today));
+  const [recurrenceMonth, setRecurrenceMonth] = useState(() => today.slice(0, 7));
+  const selectedRecurrencePeriod = useMemo(
+    () =>
+      recurrencePeriod(
+        recurrenceGranularity,
+        recurrenceGranularity === "week" ? recurrenceWeek : recurrenceMonth,
+      ),
+    [recurrenceGranularity, recurrenceMonth, recurrenceWeek],
+  );
+  const opsQ = useOperationKpis(targets.resolucaoSlaHoras, selectedRecurrencePeriod);
   const { preferences, updatePreferences, resetPreferences } = useAnalyticsPreferences();
 
   const ops = opsQ.data ?? null;
-  const monthlyReinc = useMemo(() => ops?.monthlyReincidencia ?? [], [ops]);
-  const yearCur = ops?.yearCur ?? null;
-  const yearPrev = ops?.yearPrev ?? null;
-  const ytdLabel = ops?.ytdLabel ?? "";
-  const crescimentoCarteira =
-    yearCur && yearPrev ? yoyPct(yearCur.contratosYtd, yearPrev.contratosYtd) : null;
-  const crescimentoPremio =
-    yearCur && yearPrev ? yoyPct(yearCur.premioEmitidoYtdUsd, yearPrev.premioEmitidoYtdUsd) : null;
-  // Redução = queda dos críticos do ano anterior para o atual (base: ano anterior).
-  const reducaoIncidentes =
-    yearCur && yearPrev && yearPrev.criticosYtd > 0
-      ? Math.round(((yearPrev.criticosYtd - yearCur.criticosYtd) / yearPrev.criticosYtd) * 1000) /
-        10
-      : null;
-
-  const reincMensalAtual = monthlyReinc.length > 0 ? monthlyReinc[monthlyReinc.length - 1] : null;
 
   const [range, setRange] = useState<DateRangeState>(DEFAULT_RANGE);
   const bounds = useMemo(() => resolveRange(range), [range]);
   const rangeActive = bounds.from !== null || bounds.to !== null;
 
   const latestRaw = latestQ.data ?? null;
-  const historyRaw = historyQ.data ?? [];
-  const policies = policiesQ.data ?? [];
+  const historyRaw = useMemo(() => historyQ.data ?? [], [historyQ.data]);
+  const policies = useMemo(() => policiesQ.data ?? [], [policiesQ.data]);
   const aggregatesRaw = aggregatesQ.data ?? {
     findingsByVigencia: [],
     revenueByMonth: [],
@@ -125,7 +172,7 @@ function AnalyticsPage() {
     return withinRange(d, bounds) ? latestRaw : { ...latestRaw, findings: [] };
   }, [latestRaw, bounds, rangeActive]);
 
-  const findings = latest?.findings ?? [];
+  const findings = useMemo(() => latest?.findings ?? [], [latest]);
   const sev = useMemo(() => countBySeverity(findings), [findings]);
   const severityData = useMemo(
     () =>
@@ -144,10 +191,6 @@ function AnalyticsPage() {
     () => aggregatesRaw.findingsByVigencia.filter((b) => monthWithinRange(b.month, bounds)),
     [aggregatesRaw.findingsByVigencia, bounds],
   );
-  const revenue = useMemo(
-    () => aggregatesRaw.revenueByMonth.filter((b) => monthWithinRange(b.month, bounds)),
-    [aggregatesRaw.revenueByMonth, bounds],
-  );
   const repasse = useMemo(
     () => aggregatesRaw.repasseByMonth.filter((b) => monthWithinRange(b.month, bounds)),
     [aggregatesRaw.repasseByMonth, bounds],
@@ -161,7 +204,6 @@ function AnalyticsPage() {
     () => issuances.reduce((s, r) => s + r.endossosTotal, 0),
     [issuances],
   );
-  const totalUsd = useMemo(() => revenue.reduce((s, r) => s + r.usd, 0), [revenue]);
   const repasseTotals = useMemo(
     () =>
       repasse.reduce(
@@ -171,8 +213,16 @@ function AnalyticsPage() {
           pisCofins: acc.pisCofins + r.pisCofins,
           excelsiorLiquido: acc.excelsiorLiquido + r.excelsiorLiquido,
           bruto: acc.bruto + r.bruto,
+          premioTotalPago: acc.premioTotalPago + r.premioTotalPago,
         }),
-        { carregamentoExcelsior: 0, premioDireto: 0, pisCofins: 0, excelsiorLiquido: 0, bruto: 0 },
+        {
+          carregamentoExcelsior: 0,
+          premioDireto: 0,
+          pisCofins: 0,
+          excelsiorLiquido: 0,
+          bruto: 0,
+          premioTotalPago: 0,
+        },
       ),
     [repasse],
   );
@@ -366,138 +416,23 @@ function AnalyticsPage() {
         <EmptyState />
       ) : (
         <>
-          {(preferences.kpis.dailyNewFindings ||
-            preferences.kpis.dailyOpenCritical ||
-            preferences.kpis.dailyFirstResponse) && (
+          {(preferences.kpis.weeklyRecurrence || preferences.kpis.weeklyDelinquent) && (
             <>
               <SectionTitle
-                title="KPIs diários"
-                subtitle="Detecção, backlog crítico e velocidade da primeira resposta no dia"
+                title="Indicadores operacionais"
+                subtitle="Reincidência absoluta por período e saúde financeira da carteira"
               />
-              <div className="bento">
-                {preferences.kpis.dailyNewFindings && (
-                  <Kpi
-                    label="Nº de inconsistências novas detectadas"
-                    value={formatInt(ops?.daily.novas ?? 0)}
-                    hint={`média móvel: ${formatInt(ops?.daily.mediaMovel ?? 0)} · desvio ${formatPct(ops?.daily.desvioPct ?? 0, 1)}`}
-                    tone={
-                      (ops?.daily.desvioPct ?? 0) > targets.picoDesvioPct ? "warning" : "success"
-                    }
-                    target={`alerta acima de ${targets.picoDesvioPct}% da média móvel`}
-                    status={statusMax(ops?.daily.desvioPct ?? 0, targets.picoDesvioPct)}
-                  />
-                )}
-                {preferences.kpis.dailyOpenCritical && (
-                  <Kpi
-                    label="Nº de ocorrências críticas em aberto"
-                    value={formatInt(ops?.daily.criticasAbertas ?? 0)}
-                    hint="backlog crítico da auditoria mais recente"
-                    tone={(ops?.daily.criticasAbertas ?? 0) > 0 ? "destructive" : "success"}
-                    target="meta: zerar até o fim do dia"
-                    status={statusMax(ops?.daily.criticasAbertas ?? 0, targets.criticasAbertasMax)}
-                  />
-                )}
-                {preferences.kpis.dailyFirstResponse && (
-                  <Kpi
-                    label="Tempo até a primeira resposta em ocorrência"
-                    value={
-                      ops?.daily.primeiraRespostaHoras == null
-                        ? "—"
-                        : ops.daily.primeiraRespostaHoras === 0
-                          ? "0min"
-                          : formatDuracaoHoras(ops.daily.primeiraRespostaHoras)
-                    }
-                    hint={
-                      ops?.daily.ocorrenciasRespondidas
-                        ? `${formatInt(ops.daily.ocorrenciasRespondidas)} ocorrência(s) respondida(s) hoje`
-                        : "sem respostas registradas hoje"
-                    }
-                    tone={
-                      ops?.daily.primeiraRespostaHoras == null
-                        ? undefined
-                        : ops.daily.primeiraRespostaHoras < targets.primeiraRespostaCriticaMaxHoras
-                          ? "success"
-                          : "destructive"
-                    }
-                    target={`meta < ${targets.primeiraRespostaCriticaMaxHoras}h úteis`}
-                    status={
-                      ops?.daily.primeiraRespostaHoras == null
-                        ? undefined
-                        : ops.daily.primeiraRespostaHoras < targets.primeiraRespostaCriticaMaxHoras
-                          ? "ok"
-                          : "bad"
-                    }
-                  />
-                )}
-              </div>
-            </>
-          )}
-
-          {(preferences.kpis.weeklyRecurrence ||
-            preferences.kpis.weeklySla ||
-            preferences.kpis.weeklyDelinquent) && (
-            <>
-              <SectionTitle
-                title="KPIs semanais"
-                subtitle="Reincidência, disciplina de SLA e saúde financeira nos últimos 7 dias"
-              />
-              <div className="bento">
+              <div className="grid gap-4 lg:grid-cols-3 [&>*:first-child]:lg:col-span-2 [&>*:only-child]:lg:col-span-3">
                 {preferences.kpis.weeklyRecurrence && (
-                  <Kpi
-                    label="Taxa de reincidência (% ocorrências repetidas vs. novas)"
-                    value={
-                      ops?.weekly.reincidenciaPct == null
-                        ? "—"
-                        : formatPct(ops.weekly.reincidenciaPct, 1)
-                    }
-                    hint={
-                      ops?.weekly.reincidenciaPct == null
-                        ? "sem ocorrências registradas nos últimos 7 dias"
-                        : `${formatInt(ops.weekly.repetidas)} repetidas · ${formatInt(ops.weekly.novasUnicas)} novas`
-                    }
-                    tone={
-                      ops?.weekly.reincidenciaPct == null
-                        ? undefined
-                        : ops.weekly.reincidenciaPct > targets.reincidenciaMaxPct
-                          ? "destructive"
-                          : "success"
-                    }
-                    target={`alerta acima de ${targets.reincidenciaMaxPct}%`}
-                    status={
-                      ops?.weekly.reincidenciaPct == null
-                        ? undefined
-                        : statusMax(ops.weekly.reincidenciaPct, targets.reincidenciaMaxPct)
-                    }
-                  />
-                )}
-                {preferences.kpis.weeklySla && (
-                  <Kpi
-                    label="% de ocorrências resolvidas dentro do SLA"
-                    value={
-                      ops?.weekly.resolvidasDentroSlaPct == null
-                        ? "—"
-                        : formatPct(ops.weekly.resolvidasDentroSlaPct, 1)
-                    }
-                    hint={
-                      ops?.weekly.resolvidas
-                        ? `${formatInt(ops.weekly.resolvidasDentroSla)} de ${formatInt(ops.weekly.resolvidas)} resolvidas em até ${targets.resolucaoSlaHoras}h úteis`
-                        : "sem resoluções mensuráveis na semana"
-                    }
-                    tone={
-                      ops?.weekly.resolvidasDentroSlaPct == null
-                        ? undefined
-                        : ops.weekly.resolvidasDentroSlaPct > targets.resolvidasSlaMinPct
-                          ? "success"
-                          : "destructive"
-                    }
-                    target={`meta > ${targets.resolvidasSlaMinPct}%`}
-                    status={
-                      ops?.weekly.resolvidasDentroSlaPct == null
-                        ? undefined
-                        : ops.weekly.resolvidasDentroSlaPct > targets.resolvidasSlaMinPct
-                          ? "ok"
-                          : "bad"
-                    }
+                  <RecurrenceKpiCard
+                    data={ops?.recurrence ?? null}
+                    loading={opsQ.isFetching}
+                    granularity={recurrenceGranularity}
+                    week={recurrenceWeek}
+                    month={recurrenceMonth}
+                    onGranularityChange={setRecurrenceGranularity}
+                    onWeekChange={setRecurrenceWeek}
+                    onMonthChange={setRecurrenceMonth}
                   />
                 )}
                 {preferences.kpis.weeklyDelinquent && (
@@ -506,101 +441,6 @@ function AnalyticsPage() {
                     value={formatInt(ops?.weekly.inadimplentes ?? 0)}
                     hint={`${formatInt(ops?.weekly.inadimplentesSemanaAnterior ?? 0)} há 7 dias · ${(ops?.weekly.inadimplentesDelta ?? 0) > 0 ? "+" : ""}${formatInt(ops?.weekly.inadimplentesDelta ?? 0)} na tendência`}
                     tone={(ops?.weekly.inadimplentesDelta ?? 0) > 0 ? "destructive" : "success"}
-                  />
-                )}
-              </div>
-            </>
-          )}
-
-          {preferences.kpis.monthlyRecurrence && (
-            <>
-              <SectionTitle
-                title="KPIs mensais"
-                subtitle="Tendência estrutural da reincidência consolidada do mês"
-              />
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <Kpi
-                  label="Taxa de reincidência consolidada do mês"
-                  value={formatPct(reincMensalAtual?.reincidenciaPct ?? 0, 1)}
-                  hint={
-                    reincMensalAtual
-                      ? `${reincMensalAtual.label} · média móvel 3m ${formatPct(reincMensalAtual.mm3, 1)}${reincMensalAtual.deltaMm3 == null ? "" : ` · ${reincMensalAtual.deltaMm3 > 0 ? "+" : ""}${reincMensalAtual.deltaMm3.toFixed(1)} pp`}`
-                      : "sem dados"
-                  }
-                  tone={
-                    reincMensalAtual?.deltaMm3 == null
-                      ? undefined
-                      : reincMensalAtual.deltaMm3 > 0
-                        ? "destructive"
-                        : "success"
-                  }
-                  target="alerta se a média móvel de 3 meses subir"
-                  status={
-                    reincMensalAtual?.deltaMm3 == null
-                      ? undefined
-                      : reincMensalAtual.deltaMm3 > 0
-                        ? "bad"
-                        : "ok"
-                  }
-                />
-              </div>
-            </>
-          )}
-
-          {(preferences.kpis.yearlyPortfolioGrowth || preferences.kpis.yearlyCriticalReduction) && (
-            <>
-              <SectionTitle
-                title="KPIs anuais"
-                subtitle={
-                  ytdLabel
-                    ? `Comparação do acumulado até ${ytdLabel} contra o mesmo período do ano anterior`
-                    : "Crescimento da carteira, redução de incidentes e prêmio emitido"
-                }
-              />
-              <div className="bento">
-                {preferences.kpis.yearlyPortfolioGrowth && (
-                  <Kpi
-                    label="Crescimento da carteira Olé no ano (nº de contratos e prêmio emitido)"
-                    value={
-                      crescimentoCarteira === null && crescimentoPremio === null
-                        ? "—"
-                        : `${crescimentoCarteira === null ? "—" : formatPct(crescimentoCarteira, 1)} contratos · ${crescimentoPremio === null ? "—" : formatPct(crescimentoPremio, 1)} prêmio`
-                    }
-                    hint={
-                      !yearCur || !yearPrev
-                        ? "histórico insuficiente"
-                        : `${yearCur.year}: ${formatInt(yearCur.contratosYtd)} contratos · ${formatUSD(yearCur.premioEmitidoYtdUsd, { maximumFractionDigits: 0 })} emitidos (YTD ${ytdLabel})`
-                    }
-                    tone={
-                      crescimentoCarteira === null && crescimentoPremio === null
-                        ? undefined
-                        : (crescimentoCarteira ?? 0) >= 0 && (crescimentoPremio ?? 0) >= 0
-                          ? "success"
-                          : "destructive"
-                    }
-                    target="comparar com a meta comercial definida com a Olé"
-                  />
-                )}
-                {preferences.kpis.yearlyCriticalReduction && (
-                  <Kpi
-                    label="Redução ano a ano de incidentes críticos"
-                    value={reducaoIncidentes === null ? "—" : formatPct(reducaoIncidentes, 1)}
-                    hint={
-                      reducaoIncidentes === null || !yearCur || !yearPrev
-                        ? "histórico insuficiente"
-                        : `${formatInt(yearPrev.criticosYtd)} → ${formatInt(yearCur.criticosYtd)} críticos distintos (YTD ${ytdLabel})`
-                    }
-                    tone={
-                      reducaoIncidentes === null
-                        ? undefined
-                        : reducaoIncidentes > 0
-                          ? "success"
-                          : "destructive"
-                    }
-                    target="meta: queda em relação ao ano anterior"
-                    status={
-                      reducaoIncidentes === null ? undefined : reducaoIncidentes > 0 ? "ok" : "bad"
-                    }
                   />
                 )}
               </div>
@@ -832,139 +672,147 @@ function AnalyticsPage() {
             </div>
 
             <ChartCard
-              title="Dinheiro pago e repasse Excelsior (USD) por mês"
+              title="Repasse Excelsior mês a mês (USD)"
               visible={preferences.charts.revenue}
               hideWhenEmpty={preferences.hideEmptyCharts}
               empty={!hasData["Receita Excelsior (USD)"]}
-              subtitle={`Competência pelo mês de emissão · somente documentos ativos com quitação total · Total Repasse = Carregamento + Prêmio Direto + PIS/COFINS, conforme o Mapa de Repasses · Total: ${formatUSD(repasseTotals.excelsiorLiquido, { maximumFractionDigits: 0 })} · Média/mês: ${formatUSD(repasseAvg, { maximumFractionDigits: 0 })} · ${repasse.length} competências`}
+              subtitle="Mesma competência, fonte monetária e arredondamento do Mapa de Repasses: data_quitacao + valor_total das parcelas com quitação total."
             >
               {repasse.length === 0 ? (
-                <EmptyMsg text="Sem documentos pagos e ativos sincronizados." />
+                <EmptyMsg text="Sem parcelas com quitação total sincronizadas." />
               ) : (
-                <div className="h-[380px] w-full min-w-0 sm:h-[440px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart
-                      data={repasse}
-                      margin={{ top: 36, right: 24, left: 8, bottom: 8 }}
-                    >
-                      <defs>
-                        <linearGradient id="gCarregamento" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="var(--primary)" stopOpacity={1} />
-                          <stop offset="100%" stopColor="var(--primary)" stopOpacity={0.65} />
-                        </linearGradient>
-                        <linearGradient id="gPremioDireto" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="var(--success)" stopOpacity={1} />
-                          <stop offset="100%" stopColor="var(--success)" stopOpacity={0.7} />
-                        </linearGradient>
-                        <linearGradient id="gLiquido" x1="0" y1="0" x2="1" y2="0">
-                          <stop offset="0%" stopColor="var(--info)" stopOpacity={1} />
-                          <stop offset="100%" stopColor="var(--primary)" stopOpacity={1} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid
-                        stroke="var(--border)"
-                        strokeDasharray="3 3"
-                        vertical={false}
-                      />
-                      <XAxis
-                        dataKey="label"
-                        stroke="var(--muted-foreground)"
-                        fontSize={11}
-                        tickMargin={10}
-                        axisLine={false}
-                        tickLine={false}
-                      />
-                      <YAxis
-                        stroke="var(--muted-foreground)"
-                        fontSize={11}
-                        tickFormatter={(v) => `$${formatCompact(Number(v))}`}
-                        axisLine={false}
-                        tickLine={false}
-                        width={60}
-                        domain={[0, repasseMax]}
-                        tickCount={6}
-                        allowDecimals={false}
-                      />
-                      <Tooltip
-                        {...tooltipProps}
-                        cursor={{ fill: "var(--muted)", fillOpacity: 0.22 }}
-                        content={<RepasseTooltip />}
-                      />
-                      <Legend
-                        wrapperStyle={{ fontSize: 11, paddingTop: 14 }}
-                        iconType="circle"
-                        iconSize={8}
-                      />
-                      <ReferenceLine
-                        y={REPASSE_RULES.FIXO_SUPLEMENTAR_PISO}
-                        stroke="var(--muted-foreground)"
-                        strokeDasharray="5 5"
-                        strokeOpacity={0.7}
-                        label={{
-                          value: "Piso US$ 8.333,33",
-                          position: "right",
-                          fill: "var(--muted-foreground)",
-                          fontSize: 10,
-                          dy: -6,
-                          dx: -6,
-                        }}
-                      />
-                      <Bar
-                        dataKey="carregamentoExcelsior"
-                        name="Carregamento (piso)"
-                        stackId="rec"
-                        fill="url(#gCarregamento)"
-                        maxBarSize={44}
-                        isAnimationActive
-                        animationDuration={900}
-                      />
-                      <Bar
-                        dataKey="premioDireto"
-                        name="Prêmio Direto"
-                        stackId="rec"
-                        fill="url(#gPremioDireto)"
-                        maxBarSize={44}
-                        isAnimationActive
-                        animationDuration={900}
-                      />
-                      <Bar
-                        dataKey="pisCofins"
-                        name="PIS/COFINS do repasse"
-                        stackId="rec"
-                        fill="var(--warning)"
-                        radius={[6, 6, 0, 0]}
-                        maxBarSize={44}
-                        isAnimationActive
-                        animationDuration={900}
-                      />
-                      <Line
-                        type="monotone"
-                        dataKey="excelsiorLiquido"
-                        name="Total do Repasse à Excelsior"
-                        stroke="url(#gLiquido)"
-                        strokeWidth={3}
-                        dot={{
-                          fill: "var(--info)",
-                          r: 4,
-                          strokeWidth: 2,
-                          stroke: "var(--surface)",
-                        }}
-                        activeDot={{ r: 7 }}
-                        isAnimationActive
-                        animationDuration={1200}
+                <div className="min-w-0">
+                  <div className="mb-4 grid gap-2 sm:grid-cols-3">
+                    <RevenueSummary
+                      label="Repasse no período"
+                      value={formatUSD(repasseTotals.excelsiorLiquido, {
+                        maximumFractionDigits: 2,
+                      })}
+                    />
+                    <RevenueSummary
+                      label="Média mensal"
+                      value={formatUSD(repasseAvg, { maximumFractionDigits: 2 })}
+                    />
+                    <RevenueSummary
+                      label="Prêmio total pago"
+                      value={formatUSD(repasseTotals.premioTotalPago, {
+                        maximumFractionDigits: 2,
+                      })}
+                    />
+                  </div>
+                  <div className="h-[330px] w-full min-w-0 sm:h-[390px]">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <ComposedChart
+                        data={repasse}
+                        margin={{ top: 36, right: 24, left: 8, bottom: 8 }}
                       >
-                        <LabelList
-                          dataKey="excelsiorLiquido"
-                          position="top"
-                          offset={14}
-                          fontSize={11}
-                          fontWeight={600}
-                          fill="var(--foreground)"
-                          formatter={(v: React.ReactNode) => `$${formatCompact(Number(v))}`}
+                        <defs>
+                          <linearGradient id="gCarregamento" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="var(--primary)" stopOpacity={1} />
+                            <stop offset="100%" stopColor="var(--primary)" stopOpacity={0.65} />
+                          </linearGradient>
+                          <linearGradient id="gPremioDireto" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="var(--success)" stopOpacity={1} />
+                            <stop offset="100%" stopColor="var(--success)" stopOpacity={0.7} />
+                          </linearGradient>
+                          <linearGradient id="gLiquido" x1="0" y1="0" x2="1" y2="0">
+                            <stop offset="0%" stopColor="var(--info)" stopOpacity={1} />
+                            <stop offset="100%" stopColor="var(--primary)" stopOpacity={1} />
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid
+                          stroke="var(--border)"
+                          strokeDasharray="3 3"
+                          vertical={false}
                         />
-                      </Line>
-                    </ComposedChart>
-                  </ResponsiveContainer>
+                        <XAxis
+                          dataKey="label"
+                          stroke="var(--muted-foreground)"
+                          fontSize={11}
+                          tickMargin={10}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <YAxis
+                          stroke="var(--muted-foreground)"
+                          fontSize={11}
+                          tickFormatter={(v) => `$${formatCompact(Number(v))}`}
+                          axisLine={false}
+                          tickLine={false}
+                          width={60}
+                          domain={[0, repasseMax]}
+                          tickCount={6}
+                          allowDecimals={false}
+                        />
+                        <Tooltip
+                          {...tooltipProps}
+                          cursor={{ fill: "var(--muted)", fillOpacity: 0.22 }}
+                          content={<RepasseTooltip />}
+                        />
+                        <Legend
+                          wrapperStyle={{ fontSize: 11, paddingTop: 14 }}
+                          iconType="circle"
+                          iconSize={8}
+                        />
+                        <ReferenceLine
+                          y={REPASSE_RULES.FIXO_SUPLEMENTAR_PISO}
+                          stroke="var(--muted-foreground)"
+                          strokeDasharray="5 5"
+                          strokeOpacity={0.7}
+                          label={{
+                            value: "Piso contratual",
+                            position: "insideTopRight",
+                            fill: "var(--muted-foreground)",
+                            fontSize: 9,
+                          }}
+                        />
+                        <Bar
+                          dataKey="carregamentoExcelsior"
+                          name="Carregamento (piso)"
+                          stackId="rec"
+                          fill="url(#gCarregamento)"
+                          maxBarSize={44}
+                          isAnimationActive
+                          animationDuration={900}
+                        />
+                        <Bar
+                          dataKey="premioDireto"
+                          name="Prêmio Direto"
+                          stackId="rec"
+                          fill="url(#gPremioDireto)"
+                          maxBarSize={44}
+                          isAnimationActive
+                          animationDuration={900}
+                        />
+                        <Bar
+                          dataKey="pisCofins"
+                          name="PIS/COFINS do repasse"
+                          stackId="rec"
+                          fill="var(--warning)"
+                          radius={[6, 6, 0, 0]}
+                          maxBarSize={44}
+                          isAnimationActive
+                          animationDuration={900}
+                        />
+                        <Line
+                          type="monotone"
+                          dataKey="excelsiorLiquido"
+                          name="Total do Repasse à Excelsior"
+                          stroke="url(#gLiquido)"
+                          strokeWidth={3}
+                          dot={{
+                            fill: "var(--info)",
+                            r: 4,
+                            strokeWidth: 2,
+                            stroke: "var(--surface)",
+                          }}
+                          activeDot={{ r: 7 }}
+                          isAnimationActive
+                          animationDuration={1200}
+                        />
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
               )}
             </ChartCard>
@@ -1328,6 +1176,136 @@ const KPI_STATUS_LABEL: Record<"ok" | "warn" | "bad", string> = {
   bad: "fora da meta",
 };
 
+function RecurrenceKpiCard({
+  data,
+  loading,
+  granularity,
+  week,
+  month,
+  onGranularityChange,
+  onWeekChange,
+  onMonthChange,
+}: {
+  data: RecurrenceKpi | null;
+  loading: boolean;
+  granularity: RecurrenceGranularity;
+  week: string;
+  month: string;
+  onGranularityChange: (value: RecurrenceGranularity) => void;
+  onWeekChange: (value: string) => void;
+  onMonthChange: (value: string) => void;
+}) {
+  const periodLabel = data
+    ? `${formatPeriodDate(data.startDate)} a ${formatPeriodDate(data.endDate)}`
+    : "Carregando período…";
+
+  return (
+    <section className="panel min-w-0 p-4 sm:p-5" aria-labelledby="recurrence-kpi-title">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div
+            id="recurrence-kpi-title"
+            className="text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground"
+          >
+            Número de reincidências
+          </div>
+          <div className="mt-1 flex items-end gap-2">
+            <span className="text-[28px] font-semibold tabular-nums text-foreground">
+              {formatInt(data?.total ?? 0)}
+            </span>
+            <span className="pb-1 text-[11px] text-muted-foreground">
+              ocorrência(s) reincidente(s)
+            </span>
+          </div>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {periodLabel} · {formatInt(data?.runs ?? 0)} auditoria(s)
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <div
+            className="inline-flex rounded-full border border-border bg-surface-2 p-0.5"
+            aria-label="Periodicidade da reincidência"
+          >
+            {(["week", "month"] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={granularity === option}
+                onClick={() => onGranularityChange(option)}
+                className={`rounded-full px-3 py-1.5 text-[11px] font-medium transition ${
+                  granularity === option
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {option === "week" ? "Semanal" : "Mensal"}
+              </button>
+            ))}
+          </div>
+          <label className="sr-only" htmlFor="recurrence-period">
+            {granularity === "week" ? "Semana analisada" : "Mês analisado"}
+          </label>
+          <input
+            id="recurrence-period"
+            type={granularity}
+            value={granularity === "week" ? week : month}
+            onChange={(event) => {
+              if (!event.target.value) return;
+              if (granularity === "week") onWeekChange(event.target.value);
+              else onMonthChange(event.target.value);
+            }}
+            className="h-9 rounded-full border border-border bg-surface px-3 text-[11px] font-medium text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+          />
+        </div>
+      </div>
+
+      <div className="mt-4 overflow-hidden rounded-2xl border border-border/80 bg-surface/55">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-border/70 px-3 py-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground sm:px-4">
+          <span>Erro conhecido</span>
+          <span>Reincidências</span>
+        </div>
+        <div className="max-h-64 divide-y divide-border/60 overflow-y-auto" aria-live="polite">
+          {loading && !data ? (
+            <div className="flex items-center justify-center gap-2 px-4 py-8 text-[11px] text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Atualizando indicador
+            </div>
+          ) : data?.porTipo.length ? (
+            data.porTipo.map((item) => (
+              <div
+                key={item.tipoErro}
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2.5 text-[12px] sm:px-4"
+              >
+                <span className="min-w-0 truncate text-foreground" title={item.tipoErro}>
+                  {item.tipoErro}
+                </span>
+                <span
+                  className={`min-w-8 rounded-full px-2 py-0.5 text-center font-mono font-semibold tabular-nums ${
+                    item.reincidencias > 0
+                      ? "bg-destructive/10 text-destructive"
+                      : "bg-surface-2 text-muted-foreground"
+                  }`}
+                >
+                  {formatInt(item.reincidencias)}
+                </span>
+              </div>
+            ))
+          ) : (
+            <div className="px-4 py-8 text-center text-[11px] text-muted-foreground">
+              Nenhum tipo de erro conhecido no histórico.
+            </div>
+          )}
+        </div>
+      </div>
+      <p className="mt-3 text-[10.5px] leading-relaxed text-muted-foreground">
+        Conta uma vez cada ocorrência cujo tipo já existia antes do período selecionado, mesmo que
+        reapareça em outra apólice. Persistências da mesma ocorrência em várias auditorias não são
+        duplicadas.
+      </p>
+    </section>
+  );
+}
+
 function Kpi({
   label,
   value,
@@ -1522,6 +1500,19 @@ function EmptyMsg({ text }: { text: string }) {
   );
 }
 
+function RevenueSummary({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-border/70 bg-surface-2/55 px-3 py-2.5">
+      <div className="text-[9.5px] font-medium uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-1 truncate font-mono text-[13px] font-semibold tabular-nums text-foreground sm:text-[14px]">
+        {value}
+      </div>
+    </div>
+  );
+}
+
 function RepasseTooltip({
   active,
   payload,
@@ -1540,30 +1531,27 @@ function RepasseTooltip({
     </div>
   );
   return (
-    <div className="rounded-lg border border-border bg-surface/95 backdrop-blur p-3 shadow-elevated min-w-[260px]">
-      <div className="text-[12px] font-semibold mb-2">{d.label}</div>
-      <div className="space-y-1">
-        {row("Prêmio Total Pago · Ativos", d.premioTotalPago, "text-muted-foreground")}
-        {row("(−) IOF (0,38%)", -d.iof, "text-muted-foreground")}
-        {row("(=) Prêmio Líquido IOF", d.premioLiquidoIof, "text-muted-foreground")}
-        <div className="h-px bg-border my-1.5" />
-        {row("(−) Remuneração Olé (35%)", -d.remuneracaoOle, "text-muted-foreground")}
-        {row("(−) Custo de aquisição (20%)", -d.custoAquisicao, "text-muted-foreground")}
-        {row("(=) Total de comissões (55%)", d.comissoesOle, "text-muted-foreground")}
-        {row("(−) PIS/COFINS (4,65%)", -d.pisCofins, "text-destructive")}
-        {row("(=) Total retenção Olé", d.totalRetencaoOle, "text-muted-foreground")}
-        <div className="h-px bg-border my-1.5" />
-        {row("(−) Fee Excelsior (5%)", -d.feeExcelsior, "text-muted-foreground")}
-        {row("(=) Fixo suplementar", d.fixoSuplementar, "text-muted-foreground")}
-        {row("(=) Carregamento Excelsior", d.carregamentoExcelsior)}
-        <div className="h-px bg-border my-1.5" />
-        {row("(+) Retido corretores", d.premioRetidoCorretores, "text-muted-foreground")}
-        {row("(=) Prêmio Direto", d.premioDireto, "text-success")}
-        {row("Retido Excelsior (10%)", d.premioRetidoExcelsior, "text-muted-foreground")}
-        {row("Cedido Munich RE (90%)", d.premioCedidoMunich, "text-muted-foreground")}
-        {row("(+) PIS/COFINS no repasse", d.pisCofins, "text-warning")}
-        <div className="h-px bg-border my-1.5" />
-        {row("Total Repasse Excelsior", d.excelsiorLiquido, "text-info font-semibold")}
+    <div className="min-w-[250px] rounded-2xl border border-border bg-surface/95 p-3.5 shadow-elevated backdrop-blur">
+      <div className="flex items-start justify-between gap-4 border-b border-border/70 pb-2.5">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            {d.label}
+          </div>
+          <div className="mt-0.5 text-[11px] text-muted-foreground">Repasse Excelsior</div>
+        </div>
+        <div className="font-mono text-[14px] font-semibold tabular-nums text-info">
+          {formatUSD(d.excelsiorLiquido, { maximumFractionDigits: 2 })}
+        </div>
+      </div>
+      <div className="mt-2.5 space-y-1.5">
+        {row("Prêmio total pago", d.premioTotalPago)}
+        {d.premioRetidoCorretores > 0
+          ? row("Corretagem identificada", d.premioRetidoCorretores, "text-muted-foreground")
+          : null}
+        <div className="my-2 h-px bg-border/70" />
+        {row("Carregamento", d.carregamentoExcelsior, "text-primary")}
+        {row("Prêmio direto", d.premioDireto, "text-success")}
+        {row("PIS/COFINS", d.pisCofins, "text-warning")}
       </div>
     </div>
   );

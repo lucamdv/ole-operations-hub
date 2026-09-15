@@ -575,36 +575,24 @@ function round(value: number) {
 }
 
 function exactSummary(paid: number, brokerage: number) {
-  const r = REPASSE_RULES;
-  paid = round(paid);
-  brokerage = round(brokerage);
-  const iof = round(paid * r.IOF_PCT);
-  const liquid = round(paid - iof);
-  const ole = round(liquid * r.FEE_OLE_PCT);
-  const acquisition = round(liquid * r.NOMAD_PCT);
-  const commissions = round(ole + acquisition);
-  const pis = round(commissions * r.PIS_COFINS_PCT);
-  const excelsiorFee = round(liquid * r.FEE_EXCELSIOR_PCT);
-  const supplementary = round(r.FIXO_SUPLEMENTAR_PISO - excelsiorFee);
-  const loading = round(excelsiorFee + supplementary);
-  const direct = round(liquid - commissions - excelsiorFee + brokerage);
+  const summary = computeRepasse(paid, brokerage);
   return {
-    paid,
-    iof,
-    liquid,
-    ole,
-    acquisition,
-    commissions,
-    pis,
-    totalOle: round(commissions - pis),
-    excelsiorFee,
-    supplementary,
-    loading,
-    direct,
-    retained: round(direct * 0.1),
-    ceded: round(direct * 0.9),
-    brokerage,
-    total: round(loading + direct + pis),
+    paid: summary.premioTotalPago,
+    iof: summary.iof,
+    liquid: summary.premioLiquidoIof,
+    ole: summary.remuneracaoOle,
+    acquisition: summary.custoAquisicao,
+    commissions: summary.comissoesOle,
+    pis: summary.pisCofins,
+    totalOle: summary.totalRetencaoOle,
+    excelsiorFee: summary.feeExcelsior,
+    supplementary: summary.fixoSuplementar,
+    loading: summary.carregamentoExcelsior,
+    direct: summary.premioDireto,
+    retained: summary.premioRetidoExcelsior,
+    ceded: summary.premioCedidoMunich,
+    brokerage: summary.premioRetidoCorretores,
+    total: summary.excelsiorLiquido,
   };
 }
 

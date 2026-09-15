@@ -14,58 +14,16 @@ import { Switch } from "@/components/ui/switch";
 
 export const ANALYTICS_KPI_OPTIONS = [
   {
-    id: "dailyNewFindings",
-    group: "Diários",
-    label: "Inconsistências novas detectadas",
-    description: "Volume de ocorrências inéditas detectadas no dia.",
-  },
-  {
-    id: "dailyOpenCritical",
-    group: "Diários",
-    label: "Ocorrências críticas em aberto",
-    description: "Backlog crítico presente na auditoria mais recente.",
-  },
-  {
-    id: "dailyFirstResponse",
-    group: "Diários",
-    label: "Tempo até a primeira resposta",
-    description: "Tempo médio de reação para qualquer ocorrência respondida no dia.",
-  },
-  {
     id: "weeklyRecurrence",
-    group: "Semanais",
-    label: "Taxa de reincidência",
-    description: "Proporção entre ocorrências repetidas e novas nos últimos 7 dias.",
-  },
-  {
-    id: "weeklySla",
-    group: "Semanais",
-    label: "Resoluções dentro do SLA",
-    description: "Percentual de ocorrências resolvidas dentro do prazo definido.",
+    group: "Operacionais",
+    label: "Número de reincidências",
+    description: "Total absoluto e detalhamento por erro em uma semana ou mês escolhido.",
   },
   {
     id: "weeklyDelinquent",
-    group: "Semanais",
+    group: "Operacionais",
     label: "Contratos inadimplentes",
     description: "Contratos vencidos, não quitados e ainda ativos.",
-  },
-  {
-    id: "monthlyRecurrence",
-    group: "Mensais",
-    label: "Reincidência consolidada",
-    description: "Tendência mensal e média móvel de reincidência.",
-  },
-  {
-    id: "yearlyPortfolioGrowth",
-    group: "Anuais",
-    label: "Crescimento da carteira",
-    description: "Variação anual de contratos e prêmio emitido.",
-  },
-  {
-    id: "yearlyCriticalReduction",
-    group: "Anuais",
-    label: "Redução de incidentes críticos",
-    description: "Comparação anual de ocorrências críticas distintas.",
   },
 ] as const;
 

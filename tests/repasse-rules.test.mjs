@@ -12,18 +12,18 @@ test("reconcilia exatamente o mapa de repasses de julho de 2026", () => {
     premioLiquidoIof: 626.61,
     remuneracaoOle: 219.31,
     custoAquisicao: 125.32,
-    comissoesOle: 344.64,
+    comissoesOle: 344.63,
     pisCofins: 16.03,
     pisCofinsDeducao: -16.03,
-    totalRetencaoOle: 328.61,
+    totalRetencaoOle: 328.6,
     feeExcelsior: 31.33,
     fixoSuplementar: 8_302,
     carregamentoExcelsior: 8_333.33,
     premioRetidoCorretores: 12.55,
-    premioDireto: 263.19,
+    premioDireto: 263.2,
     premioRetidoExcelsior: 26.32,
-    premioCedidoMunich: 236.87,
-    excelsiorLiquido: 8_612.55,
+    premioCedidoMunich: 236.88,
+    excelsiorLiquido: 8_612.56,
   });
 });
 
@@ -38,5 +38,5 @@ test("série começa na primeira emissão, mesmo antes do primeiro pagamento", (
   assert.equal(series.at(-1)?.month, "2026-08");
   assert.equal(series.length, 9);
   assert.equal(series.find((month) => month.month === "2025-12")?.premioTotalPago, 0);
-  assert.equal(series.find((month) => month.month === "2026-07")?.excelsiorLiquido, 8_612.55);
+  assert.equal(series.find((month) => month.month === "2026-07")?.excelsiorLiquido, 8_612.56);
 });

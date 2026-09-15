@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { derivePaidActivePremiums, isPaidAndActive } from "../src/lib/analytics/paid-active.ts";
+import { derivePaidActivePremiums, isRepasseEligible } from "../src/lib/analytics/paid-active.ts";
 
 function documentWithInstallments() {
   return {
@@ -35,16 +35,16 @@ function documentWithInstallments() {
   };
 }
 
-test("regra financeira aceita somente cobrança paga e com emissão ativa", () => {
-  assert.equal(isPaidAndActive({ status_pagamento: "Total", situacao_emissao: "Ativa" }), true);
-  assert.equal(isPaidAndActive({ status_pagamento: "Aberta", situacao_emissao: "Ativa" }), false);
+test("regra financeira segue o mapa e aceita somente cobrança com quitação total", () => {
+  assert.equal(isRepasseEligible({ status_pagamento: "Total", situacao_emissao: "Ativa" }), true);
+  assert.equal(isRepasseEligible({ status_pagamento: "Aberta", situacao_emissao: "Ativa" }), false);
   assert.equal(
-    isPaidAndActive({ status_pagamento: "Total", situacao_emissao: "Cancelada" }),
-    false,
+    isRepasseEligible({ status_pagamento: "Total", situacao_emissao: "Cancelada" }),
+    true,
   );
 });
 
-test("dinheiro pago usa a parcela correta e a competência da emissão", () => {
+test("dinheiro pago usa valor_total e a competência da data de quitação", () => {
   const result = derivePaidActivePremiums(
     [
       {
@@ -55,6 +55,7 @@ test("dinheiro pago usa a parcela correta e a competência da emissão", () => {
         situacao_emissao: "Ativa",
         data_quitacao: "2026-08-21T12:00:00Z",
         data_vencimento: "2026-08-10",
+        valor_total: 215.75,
       },
     ],
     [documentWithInstallments()],
@@ -62,12 +63,12 @@ test("dinheiro pago usa a parcela correta e a competência da emissão", () => {
 
   assert.equal(result.eligibleRows, 1);
   assert.equal(result.matchedRows, 1);
-  assert.equal(result.byMonth.get("2026-07")?.usd, 200);
-  assert.equal(result.byMonth.get("2026-07")?.brl, 1_100);
-  assert.equal(result.byPolicy.get("123456000000")?.usd, 200);
+  assert.equal(result.byMonth.get("2026-08")?.usd, 215.75);
+  assert.equal(result.byMonth.get("2026-08")?.brl, 1_100);
+  assert.equal(result.byPolicy.get("123456000000")?.usd, 215.75);
 });
 
-test("abertas, canceladas e pagamentos sem data de quitação não entram no gráfico", () => {
+test("abertas e pagamentos sem data de quitação não entram no gráfico", () => {
   const base = {
     numero_apolice: "123456000000",
     numero_endosso: "000001",
@@ -81,12 +82,6 @@ test("abertas, canceladas e pagamentos sem data de quitação não entram no gr�
         status_pagamento: "Aberta",
         situacao_emissao: "Ativa",
         data_quitacao: null,
-      },
-      {
-        ...base,
-        status_pagamento: "Total",
-        situacao_emissao: "Cancelada",
-        data_quitacao: "2026-07-20",
       },
       {
         ...base,
@@ -133,6 +128,7 @@ test("a mesma parcela não é contabilizada duas vezes por registros legados dup
     situacao_emissao: "Ativa",
     data_quitacao: "2026-08-15T12:00:00Z",
     data_vencimento: "2026-08-10",
+    valor_total: 125,
   };
 
   const result = derivePaidActivePremiums(
@@ -141,11 +137,11 @@ test("a mesma parcela não é contabilizada duas vezes por registros legados dup
   );
 
   assert.equal(result.matchedRows, 1);
-  assert.equal(result.byMonth.get("2026-07")?.usd, 125);
-  assert.equal(result.byMonth.get("2026-07")?.corretagemUsd, 25);
+  assert.equal(result.byMonth.get("2026-08")?.usd, 125);
+  assert.equal(result.byMonth.get("2026-08")?.corretagemUsd, 25);
 });
 
-test("registro LEGACY usa vencimento para encontrar a parcela, sem mudar a competência", () => {
+test("registro LEGACY mantém a competência na data de quitação", () => {
   const wrapperDocument = {
     numero_apolice: "123456000000",
     numero_endosso: "000001",
@@ -168,12 +164,13 @@ test("registro LEGACY usa vencimento para encontrar a parcela, sem mudar a compe
         situacao_emissao: "Ativa",
         data_quitacao: "2026-08-04T12:00:00Z",
         data_vencimento: "2026-07-10",
+        valor_total: 125,
       },
     ],
     [wrapperDocument],
   );
 
   assert.equal(result.matchedRows, 1);
-  assert.equal(result.byMonth.get("2026-07")?.usd, 125);
-  assert.equal(result.byMonth.has("2026-08"), false);
+  assert.equal(result.byMonth.get("2026-08")?.usd, 125);
+  assert.equal(result.byMonth.has("2026-07"), false);
 });

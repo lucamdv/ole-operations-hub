@@ -1,3 +1,5 @@
+import { dateOnly, repasseSourceRow } from "../repasse-map/core.ts";
+
 type JsonRecord = Record<string, unknown>;
 
 export interface PaidActiveBillingRow {
@@ -10,6 +12,7 @@ export interface PaidActiveBillingRow {
   situacao_emissao: string;
   data_quitacao: string | null;
   data_vencimento: string | null;
+  valor_total?: number | string | null;
 }
 
 export interface FinancialDocument {
@@ -62,33 +65,6 @@ function resolveProposal(value: unknown): JsonRecord {
   return raw;
 }
 
-function documentEmissionMonth(value: unknown): string | null {
-  const raw = recordFrom(value);
-  if (raw.pagamento || raw.datas || raw.itens) {
-    const dates = isRecord(raw.datas) ? raw.datas : {};
-    return monthOf(
-      raw.data_emissao ?? dates.assinatura ?? dates.conclusao_subscricao ?? dates.registro_origem,
-    );
-  }
-
-  for (const suffix of ["A", "B", "C", "D"] as const) {
-    const wrapper = raw[`endosso_${suffix}`];
-    if (!isRecord(wrapper)) continue;
-    const inner = wrapper[`proposta_endosso_${suffix}`];
-    if (!isRecord(inner)) continue;
-    const proposal = isRecord(inner.proposta) ? inner.proposta : inner;
-    const dates = isRecord(proposal.datas) ? proposal.datas : {};
-    return monthOf(
-      wrapper.data_emissao ??
-        inner.data_emissao ??
-        dates.assinatura ??
-        dates.conclusao_subscricao ??
-        dates.registro_origem,
-    );
-  }
-  return null;
-}
-
 function normalizedText(value: unknown) {
   return String(value ?? "")
     .trim()
@@ -99,14 +75,6 @@ function normalizedIdentity(value: unknown): string | null {
   const text = String(value ?? "").trim();
   if (!text) return null;
   return /^\d+$/.test(text) ? text.replace(/^0+(?=\d)/, "") : text.toLowerCase();
-}
-
-function dateOnly(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const iso = /^(\d{4}-\d{2}-\d{2})/.exec(value.trim());
-  if (iso) return iso[1]!;
-  const br = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(value.trim());
-  return br ? `${br[3]}-${br[2]}-${br[1]}` : null;
 }
 
 function monthOf(value: unknown): string | null {
@@ -165,14 +133,12 @@ function sumInstallment(item: JsonRecord): PremiumTotal {
 
 function paidStatus(value: unknown) {
   const status = normalizedText(value);
-  return status.startsWith("total") || status.startsWith("pag") || status.startsWith("quit");
+  return status.startsWith("total");
 }
 
-/** Regra financeira oficial da Analytics: quitação paga e emissão ativa. */
-export function isPaidAndActive(row: PaidActiveBillingRow) {
-  return (
-    paidStatus(row.status_pagamento) && normalizedText(row.situacao_emissao).startsWith("ativ")
-  );
+/** Mesma elegibilidade financeira do Mapa de Repasses: quitação total. */
+export function isRepasseEligible(row: PaidActiveBillingRow) {
+  return paidStatus(row.status_pagamento);
 }
 
 function matchingInstallment(
@@ -206,8 +172,9 @@ function matchingInstallment(
 
 /**
  * Cruza cobranças com seus documentos e agrega somente dinheiro efetivamente
- * quitado em documentos ativos. A competência segue o mês da emissão, como no
- * Mapa de Repasses; `data_quitacao` confirma que houve pagamento.
+ * quitado. Assim como o Mapa de Repasses, a competência
+ * vem de `data_quitacao` e o prêmio vem de `valor_total` da cobrança. A emissão
+ * é usada apenas para identificar eventual corretagem.
  */
 export function derivePaidActivePremiums(
   billingRows: PaidActiveBillingRow[],
@@ -232,27 +199,47 @@ export function derivePaidActivePremiums(
   let matchedRows = 0;
 
   for (const row of billingRows) {
-    if (!isPaidAndActive(row)) continue;
+    if (!isRepasseEligible(row)) continue;
     if (!monthOf(row.data_quitacao)) continue;
     eligibleRows += 1;
 
     const key = documentKey(row.numero_apolice, row.numero_endosso);
-    const document = documentsByKey.get(key);
-    if (!document) continue;
-    const month = documentEmissionMonth(document.proposta);
+    const month = monthOf(row.data_quitacao);
     if (!month) continue;
-    const proposal = resolveProposal(document.proposta);
-    const payment = isRecord(proposal.pagamento) ? proposal.pagamento : {};
-    const installments = Array.isArray(payment.parcelas) ? payment.parcelas.filter(isRecord) : [];
-    const installment = matchingInstallment(row, installments, rowsPerDocument.get(key) ?? 0);
-    if (!installment) continue;
-    const installmentIndex = installments.indexOf(installment);
-    const countedKey = `${key}#${installmentIndex}`;
+    const document = documentsByKey.get(key);
+    const source = repasseSourceRow(row as unknown as JsonRecord, document?.proposta ?? null);
+    if (!source || source.paidValue <= 0) continue;
+
+    const rowIdentity =
+      normalizedIdentity(row.id_parcela_seguradora) ??
+      normalizedIdentity(row.numero_parcela) ??
+      dateOnly(row.data_vencimento) ??
+      month;
+    const countedKey = `${key}#${rowIdentity}`;
     if (countedInstallments.has(countedKey)) continue;
-    const total = sumInstallment(installment);
-    if (total.usd <= 0 && total.brl <= 0) continue;
     countedInstallments.add(countedKey);
     matchedRows += 1;
+
+    let brl = 0;
+    let corretagemBrl = 0;
+    if (document) {
+      const proposal = resolveProposal(document.proposta);
+      const payment = isRecord(proposal.pagamento) ? proposal.pagamento : {};
+      const installments = Array.isArray(payment.parcelas) ? payment.parcelas.filter(isRecord) : [];
+      const installment = matchingInstallment(row, installments, rowsPerDocument.get(key) ?? 0);
+      if (installment) {
+        const composition = sumInstallment(installment);
+        brl = composition.brl;
+        corretagemBrl = composition.corretagemBrl;
+      }
+    }
+
+    const total: PremiumTotal = {
+      usd: source.paidValue,
+      brl,
+      corretagemUsd: source.brokerageValue ?? 0,
+      corretagemBrl,
+    };
 
     const monthly = byMonth.get(month) ?? {
       usd: 0,

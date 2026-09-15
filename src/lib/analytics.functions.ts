@@ -124,7 +124,7 @@ export const getAnalyticsAggregates = createServerFn({ method: "GET" })
       supabaseAdmin
         .from("policy_billing")
         .select(
-          "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_quitacao, data_vencimento",
+          "numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_quitacao, data_vencimento, valor_total",
         ),
     ]);
     if (eErr) throw eErr;
@@ -149,8 +149,9 @@ export const getAnalyticsAggregates = createServerFn({ method: "GET" })
       .sort((a, b) => a.numero_apolice.localeCompare(b.numero_apolice));
 
     const issMap = new Map<string, IssuanceBucket>();
-    // Fonte única para toda informação monetária da Analytics: parcelas
-    // quitadas em documentos ativos, na competência de emissão do mapa.
+    // Fonte única para toda informação monetária da Analytics: valor_total das
+    // parcelas com quitação total, agrupado pelo mês de data_quitacao — a mesma
+    // base usada pelo Mapa de Repasses.
     const repasseInputByMonth = new Map<string, MonthlyRepasseInput>(
       Array.from(paidActive.byMonth, ([month, value]) => [
         month,

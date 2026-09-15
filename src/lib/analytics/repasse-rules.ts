@@ -95,24 +95,28 @@ export function computeRepasse(
   const premioTotalPago = round2(Math.max(0, premioTotalPagoBruto));
   const premioRetidoCorretores = round2(Math.max(0, premioRetidoCorretoresBruto));
 
-  const iof = premioTotalPago * r.IOF_PCT;
-  const premioLiquidoIof = premioTotalPago - iof;
+  // A capa do Mapa de Repasses arredonda cada etapa em duas casas. Repetimos
+  // a mesma ordem aqui para que o gráfico feche centavo a centavo com o XLSX.
+  const iof = round2(premioTotalPago * r.IOF_PCT);
+  const premioLiquidoIof = round2(premioTotalPago - iof);
 
-  const remuneracaoOle = premioLiquidoIof * r.FEE_OLE_PCT;
-  const custoAquisicao = premioLiquidoIof * r.NOMAD_PCT;
-  const comissoesOle = remuneracaoOle + custoAquisicao;
-  const pisCofins = comissoesOle * r.PIS_COFINS_PCT;
-  const totalRetencaoOle = comissoesOle - pisCofins;
+  const remuneracaoOle = round2(premioLiquidoIof * r.FEE_OLE_PCT);
+  const custoAquisicao = round2(premioLiquidoIof * r.NOMAD_PCT);
+  const comissoesOle = round2(remuneracaoOle + custoAquisicao);
+  const pisCofins = round2(comissoesOle * r.PIS_COFINS_PCT);
+  const totalRetencaoOle = round2(comissoesOle - pisCofins);
 
-  const feeExcelsior = premioLiquidoIof * r.FEE_EXCELSIOR_PCT;
-  const fixoSuplementar = Math.max(0, r.FIXO_SUPLEMENTAR_PISO - feeExcelsior);
-  const carregamentoExcelsior = feeExcelsior + fixoSuplementar;
+  const feeExcelsior = round2(premioLiquidoIof * r.FEE_EXCELSIOR_PCT);
+  const fixoSuplementar = round2(r.FIXO_SUPLEMENTAR_PISO - feeExcelsior);
+  const carregamentoExcelsior = round2(feeExcelsior + fixoSuplementar);
 
-  const premioDireto = premioLiquidoIof - comissoesOle - feeExcelsior + premioRetidoCorretores;
-  const premioRetidoExcelsior = premioDireto * 0.1;
-  const premioCedidoMunich = premioDireto * 0.9;
+  const premioDireto = round2(
+    premioLiquidoIof - comissoesOle - feeExcelsior + premioRetidoCorretores,
+  );
+  const premioRetidoExcelsior = round2(premioDireto * 0.1);
+  const premioCedidoMunich = round2(premioDireto * 0.9);
 
-  const excelsiorLiquido = carregamentoExcelsior + premioDireto + pisCofins;
+  const excelsiorLiquido = round2(carregamentoExcelsior + premioDireto + pisCofins);
 
   return {
     premioTotalPago: round2(premioTotalPago),

@@ -225,21 +225,19 @@ test("analytics exibe somente os KPIs definidos para cada cadência", async () =
     "supabase/migrations/20260903155341_separate_correction_response_modes.sql",
   );
 
-  for (const label of [
+  for (const label of ["Número de reincidências", "Nº de contratos inadimplentes"]) {
+    assert.match(analytics, new RegExp(label.replace(/[()%]/g, "\\$&")));
+  }
+
+  for (const removed of [
     "Nº de inconsistências novas detectadas",
     "Nº de ocorrências críticas em aberto",
     "Tempo até a primeira resposta em ocorrência",
     "Taxa de reincidência (% ocorrências repetidas vs. novas)",
     "% de ocorrências resolvidas dentro do SLA",
-    "Nº de contratos inadimplentes",
     "Taxa de reincidência consolidada do mês",
     "Crescimento da carteira Olé no ano (nº de contratos e prêmio emitido)",
     "Redução ano a ano de incidentes críticos",
-  ]) {
-    assert.match(analytics, new RegExp(label.replace(/[()%]/g, "\\$&")));
-  }
-
-  for (const removed of [
     "Auditadas (última run)",
     "Risco operacional",
     "Apólices reincidentes",
@@ -262,6 +260,10 @@ test("analytics exibe somente os KPIs definidos para cada cadência", async () =
   assert.match(kpiServer, /\.eq\("mode", "production"\)/);
   assert.match(analyticsPersonalizer, /Personalizar Analytics/);
   assert.match(analyticsPersonalizer, /Ocultar gráficos sem dados suficientes/);
+  assert.match(analytics, /type=\{granularity\}/);
+  assert.match(analytics, /Erro conhecido/);
+  assert.match(analytics, /Reincidências/);
+  assert.match(kpis, /deriveRecurrenceKpi/);
   assert.doesNotMatch(profileSettings, /Visualização de gráficos/);
 });
 

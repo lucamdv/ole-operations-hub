@@ -6,6 +6,7 @@ import {
   deriveDaily,
   deriveFirstResponse,
   deriveMonthlyReincidencia,
+  deriveRecurrenceKpi,
   deriveResolutionSla,
   deriveWeekly,
   fortalezaDateKey,
@@ -90,6 +91,49 @@ test("reincidência semanal fica sem base quando não há ocorrências", () => {
   );
   assert.equal(weekly.total, 0);
   assert.equal(weekly.reincidenciaPct, null);
+});
+
+test("reincidência absoluta agrupa por tipo, aceita outra apólice e não duplica persistência", () => {
+  const recurrenceRuns = [
+    { id: "old", at: "2026-08-28T15:00:00.000Z" },
+    { id: "week-1", at: "2026-09-08T15:00:00.000Z" },
+    { id: "week-2", at: "2026-09-10T15:00:00.000Z" },
+    { id: "future", at: "2026-09-20T15:00:00.000Z" },
+  ];
+  const recurrenceFindings = new Map([
+    ["old", [finding("old", "AP-1", "Cobertura inativa"), finding("old", "AP-2", "Proporção")]],
+    [
+      "week-1",
+      [finding("week-1", "AP-3", "Cobertura inativa"), finding("week-1", "AP-4", "Proporção")],
+    ],
+    [
+      "week-2",
+      [
+        finding("week-2", "AP-3", "Cobertura inativa"),
+        finding("week-2", "AP-5", "Proporção"),
+        finding("week-2", "AP-6", "Vigência"),
+      ],
+    ],
+    ["future", [finding("future", "AP-7", "Prêmio fora do padrão")]],
+  ]);
+
+  const result = deriveRecurrenceKpi(recurrenceRuns, recurrenceFindings, {
+    granularity: "week",
+    startDate: "2026-09-07",
+    endDate: "2026-09-13",
+  });
+
+  assert.equal(result.total, 3);
+  assert.equal(result.runs, 2);
+  assert.deepEqual(
+    Object.fromEntries(result.porTipo.map((item) => [item.tipoErro, item.reincidencias])),
+    {
+      "Cobertura inativa": 1,
+      Proporção: 2,
+      "Prêmio fora do padrão": 0,
+      Vigência: 0,
+    },
+  );
 });
 
 test("SLA semanal considera apenas resoluções mensuráveis e não reabertas", () => {
