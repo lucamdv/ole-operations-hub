@@ -4,6 +4,8 @@
 export type KpiStatus = "ok" | "warn" | "bad";
 
 export interface KpiTargets {
+  /** Dias corridos após o vencimento para um contrato se tornar inadimplente. */
+  inadimplenciaDias: number;
   /** Máximo aceitável de reincidência (%). */
   reincidenciaMaxPct: number;
   /** Máximo de ocorrências críticas em aberto. */
@@ -19,6 +21,7 @@ export interface KpiTargets {
 }
 
 export const DEFAULT_KPI_TARGETS: KpiTargets = {
+  inadimplenciaDias: 10,
   reincidenciaMaxPct: 15,
   criticasAbertasMax: 0,
   picoDesvioPct: 30,

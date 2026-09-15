@@ -15,6 +15,15 @@ const FIELDS: Array<{
   step: number;
 }> = [
   {
+    key: "inadimplenciaDias",
+    label: "Início da inadimplência",
+    desc: "Após o vencimento o contrato fica atrasado; ao atingir este prazo passa a inadimplente.",
+    suffix: "dias",
+    min: 1,
+    max: 365,
+    step: 1,
+  },
+  {
     key: "reincidenciaMaxPct",
     label: "Reincidência máxima",
     desc: "Percentual aceitável de achados que voltam a aparecer (semanal e mensal).",

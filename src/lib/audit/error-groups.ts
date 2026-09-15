@@ -48,6 +48,11 @@ const ERROR_TYPES_BY_GROUP: Record<AuditErrorGroupCode, readonly string[]> = {
   OUTROS: [],
 };
 
+/** Catálogo operacional oficial, inclusive quando um tipo está zerado no período. */
+export const KNOWN_AUDIT_ERROR_TYPES = AUDIT_ERROR_GROUP_ORDER.flatMap(
+  (groupCode) => ERROR_TYPES_BY_GROUP[groupCode],
+);
+
 function normalizeErrorType(value: string): string {
   return value
     .normalize("NFD")
@@ -59,10 +64,7 @@ function normalizeErrorType(value: string): string {
 
 const ERROR_TYPE_GROUP = new Map<string, AuditErrorGroupCode>(
   AUDIT_ERROR_GROUP_ORDER.flatMap((groupCode) =>
-    ERROR_TYPES_BY_GROUP[groupCode].map((errorType) => [
-      normalizeErrorType(errorType),
-      groupCode,
-    ]),
+    ERROR_TYPES_BY_GROUP[groupCode].map((errorType) => [normalizeErrorType(errorType), groupCode]),
   ),
 );
 
@@ -77,9 +79,7 @@ export function classifyAuditError(errorType: string) {
   }
   if (/LIMITE/.test(normalized)) return AUDIT_ERROR_GROUPS.LIMITE;
   if (
-    /PROPORCAO|TAXA|ADMINISTRACAO|DISTRIBUICAO|MARGEM|INTERMEDIACAO|CORRETAGEM/.test(
-      normalized,
-    )
+    /PROPORCAO|TAXA|ADMINISTRACAO|DISTRIBUICAO|MARGEM|INTERMEDIACAO|CORRETAGEM/.test(normalized)
   ) {
     return AUDIT_ERROR_GROUPS.PROPORCIONALIDADE;
   }

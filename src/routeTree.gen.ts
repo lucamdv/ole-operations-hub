@@ -20,6 +20,7 @@ import { Route as AuthenticatedFerramentasRouteImport } from './routes/_authenti
 import { Route as AuthenticatedOperacaoRouteImport } from './routes/_authenticated/operacao'
 import { Route as InviteTokenRouteImport } from './routes/invite.$token'
 import { Route as AuthenticatedAdminUsuariosRouteImport } from './routes/_authenticated/admin.usuarios'
+import { Route as AuthenticatedAnalyticsCompararRouteImport } from './routes/_authenticated/analytics.comparar'
 import { Route as AuthenticatedApolicesIndexRouteImport } from './routes/_authenticated/apolices.index'
 import { Route as AuthenticatedFerramentasIndexRouteImport } from './routes/_authenticated/ferramentas.index'
 import { Route as AuthenticatedFerramentasExtratorEndossosRouteImport } from './routes/_authenticated/ferramentas.extrator-endossos'
@@ -90,6 +91,12 @@ const AuthenticatedAdminUsuariosRoute =
     id: '/admin/usuarios',
     path: '/admin/usuarios',
     getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedAnalyticsCompararRoute =
+  AuthenticatedAnalyticsCompararRouteImport.update({
+    id: '/comparar',
+    path: '/comparar',
+    getParentRoute: () => AuthenticatedAnalyticsRoute,
   } as any)
 const AuthenticatedApolicesIndexRoute =
   AuthenticatedApolicesIndexRouteImport.update({
@@ -172,13 +179,14 @@ export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/auth': typeof AuthRoute
   '/alertas': typeof AuthenticatedAlertasRoute
-  '/analytics': typeof AuthenticatedAnalyticsRoute
+  '/analytics': typeof AuthenticatedAnalyticsRouteWithChildren
   '/configuracoes': typeof AuthenticatedConfiguracoesRoute
   '/endossos': typeof AuthenticatedEndossosRoute
   '/ferramentas': typeof AuthenticatedFerramentasRouteWithChildren
   '/operacao': typeof AuthenticatedOperacaoRoute
   '/invite/$token': typeof InviteTokenRoute
   '/admin/usuarios': typeof AuthenticatedAdminUsuariosRoute
+  '/analytics/comparar': typeof AuthenticatedAnalyticsCompararRoute
   '/ferramentas/extrator-endossos': typeof AuthenticatedFerramentasExtratorEndossosRoute
   '/ferramentas/mapa-repasses': typeof AuthenticatedFerramentasMapaRepassesRoute
   '/api/public/audit-callback': typeof ApiPublicAuditCallbackRoute
@@ -196,13 +204,14 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
   '/alertas': typeof AuthenticatedAlertasRoute
-  '/analytics': typeof AuthenticatedAnalyticsRoute
+  '/analytics': typeof AuthenticatedAnalyticsRouteWithChildren
   '/configuracoes': typeof AuthenticatedConfiguracoesRoute
   '/endossos': typeof AuthenticatedEndossosRoute
   '/operacao': typeof AuthenticatedOperacaoRoute
   '/invite/$token': typeof InviteTokenRoute
   '/': typeof AuthenticatedIndexRoute
   '/admin/usuarios': typeof AuthenticatedAdminUsuariosRoute
+  '/analytics/comparar': typeof AuthenticatedAnalyticsCompararRoute
   '/ferramentas/extrator-endossos': typeof AuthenticatedFerramentasExtratorEndossosRoute
   '/ferramentas/mapa-repasses': typeof AuthenticatedFerramentasMapaRepassesRoute
   '/api/public/audit-callback': typeof ApiPublicAuditCallbackRoute
@@ -222,7 +231,7 @@ export interface FileRoutesById {
   '/_authenticated': typeof AuthenticatedRouteRouteWithChildren
   '/auth': typeof AuthRoute
   '/_authenticated/alertas': typeof AuthenticatedAlertasRoute
-  '/_authenticated/analytics': typeof AuthenticatedAnalyticsRoute
+  '/_authenticated/analytics': typeof AuthenticatedAnalyticsRouteWithChildren
   '/_authenticated/configuracoes': typeof AuthenticatedConfiguracoesRoute
   '/_authenticated/endossos': typeof AuthenticatedEndossosRoute
   '/_authenticated/ferramentas': typeof AuthenticatedFerramentasRouteWithChildren
@@ -230,6 +239,7 @@ export interface FileRoutesById {
   '/invite/$token': typeof InviteTokenRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
   '/_authenticated/admin/usuarios': typeof AuthenticatedAdminUsuariosRoute
+  '/_authenticated/analytics/comparar': typeof AuthenticatedAnalyticsCompararRoute
   '/_authenticated/ferramentas/extrator-endossos': typeof AuthenticatedFerramentasExtratorEndossosRoute
   '/_authenticated/ferramentas/mapa-repasses': typeof AuthenticatedFerramentasMapaRepassesRoute
   '/api/public/audit-callback': typeof ApiPublicAuditCallbackRoute
@@ -257,6 +267,7 @@ export interface FileRouteTypes {
     | '/operacao'
     | '/invite/$token'
     | '/admin/usuarios'
+    | '/analytics/comparar'
     | '/ferramentas/extrator-endossos'
     | '/ferramentas/mapa-repasses'
     | '/api/public/audit-callback'
@@ -281,6 +292,7 @@ export interface FileRouteTypes {
     | '/invite/$token'
     | '/'
     | '/admin/usuarios'
+    | '/analytics/comparar'
     | '/ferramentas/extrator-endossos'
     | '/ferramentas/mapa-repasses'
     | '/api/public/audit-callback'
@@ -307,6 +319,7 @@ export interface FileRouteTypes {
     | '/invite/$token'
     | '/_authenticated/'
     | '/_authenticated/admin/usuarios'
+    | '/_authenticated/analytics/comparar'
     | '/_authenticated/ferramentas/extrator-endossos'
     | '/_authenticated/ferramentas/mapa-repasses'
     | '/api/public/audit-callback'
@@ -414,6 +427,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedAdminUsuariosRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/analytics/comparar': {
+      id: '/_authenticated/analytics/comparar'
+      path: '/comparar'
+      fullPath: '/analytics/comparar'
+      preLoaderRoute: typeof AuthenticatedAnalyticsCompararRouteImport
+      parentRoute: typeof AuthenticatedAnalyticsRoute
+    }
     '/_authenticated/apolices/': {
       id: '/_authenticated/apolices/'
       path: '/apolices'
@@ -508,6 +528,20 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AuthenticatedAnalyticsRouteChildren {
+  AuthenticatedAnalyticsCompararRoute: typeof AuthenticatedAnalyticsCompararRoute
+}
+
+const AuthenticatedAnalyticsRouteChildren: AuthenticatedAnalyticsRouteChildren =
+  {
+    AuthenticatedAnalyticsCompararRoute: AuthenticatedAnalyticsCompararRoute,
+  }
+
+const AuthenticatedAnalyticsRouteWithChildren =
+  AuthenticatedAnalyticsRoute._addFileChildren(
+    AuthenticatedAnalyticsRouteChildren,
+  )
+
 interface AuthenticatedFerramentasRouteChildren {
   AuthenticatedFerramentasExtratorEndossosRoute: typeof AuthenticatedFerramentasExtratorEndossosRoute
   AuthenticatedFerramentasMapaRepassesRoute: typeof AuthenticatedFerramentasMapaRepassesRoute
@@ -530,7 +564,7 @@ const AuthenticatedFerramentasRouteWithChildren =
 
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedAlertasRoute: typeof AuthenticatedAlertasRoute
-  AuthenticatedAnalyticsRoute: typeof AuthenticatedAnalyticsRoute
+  AuthenticatedAnalyticsRoute: typeof AuthenticatedAnalyticsRouteWithChildren
   AuthenticatedConfiguracoesRoute: typeof AuthenticatedConfiguracoesRoute
   AuthenticatedEndossosRoute: typeof AuthenticatedEndossosRoute
   AuthenticatedFerramentasRoute: typeof AuthenticatedFerramentasRouteWithChildren
@@ -544,7 +578,7 @@ interface AuthenticatedRouteRouteChildren {
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedAlertasRoute: AuthenticatedAlertasRoute,
-  AuthenticatedAnalyticsRoute: AuthenticatedAnalyticsRoute,
+  AuthenticatedAnalyticsRoute: AuthenticatedAnalyticsRouteWithChildren,
   AuthenticatedConfiguracoesRoute: AuthenticatedConfiguracoesRoute,
   AuthenticatedEndossosRoute: AuthenticatedEndossosRoute,
   AuthenticatedFerramentasRoute: AuthenticatedFerramentasRouteWithChildren,

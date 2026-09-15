@@ -211,9 +211,11 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
   assert.doesNotMatch(envExample, /^VITE_N8N_CORRECTION_WEBHOOK_URL=/m);
 });
 
-test("analytics exibe somente os KPIs definidos para cada cadência", async () => {
+test("analytics exibe somente os painéis operacionais e financeiros definidos", async () => {
   const analytics = await read("src/routes/_authenticated/analytics.tsx");
-  const analyticsPersonalizer = await read("src/components/analytics/analytics-personalizer.tsx");
+  const charts = await read("src/components/analytics/dashboard-charts.tsx");
+  const settings = await read("src/components/settings/metas-tab.tsx");
+  const errorGroups = await read("src/lib/audit/error-groups.ts");
   const profileSettings = await read("src/components/settings/perfil-tab.tsx");
   const operation = await read("src/routes/_authenticated/operacao.tsx");
   const kpis = await read("src/lib/kpis/derive.ts");
@@ -225,8 +227,16 @@ test("analytics exibe somente os KPIs definidos para cada cadência", async () =
     "supabase/migrations/20260903155341_separate_correction_response_modes.sql",
   );
 
-  for (const label of ["Número de reincidências", "Nº de contratos inadimplentes"]) {
-    assert.match(analytics, new RegExp(label.replace(/[()%]/g, "\\$&")));
+  for (const label of [
+    "Reincidências por tipo de erro",
+    "Contratos inadimplentes",
+    "Contratos atrasados",
+    "Contratos ativos",
+    "Endossos de correção por apólice",
+    "Emissões por mês e por tipo",
+    "Repasse Excelsior mês a mês",
+  ]) {
+    assert.match(charts, new RegExp(label.replace(/[()%]/g, "\\$&")));
   }
 
   for (const removed of [
@@ -258,30 +268,37 @@ test("analytics exibe somente os KPIs definidos para cada cadência", async () =
   assert.match(migration, /REVOKE ALL.*anon, authenticated/);
   assert.match(responseModeMigration, /UNIQUE \(incident_key, detected_at, mode\)/);
   assert.match(kpiServer, /\.eq\("mode", "production"\)/);
-  assert.match(analyticsPersonalizer, /Personalizar Analytics/);
-  assert.match(analyticsPersonalizer, /Ocultar gráficos sem dados suficientes/);
-  assert.match(analytics, /type=\{granularity\}/);
-  assert.match(analytics, /Erro conhecido/);
-  assert.match(analytics, /Reincidências/);
+  assert.match(analytics, /Pasta \{category === "operational"/);
+  assert.match(analytics, /label="Operacional"/);
+  assert.match(analytics, /label="Financeiro"/);
+  assert.match(charts, /type="month"/);
+  assert.match(charts, /KNOWN_AUDIT_ERROR_TYPES/);
+  assert.match(charts, /endossoAFatura/);
+  assert.match(charts, /endossoACorrecao/);
+  assert.doesNotMatch(charts, /endossoB|endossoD/);
+  assert.match(settings, /inadimplenciaDias/);
+  assert.match(errorGroups, /KNOWN_AUDIT_ERROR_TYPES/);
   assert.match(kpis, /deriveRecurrenceKpi/);
   assert.doesNotMatch(profileSettings, /Visualização de gráficos/);
 });
 
-test("analytics preserva exportação e adapta a grade aos gráficos visíveis", async () => {
-  const source = await read("src/routes/_authenticated/analytics.tsx");
-  const pairedGrids = source.match(/className="grid grid-cols-1 items-stretch[^"]+"/g) ?? [];
-  assert.equal(pairedGrids.length, 6);
-  for (const grid of pairedGrids) {
-    assert.ok(grid.includes("empty:hidden"), "grupos vazios não devem reservar espaço");
-    assert.ok(
-      grid.includes("[&>*:only-child]:col-span-full"),
-      "um gráfico sozinho deve ocupar a linha inteira",
-    );
-  }
-  assert.match(source, /data-export="chart"/);
-  assert.match(source, /if \(!visible \|\| \(empty && hideWhenEmpty\)\) return null/);
-  assert.match(source, /aria-label="Legenda dos tipos de emissão"/);
-  assert.match(source, /<Cell key=\{item.name\} fill=\{item.color\}/);
+test("analytics permite comparar, manipular, salvar e exportar painéis", async () => {
+  const analytics = await read("src/routes/_authenticated/analytics.tsx");
+  const charts = await read("src/components/analytics/dashboard-charts.tsx");
+  const dialog = await read("src/components/analytics/compare-dialog.tsx");
+  const comparison = await read("src/routes/_authenticated/analytics.comparar.tsx");
+  const storage = await read("src/lib/analytics/comparison-views.ts");
+
+  assert.match(analytics, /CompareChartsDialog/);
+  assert.match(dialog, /Pesquisar por título, tipo ou categoria/);
+  assert.match(dialog, /ChartThumbnail/);
+  assert.match(charts, /data-export="chart"/);
+  assert.match(comparison, /DateRangeFilter/);
+  assert.match(comparison, /Mover painel para a esquerda/);
+  assert.match(comparison, /Zoom/);
+  assert.match(comparison, /exportChartsPdf/);
+  assert.match(comparison, /saveComparisonView/);
+  assert.match(storage, /ole\.analytics\.comparison-views\.v1/);
 });
 
 test("cliente do MOTOR mantém credenciais apenas no servidor e usa HTTPS", async () => {
