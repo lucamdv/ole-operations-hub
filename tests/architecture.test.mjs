@@ -19,7 +19,7 @@ test("pesquisa global usa apólices e auditoria reais, sem catálogo mockado", a
   assert.match(palette, /latestAuditQuery/);
   assert.match(palette, /policy\.corretor_nome/);
   assert.match(palette, /policy\.coberturas/);
-  assert.match(policies, /endorsements\(id, numero_endosso, ordem\)/);
+  assert.match(policies, /endorsements\(id, numero_endosso, ordem, proposta\)/);
 });
 
 test("Vercel mantém Fluid Compute e a duração máxima do plano", async () => {

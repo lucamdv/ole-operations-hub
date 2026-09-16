@@ -1,9 +1,10 @@
-import { RotateCcw, Target, TrendingUp } from "lucide-react";
+import { CalendarClock, RotateCcw, Target, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 import { useKpiTargets } from "@/hooks/use-kpi-targets";
 import { useEscalationRules } from "@/hooks/use-escalation-rules";
 import { URGENCY_LABEL, URGENCY_ORDER, type Urgency } from "@/lib/audit/escalation";
 import type { KpiTargets } from "@/lib/kpis/derive";
+import { usePolicyStatusRules } from "@/hooks/use-policy-status-rules";
 
 const FIELDS: Array<{
   key: keyof KpiTargets;
@@ -124,6 +125,64 @@ export function MetasTab() {
       </button>
 
       <EscalationSection />
+      <PolicyStatusSection />
+    </div>
+  );
+}
+
+function PolicyStatusSection() {
+  const { rules, update, reset } = usePolicyStatusRules();
+
+  return (
+    <div className="space-y-4 pt-4">
+      <div className="flex items-start gap-2 panel bg-surface/60 p-3">
+        <CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+        <div>
+          <div className="text-[13px] font-medium">Situação financeira das apólices</div>
+          <p className="text-[12px] text-muted-foreground">
+            Controla quando uma cobrança vencida deixa de aparecer como ATRASADA e passa a ser
+            classificada como INADIMPLENTE na tela de Apólices.
+          </p>
+        </div>
+      </div>
+
+      <div className="panel divide-y divide-border">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 p-3.5">
+          <div className="min-w-0">
+            <div className="text-[13px] font-medium">Dias até a inadimplência</div>
+            <div className="text-[11.5px] text-muted-foreground">
+              A partir deste total de dias corridos após o vencimento, a apólice fica INADIMPLENTE.
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <input
+              type="number"
+              min={0}
+              max={365}
+              step={1}
+              value={rules.delinquencyAfterDays}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (!Number.isFinite(value)) return;
+                update({ delinquencyAfterDays: Math.min(365, Math.max(0, Math.floor(value))) });
+              }}
+              className="h-9 w-24 rounded-md border border-border bg-surface-2 px-2 text-right text-[13px] font-mono tabular-nums outline-none focus:border-primary"
+            />
+            <span className="w-16 text-[11px] text-muted-foreground">dias</span>
+          </div>
+        </div>
+      </div>
+
+      <button
+        onClick={() => {
+          reset();
+          toast.success("Prazo de inadimplência restaurado");
+        }}
+        className="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-surface px-3 text-[12.5px] transition hover:bg-surface-2"
+      >
+        <RotateCcw className="h-3.5 w-3.5" />
+        Restaurar prazo padrão
+      </button>
     </div>
   );
 }

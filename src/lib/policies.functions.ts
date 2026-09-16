@@ -19,6 +19,8 @@ export interface PolicyListItem {
     id: string;
     numero_endosso: string;
     ordem: number;
+    tipo_endosso: string | null;
+    motivo_endosso: string | null;
   }>;
 }
 
@@ -214,7 +216,7 @@ export const getPolicies = createServerFn({ method: "GET" })
     const { data, error } = await supabaseAdmin
       .from("policies")
       .select(
-        "id, numero_apolice, numero_endosso_atual, premio_liquido, proposta, updated_at, endorsements(id, numero_endosso, ordem)",
+        "id, numero_apolice, numero_endosso_atual, premio_liquido, proposta, updated_at, endorsements(id, numero_endosso, ordem, proposta)",
       )
       .order("updated_at", { ascending: false });
     if (error) throw new Error(error.message);
@@ -226,7 +228,12 @@ export const getPolicies = createServerFn({ method: "GET" })
         premio_liquido: number | string;
         proposta: JsonObject | null;
         updated_at: string;
-        endorsements: Array<{ id: string; numero_endosso: string; ordem: number }>;
+        endorsements: Array<{
+          id: string;
+          numero_endosso: string;
+          ordem: number;
+          proposta: JsonObject | null;
+        }>;
       }>
     ).map((p) => {
       const { valor, moeda } = computePremioLiquido(p.proposta ?? {});
@@ -264,11 +271,20 @@ export const getPolicies = createServerFn({ method: "GET" })
           translated.dadosGerais.idProduto ??
           translated.dadosGerais.tipoApolice,
         coberturas,
-        endorsements: endos.map((endorsement) => ({
-          id: endorsement.id,
-          numero_endosso: normalizeEndossoNum(endorsement.numero_endosso),
-          ordem: endorsement.ordem,
-        })),
+        endorsements: endos.map((endorsement) => {
+          const translatedEndorsement = translateProposta(endorsement.proposta ?? {});
+          const reason = translatedEndorsement.motivoEndosso;
+          return {
+            id: endorsement.id,
+            numero_endosso: normalizeEndossoNum(endorsement.numero_endosso),
+            ordem: endorsement.ordem,
+            tipo_endosso: translatedEndorsement.tipoEndosso,
+            motivo_endosso:
+              [reason?.codigo, reason?.descricao, reason?.tipoCancelamento]
+                .filter(Boolean)
+                .join(" · ") || null,
+          };
+        }),
       };
     }) as PolicyListItem[];
   });
