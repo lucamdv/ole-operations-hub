@@ -24,11 +24,20 @@ export const getPolicyBilling = createServerFn({ method: "GET" })
 export const getBillingIndex = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
-    const { data: rows, error } = await context.supabase
-      .from("policy_billing")
-      .select(COLS)
-      .order("numero_endosso", { ascending: true })
-      .order("numero_parcela", { ascending: true });
-    if (error) throw new Error(error.message);
-    return dedupeBillingRecords((rows ?? []) as BillingRecord[]);
+    const rows: BillingRecord[] = [];
+    const pageSize = 1_000;
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await context.supabase
+        .from("policy_billing")
+        .select(COLS)
+        .order("numero_apolice", { ascending: true })
+        .order("numero_endosso", { ascending: true })
+        .order("numero_parcela", { ascending: true })
+        .range(from, from + pageSize - 1);
+      if (error) throw new Error(error.message);
+      const page = (data ?? []) as BillingRecord[];
+      rows.push(...page);
+      if (page.length < pageSize) break;
+    }
+    return dedupeBillingRecords(rows);
   });

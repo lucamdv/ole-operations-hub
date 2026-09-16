@@ -12,13 +12,15 @@ import { SyncDetailsDialog } from "@/components/policies/sync-details-dialog";
 
 import { formatDateTime, relativeTime } from "@/lib/format";
 import { fmtNum } from "@/components/apolice/cards";
-import { useBillingTagMap } from "@/hooks/use-billing";
-import { billingTagClass, type BillingTag } from "@/lib/billing/status";
+import { usePolicyStatusMap } from "@/hooks/use-policy-status";
+import { useKpiTargets } from "@/hooks/use-kpi-targets";
 import {
-  BillingFilters,
-  matchSituacao,
-  type SituacaoFilter,
-} from "@/components/billing/billing-filters";
+  policyStatusClass,
+  policyStatusDescription,
+  type PolicyStatus,
+  type PolicyStatusInfo,
+} from "@/lib/policies/status";
+import { PolicyStatusFilters } from "@/components/policies/policy-status-filters";
 
 import { cn } from "@/lib/utils";
 import { VirtualList } from "@/components/ui/virtual-list";
@@ -72,12 +74,18 @@ const SORT_OPTIONS = [
   { value: "premio", label: "Prêmio total" },
 ];
 
-const TAG_ORDER: Record<BillingTag, number> = { CANCELADA: 0, ABERTA: 1, PARCIAL: 2, PAGO: 3 };
+const STATUS_ORDER: Record<PolicyStatus, number> = {
+  INADIMPLENTE: 0,
+  ATRASADA: 1,
+  SUSPENSA: 2,
+  ABERTA: 3,
+  CANCELADA: 4,
+  PAGA: 5,
+};
 
 function ApolicesPage() {
   const [q, setQ] = useState("");
-  const [tags, setTags] = useState<BillingTag[]>([]);
-  const [situacao, setSituacao] = useState<SituacaoFilter>("todas");
+  const [statuses, setStatuses] = useState<PolicyStatus[]>([]);
   const [sort, setSort] = useState("atualizado");
   const { data: policies, isLoading } = usePolicies();
   const { data: lastSync } = useLatestPolicySync();
@@ -91,7 +99,11 @@ function ApolicesPage() {
     cancel: cancelSync,
     isCancelling,
   } = useRunPolicySync();
-  const { map: billingTags, infoMap: billingInfo } = useBillingTagMap();
+  const { targets } = useKpiTargets();
+  const { infoMap: policyStatuses } = usePolicyStatusMap(
+    policies,
+    targets.inadimplenciaDias,
+  );
 
   const filtered = useMemo(() => {
     if (!policies) return [];
@@ -103,20 +115,19 @@ function ApolicesPage() {
         !(p.segurado_nome ?? "").toLowerCase().includes(s)
       )
         return false;
-      const info = billingInfo.get(p.numero_apolice);
-      if (tags.length > 0 && (!info || !tags.includes(info.tag))) return false;
-      if (situacao !== "todas" && !matchSituacao(info?.situacaoEmissao, situacao)) return false;
+      const info = policyStatuses.get(p.numero_apolice);
+      if (statuses.length > 0 && (!info || !statuses.includes(info.status))) return false;
       return true;
     });
 
     const sorted = [...list];
     sorted.sort((a, b) => {
-      const ia = billingInfo.get(a.numero_apolice);
-      const ib = billingInfo.get(b.numero_apolice);
+      const ia = policyStatuses.get(a.numero_apolice);
+      const ib = policyStatuses.get(b.numero_apolice);
       switch (sort) {
         case "status":
           return (
-            (ia ? TAG_ORDER[ia.tag] : 99) - (ib ? TAG_ORDER[ib.tag] : 99) ||
+            (ia ? STATUS_ORDER[ia.status] : 99) - (ib ? STATUS_ORDER[ib.status] : 99) ||
             a.numero_apolice.localeCompare(b.numero_apolice)
           );
         case "vencimento":
@@ -130,7 +141,7 @@ function ApolicesPage() {
       }
     });
     return sorted;
-  }, [policies, q, tags, situacao, sort, billingInfo]);
+  }, [policies, q, statuses, sort, policyStatuses]);
 
   const synced = !!lastSync?.finished_at;
   const syncLocked = isRunning || isCheckingSync;
@@ -221,16 +232,18 @@ function ApolicesPage() {
         </div>
       </div>
 
-      {/* Filtros de cobrança */}
+      {/* Filtros da situação consolidada da apólice */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <BillingFilters
-          tags={tags}
-          onToggleTag={(t) =>
-            setTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]))
+        <PolicyStatusFilters
+          statuses={statuses}
+          onToggleStatus={(status) =>
+            setStatuses((previous) =>
+              previous.includes(status)
+                ? previous.filter((item) => item !== status)
+                : [...previous, status],
+            )
           }
-          onClearTags={() => setTags([])}
-          situacao={situacao}
-          onSituacao={setSituacao}
+          onClearStatuses={() => setStatuses([])}
           sort={sort}
           onSort={setSort}
           sortOptions={SORT_OPTIONS}
@@ -280,7 +293,13 @@ function ApolicesPage() {
             gap={8}
             className="max-h-[70dvh] rounded-xl"
           >
-            {(p) => <PolicyRow p={p} billingTag={billingTags.get(p.numero_apolice)} />}
+            {(p) => (
+              <PolicyRow
+                p={p}
+                policyStatus={policyStatuses.get(p.numero_apolice)}
+                delinquencyAfterDays={targets.inadimplenciaDias}
+              />
+            )}
           </VirtualList>
         )}
       </div>
@@ -290,10 +309,12 @@ function ApolicesPage() {
 
 const PolicyRow = memo(function PolicyRow({
   p,
-  billingTag,
+  policyStatus,
+  delinquencyAfterDays,
 }: {
   p: NonNullable<ReturnType<typeof usePolicies>["data"]>[number];
-  billingTag?: BillingTag;
+  policyStatus?: PolicyStatusInfo;
+  delinquencyAfterDays: number;
 }) {
   // Split USD prefix from numeric value so we can style the currency tag
   const formatted = fmtNum(p.premio_liquido, p.premio_moeda);
@@ -317,14 +338,16 @@ const PolicyRow = memo(function PolicyRow({
             <div className="font-mono text-[12.5px] font-semibold tracking-tight text-foreground group-hover:text-primary transition-colors truncate">
               {p.numero_apolice}
             </div>
-            {billingTag && (
+            {policyStatus && (
               <span
+                title={policyStatusDescription(policyStatus, delinquencyAfterDays)}
                 className={cn(
                   "inline-flex items-center rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-semibold whitespace-nowrap",
-                  billingTagClass(billingTag),
+                  policyStatusClass(policyStatus.status),
                 )}
               >
-                {billingTag}
+                <span className="mr-1 h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+                {policyStatus.status}
               </span>
             )}
           </div>

@@ -19,7 +19,7 @@ test("pesquisa global usa apólices e auditoria reais, sem catálogo mockado", a
   assert.match(palette, /latestAuditQuery/);
   assert.match(palette, /policy\.corretor_nome/);
   assert.match(palette, /policy\.coberturas/);
-  assert.match(policies, /endorsements\(id, numero_endosso, ordem\)/);
+  assert.match(policies, /endorsements\(id, numero_endosso, ordem, proposta\)/);
 });
 
 test("Vercel mantém Fluid Compute e a duração máxima do plano", async () => {
@@ -213,6 +213,7 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
 
 test("analytics exibe somente os painéis operacionais e financeiros definidos", async () => {
   const analytics = await read("src/routes/_authenticated/analytics.tsx");
+  const policiesPage = await read("src/routes/_authenticated/apolices.index.tsx");
   const charts = await read("src/components/analytics/dashboard-charts.tsx");
   const settings = await read("src/components/settings/metas-tab.tsx");
   const errorGroups = await read("src/lib/audit/error-groups.ts");
@@ -277,6 +278,9 @@ test("analytics exibe somente os painéis operacionais e financeiros definidos",
   assert.match(charts, /endossoACorrecao/);
   assert.doesNotMatch(charts, /endossoB|endossoD/);
   assert.match(settings, /inadimplenciaDias/);
+  assert.match(policiesPage, /useKpiTargets/);
+  assert.match(policiesPage, /targets\.inadimplenciaDias/);
+  assert.doesNotMatch(policiesPage, /usePolicyStatusRules/);
   assert.match(errorGroups, /KNOWN_AUDIT_ERROR_TYPES/);
   assert.match(kpis, /deriveRecurrenceKpi/);
   assert.doesNotMatch(profileSettings, /Visualização de gráficos/);
