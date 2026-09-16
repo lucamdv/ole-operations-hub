@@ -298,12 +298,6 @@ export const getAnalyticsAggregates = createServerFn({ method: "GET" })
 
     const referenceDate = currentFortalezaDate();
     const dedupedBilling = dedupeBillingRecords(billing);
-    const financialHealth = deriveFinancialHealth(
-      policyNumbers,
-      dedupedBilling,
-      data.delinquencyDays,
-      referenceDate,
-    );
 
     const billingByPolicy = new Map<string, BillingRecord[]>();
     for (const row of dedupedBilling) {
@@ -333,9 +327,7 @@ export const getAnalyticsAggregates = createServerFn({ method: "GET" })
 
     const portfolioInput: PortfolioPolicyInput[] = policies.map((policy) => {
       const translated = translateProposta(policy.proposta);
-      const insured = translated.partes.find(
-        (party) => normalizedText(party.papel) === "SEGURADO",
-      );
+      const insured = translated.partes.find((party) => normalizedText(party.papel) === "SEGURADO");
       const status = derivePolicyStatus(
         billingByPolicy.get(policy.numero_apolice) ?? [],
         endorsementSignalsByPolicy.get(policy.numero_apolice) ?? [],
@@ -347,7 +339,9 @@ export const getAnalyticsAggregates = createServerFn({ method: "GET" })
             translated.datas.assinatura ??
             translated.datas.conclusaoSubscricao ??
             translated.datas.registroOrigem,
-        ) ?? startMonthByPolicy.get(policy.numero_apolice) ?? null;
+        ) ??
+        startMonthByPolicy.get(policy.numero_apolice) ??
+        null;
 
       return {
         numeroApolice: policy.numero_apolice,
@@ -358,14 +352,24 @@ export const getAnalyticsAggregates = createServerFn({ method: "GET" })
           item.coberturas.map((coverage) => ({
             code: coverage.codigo,
             name: coverage.nome,
-            premiumUsd: coverage.composicaoPremio
-              .filter((line) => normalizedText(line.natureza) === "PREMIO")
-              .reduce((sum, line) => sum + line.valor, 0),
+            components: coverage.composicaoPremio.map((line) => ({
+              nature: line.natureza,
+              type: line.tipo,
+              valueUsd: line.valor,
+            })),
           })),
         ),
       };
     });
     const portfolio = derivePortfolioAnalytics(portfolioInput, referenceDate);
+    const financialHealth = deriveFinancialHealth(
+      portfolioInput
+        .filter((policy) => policy.state === "ATIVA")
+        .map((policy) => policy.numeroApolice),
+      dedupedBilling,
+      data.delinquencyDays,
+      referenceDate,
+    );
 
     console.info("[analytics] agregados calculados", {
       policies: policies.length,

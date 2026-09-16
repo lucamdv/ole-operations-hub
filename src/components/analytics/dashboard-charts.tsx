@@ -1,12 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import {
-  AlertTriangle,
-  Ban,
-  ChevronDown,
-  Clock3,
-  PauseCircle,
-  ShieldCheck,
-} from "lucide-react";
+import { AlertTriangle, Ban, ChevronDown, Clock3, PauseCircle, ShieldCheck } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   Bar,
@@ -24,10 +17,7 @@ import {
 import { ResponsiveContainer } from "@/components/charts/in-view-container";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { REPASSE_RULES } from "@/lib/analytics/repasse-rules";
-import {
-  buildDynamicAgeHistogram,
-  buildDynamicHistogram,
-} from "@/lib/analytics/dashboard-core";
+import { buildDynamicAgeHistogram, buildDynamicHistogram } from "@/lib/analytics/dashboard-core";
 import type { AnalyticsAggregates } from "@/lib/analytics.functions";
 import { KNOWN_AUDIT_ERROR_TYPES } from "@/lib/audit/error-groups";
 import { formatCompact, formatInt, formatUSD } from "@/lib/format";
@@ -113,7 +103,7 @@ export const ANALYTICS_CATALOG: readonly AnalyticsCatalogItem[] = [
   {
     id: "financialHealth",
     title: "Saúde financeira da carteira",
-    description: "Contratos ativos, atrasados e inadimplentes.",
+    description: "Contratos em conformidade, atrasados e inadimplentes.",
     category: "financial",
     categoryLabel: "Financeiro",
     chartType: "Indicadores",
@@ -433,8 +423,45 @@ interface CoverageChartDatum {
   coverage: string;
   displayName: string;
   premiumUsd: number;
+  excelsiorUsd: number;
+  oleUsd: number;
+  brokerageUsd: number;
+  visiblePremiumUsd: number;
   policies: number;
 }
+
+type CoverageRecipient = "excelsior" | "ole" | "brokerage";
+type CoverageRecipientVisibility = Record<CoverageRecipient, boolean>;
+
+const COVERAGE_RECIPIENTS = [
+  {
+    id: "excelsior" as const,
+    label: "Excelsior",
+    description: "Prêmio direto",
+    dataKey: "excelsiorUsd" as const,
+    color: "var(--primary)",
+  },
+  {
+    id: "ole" as const,
+    label: "Olé",
+    description: "Demais componentes",
+    dataKey: "oleUsd" as const,
+    color: "var(--success)",
+  },
+  {
+    id: "brokerage" as const,
+    label: "Corretagem",
+    description: "Recebida para repasse",
+    dataKey: "brokerageUsd" as const,
+    color: "var(--warning)",
+  },
+] as const;
+
+const INITIAL_COVERAGE_VISIBILITY: CoverageRecipientVisibility = {
+  excelsior: true,
+  ole: true,
+  brokerage: true,
+};
 
 export function CoveragePremiumChart({
   aggregates,
@@ -443,7 +470,10 @@ export function CoveragePremiumChart({
   aggregates: AnalyticsAggregates;
   bounds: AnalyticsRangeBounds;
 }) {
-  const data = useMemo(() => {
+  const [visibleRecipients, setVisibleRecipients] = useState<CoverageRecipientVisibility>(
+    INITIAL_COVERAGE_VISIBILITY,
+  );
+  const coverageRows = useMemo(() => {
     const byCoverage = new Map<string, CoverageChartDatum>();
     for (const row of aggregates.coveragePremiums) {
       if (row.month && !monthInRange(row.month, bounds)) continue;
@@ -454,38 +484,129 @@ export function CoveragePremiumChart({
         coverage: row.coverage,
         displayName: row.coverage,
         premiumUsd: 0,
+        excelsiorUsd: 0,
+        oleUsd: 0,
+        brokerageUsd: 0,
+        visiblePremiumUsd: 0,
         policies: 0,
       };
       current.premiumUsd += row.premiumUsd;
+      current.excelsiorUsd += row.excelsiorUsd;
+      current.oleUsd += row.oleUsd;
+      current.brokerageUsd += row.brokerageUsd;
       current.policies += row.policies;
       byCoverage.set(key, current);
     }
-    return Array.from(byCoverage.values())
-      .map((row) => ({
-        ...row,
-        displayName: row.coverage.length > 28 ? `${row.coverage.slice(0, 27)}…` : row.coverage,
-      }))
-      .sort(
-        (left, right) =>
-          right.premiumUsd - left.premiumUsd ||
-          left.coverage.localeCompare(right.coverage, "pt-BR"),
-      );
+    return Array.from(byCoverage.values(), (row) => ({
+      ...row,
+      displayName: row.coverage.length > 28 ? `${row.coverage.slice(0, 27)}…` : row.coverage,
+    }));
   }, [aggregates.coveragePremiums, bounds]);
-  const totalPremium = data.reduce((sum, row) => sum + row.premiumUsd, 0);
+  const data = useMemo(
+    () =>
+      coverageRows
+        .map((row) => ({
+          ...row,
+          visiblePremiumUsd:
+            (visibleRecipients.excelsior ? row.excelsiorUsd : 0) +
+            (visibleRecipients.ole ? row.oleUsd : 0) +
+            (visibleRecipients.brokerage ? row.brokerageUsd : 0),
+        }))
+        .filter((row) => row.visiblePremiumUsd > 0)
+        .sort(
+          (left, right) =>
+            right.visiblePremiumUsd - left.visiblePremiumUsd ||
+            left.coverage.localeCompare(right.coverage, "pt-BR"),
+        ),
+    [coverageRows, visibleRecipients],
+  );
+  const totals = coverageRows.reduce(
+    (sum, row) => ({
+      excelsiorUsd: sum.excelsiorUsd + row.excelsiorUsd,
+      oleUsd: sum.oleUsd + row.oleUsd,
+      brokerageUsd: sum.brokerageUsd + row.brokerageUsd,
+      visiblePremiumUsd:
+        sum.visiblePremiumUsd +
+        (visibleRecipients.excelsior ? row.excelsiorUsd : 0) +
+        (visibleRecipients.ole ? row.oleUsd : 0) +
+        (visibleRecipients.brokerage ? row.brokerageUsd : 0),
+    }),
+    { excelsiorUsd: 0, oleUsd: 0, brokerageUsd: 0, visiblePremiumUsd: 0 },
+  );
   const chartHeight = Math.max(300, data.length * 42 + 36);
+  const activeRecipients = COVERAGE_RECIPIENTS.filter(
+    (recipient) => visibleRecipients[recipient.id],
+  );
+  const toggleRecipient = (recipient: CoverageRecipient) => {
+    setVisibleRecipients((current) => {
+      const enabled = COVERAGE_RECIPIENTS.filter((item) => current[item.id]).length;
+      if (current[recipient] && enabled === 1) return current;
+      return { ...current, [recipient]: !current[recipient] };
+    });
+  };
+  const barRadius = (recipient: CoverageRecipient): [number, number, number, number] => {
+    if (activeRecipients.length === 1) return [6, 6, 6, 6];
+    if (activeRecipients[0]?.id === recipient) return [6, 0, 0, 6];
+    if (activeRecipients.at(-1)?.id === recipient) return [0, 6, 6, 0];
+    return [0, 0, 0, 0];
+  };
 
   return (
     <AnalyticsCard
       title="Prêmio gerado por cobertura"
-      subtitle="Prêmio das coberturas nas apólices ativas, pela competência de emissão e no período selecionado."
+      subtitle="Composição das coberturas ativas: prêmio direto para a Excelsior, demais componentes para a Olé e corretagem recebida para repasse."
       actions={
         <span className="rounded-full border border-border bg-surface-2 px-2.5 py-1 font-mono text-[10px] text-muted-foreground">
-          {formatUSD(totalPremium, { maximumFractionDigits: 2 })}
+          Total visível · {formatUSD(totals.visiblePremiumUsd, { maximumFractionDigits: 2 })}
         </span>
       }
     >
+      <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-border/70 bg-surface-2/35 p-3">
+        <div
+          role="group"
+          aria-label="Filtrar destinatários do prêmio"
+          className="flex flex-wrap items-center gap-2"
+        >
+          <span className="mr-1 text-[9.5px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            Mostrar
+          </span>
+          {COVERAGE_RECIPIENTS.map((recipient) => (
+            <button
+              key={recipient.id}
+              type="button"
+              aria-pressed={visibleRecipients[recipient.id]}
+              onClick={() => toggleRecipient(recipient.id)}
+              className={cn(
+                "inline-flex h-8 items-center gap-2 rounded-lg border px-2.5 text-[10.5px] font-medium transition",
+                visibleRecipients[recipient.id]
+                  ? "border-border bg-surface text-foreground shadow-sm"
+                  : "border-transparent bg-transparent text-muted-foreground opacity-55 hover:opacity-100",
+              )}
+            >
+              <span
+                aria-hidden="true"
+                className="h-2.5 w-2.5 rounded-full"
+                style={{ backgroundColor: recipient.color }}
+              />
+              {recipient.label}
+            </button>
+          ))}
+        </div>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {COVERAGE_RECIPIENTS.map((recipient) => (
+            <CoverageRecipientSummary
+              key={recipient.id}
+              label={recipient.label}
+              description={recipient.description}
+              color={recipient.color}
+              value={totals[recipient.dataKey]}
+              active={visibleRecipients[recipient.id]}
+            />
+          ))}
+        </div>
+      </div>
       {data.length === 0 ? (
-        <EmptyChart text="Sem prêmio por cobertura no período selecionado." />
+        <EmptyChart text="Sem valores para os destinatários selecionados neste período." />
       ) : (
         <div className="max-h-[620px] min-w-0 overflow-y-auto pr-1">
           <div className="w-full min-w-0" style={{ height: chartHeight }}>
@@ -511,15 +632,38 @@ export function CoveragePremiumChart({
                 <Tooltip
                   {...tooltipProps}
                   cursor={{ fill: "var(--accent)", opacity: 0.35 }}
-                  content={<CoveragePremiumTooltip />}
+                  content={<CoveragePremiumTooltip visibleRecipients={visibleRecipients} />}
                 />
-                <Bar
-                  dataKey="premiumUsd"
-                  name="Prêmio"
-                  fill="var(--primary)"
-                  radius={[0, 6, 6, 0]}
-                  maxBarSize={26}
-                />
+                {visibleRecipients.excelsior ? (
+                  <Bar
+                    dataKey="excelsiorUsd"
+                    name="Excelsior"
+                    stackId="coverage-premium"
+                    fill="var(--primary)"
+                    radius={barRadius("excelsior")}
+                    maxBarSize={26}
+                  />
+                ) : null}
+                {visibleRecipients.ole ? (
+                  <Bar
+                    dataKey="oleUsd"
+                    name="Olé"
+                    stackId="coverage-premium"
+                    fill="var(--success)"
+                    radius={barRadius("ole")}
+                    maxBarSize={26}
+                  />
+                ) : null}
+                {visibleRecipients.brokerage ? (
+                  <Bar
+                    dataKey="brokerageUsd"
+                    name="Corretagem para repasse"
+                    stackId="coverage-premium"
+                    fill="var(--warning)"
+                    radius={barRadius("brokerage")}
+                    maxBarSize={26}
+                  />
+                ) : null}
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -529,12 +673,46 @@ export function CoveragePremiumChart({
   );
 }
 
+function CoverageRecipientSummary({
+  label,
+  description,
+  color,
+  value,
+  active,
+}: {
+  label: string;
+  description: string;
+  color: string;
+  value: number;
+  active: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-xl border border-border/60 bg-surface px-3 py-2.5 transition-opacity",
+        !active && "opacity-45",
+      )}
+    >
+      <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider">
+        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+        {label}
+      </div>
+      <div className="mt-1.5 font-mono text-[14px] font-semibold tabular-nums">
+        {formatUSD(value, { maximumFractionDigits: 2 })}
+      </div>
+      <div className="mt-0.5 text-[9.5px] text-muted-foreground">{description}</div>
+    </div>
+  );
+}
+
 function CoveragePremiumTooltip({
   active,
   payload,
+  visibleRecipients,
 }: {
   active?: boolean;
   payload?: Array<{ payload: CoverageChartDatum }>;
+  visibleRecipients: CoverageRecipientVisibility;
 }) {
   if (!active || !payload?.[0]) return null;
   const row = payload[0].payload;
@@ -544,10 +722,28 @@ function CoveragePremiumTooltip({
       {row.code ? (
         <div className="mt-0.5 font-mono text-[9.5px] text-muted-foreground">{row.code}</div>
       ) : null}
+      <div className="mt-2.5 space-y-1.5 border-t border-border/70 pt-2.5">
+        {COVERAGE_RECIPIENTS.filter((recipient) => visibleRecipients[recipient.id]).map(
+          (recipient) => (
+            <div key={recipient.id} className="flex items-center justify-between gap-6 text-[11px]">
+              <span className="flex items-center gap-2 text-muted-foreground">
+                <span
+                  className="h-2 w-2 rounded-full"
+                  style={{ backgroundColor: recipient.color }}
+                />
+                {recipient.label}
+              </span>
+              <span className="font-mono tabular-nums">
+                {formatUSD(row[recipient.dataKey], { maximumFractionDigits: 2 })}
+              </span>
+            </div>
+          ),
+        )}
+      </div>
       <div className="mt-2.5 flex items-center justify-between gap-6 border-t border-border/70 pt-2.5 text-[11px]">
-        <span className="text-muted-foreground">Prêmio gerado</span>
+        <span className="font-medium text-muted-foreground">Total visível</span>
         <span className="font-mono font-semibold tabular-nums">
-          {formatUSD(row.premiumUsd, { maximumFractionDigits: 2 })}
+          {formatUSD(row.visiblePremiumUsd, { maximumFractionDigits: 2 })}
         </span>
       </div>
       <div className="mt-1.5 flex items-center justify-between gap-6 text-[11px]">
@@ -566,23 +762,28 @@ export function FinancialHealthPanel({ aggregates }: { aggregates: AnalyticsAggr
   return (
     <AnalyticsCard
       title="Saúde financeira da carteira"
-      subtitle={`Posição em ${referenceLabel}. Inadimplência a partir de ${health.thresholdDays} dias após o vencimento.`}
+      subtitle={`As ${formatInt(health.activeContracts)} apólices ativas estão distribuídas em três faixas exclusivas. Posição em ${referenceLabel}.`}
       actions={
-        <Link
-          to="/configuracoes"
-          className="rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-[10.5px] font-medium text-muted-foreground transition hover:text-foreground"
-        >
-          Alterar prazo
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="rounded-full border border-border bg-surface-2 px-2.5 py-1 font-mono text-[10px] text-muted-foreground">
+            Base ativa · {formatInt(health.activeContracts)}
+          </span>
+          <Link
+            to="/configuracoes"
+            className="rounded-lg border border-border bg-surface-2 px-2.5 py-1.5 text-[10.5px] font-medium text-muted-foreground transition hover:text-foreground"
+          >
+            Alterar prazo
+          </Link>
+        </div>
       }
     >
       <div className="grid gap-3 md:grid-cols-3">
         <HealthMetric
           icon={<ShieldCheck className="h-4 w-4" />}
-          label="Contratos ativos"
-          value={formatInt(health.activeContracts)}
+          label="Contratos em conformidade"
+          value={formatInt(health.compliantContracts)}
           tone="success"
-          hint="apólices em situação ativa"
+          hint="sem atraso ou inadimplência"
         />
         <HealthMetric
           icon={<Clock3 className="h-4 w-4" />}
@@ -602,8 +803,8 @@ export function FinancialHealthPanel({ aggregates }: { aggregates: AnalyticsAggr
         />
       </div>
       <div className="mt-3 rounded-xl border border-border/70 bg-surface-2/35 px-3 py-2 text-[11px] text-muted-foreground">
-        Contratos são contados uma vez na faixa mais crítica. A receita soma somente parcelas
-        ativas, não quitadas e vencidas.
+        Em conformidade + atrasados + inadimplentes = {formatInt(health.activeContracts)} apólices
+        ativas. Cada contrato aparece somente uma vez, sempre na faixa mais crítica.
       </div>
     </AnalyticsCard>
   );

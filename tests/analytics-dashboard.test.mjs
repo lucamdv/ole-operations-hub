@@ -37,9 +37,9 @@ test("histograma ajusta intervalos à amplitude e mantém políticas sem correç
   assert.ok(buckets.at(-1).max >= 12);
 });
 
-test("saúde financeira separa atraso, inadimplência e contratos cancelados", () => {
+test("saúde financeira particiona somente contratos ativos em três faixas exclusivas", () => {
   const result = deriveFinancialHealth(
-    ["ATIVA-1", "ATIVA-2", "CANCELADA"],
+    ["ATIVA-1", "ATIVA-2", "ATIVA-3"],
     [
       {
         numero_apolice: "ATIVA-1",
@@ -76,9 +76,14 @@ test("saúde financeira separa atraso, inadimplência e contratos cancelados", (
     "2026-09-15",
   );
 
-  assert.equal(result.activeContracts, 2);
+  assert.equal(result.activeContracts, 3);
+  assert.equal(result.compliantContracts, 1);
   assert.equal(result.lateContracts, 1);
   assert.equal(result.delinquentContracts, 1);
+  assert.equal(
+    result.compliantContracts + result.lateContracts + result.delinquentContracts,
+    result.activeContracts,
+  );
   assert.equal(result.lateRevenueUsd, 100);
   assert.equal(result.delinquentRevenueUsd, 250);
 });
@@ -99,8 +104,20 @@ test("carteira consolida estados, idades e prêmio apenas de apólices ativas", 
         birthDate: "1990-09-17",
         issuanceMonth: "2026-08",
         coverages: [
-          { code: "RC", name: "Responsabilidade Civil", premiumUsd: 120.105 },
-          { code: "RC", name: "Responsabilidade Civil", premiumUsd: 29.895 },
+          {
+            code: "RC",
+            name: "Responsabilidade Civil",
+            components: [
+              { nature: "PREMIO", type: "DIRETO", valueUsd: 100 },
+              { nature: "INTERMEDIACAO", type: "ADMINISTRACAO", valueUsd: 20 },
+              { nature: "INTERMEDIACAO", type: "COMISSAO_CORRETAGEM", valueUsd: 10 },
+            ],
+          },
+          {
+            code: "RC",
+            name: "Responsabilidade Civil",
+            components: [{ nature: "IMPOSTOS", type: "IOF", valueUsd: 5 }],
+          },
         ],
       },
       {
@@ -108,14 +125,29 @@ test("carteira consolida estados, idades e prêmio apenas de apólices ativas", 
         state: "ATIVA",
         birthDate: "1980-01-01",
         issuanceMonth: "2026-08",
-        coverages: [{ code: "RC", name: "Responsabilidade Civil", premiumUsd: 50 }],
+        coverages: [
+          {
+            code: "RC",
+            name: "Responsabilidade Civil",
+            components: [
+              { nature: "PREMIO", type: "DIRETO", valueUsd: 50 },
+              { nature: "CUSTOS", type: "MARGEM_SERVICO_CONTRATUAL", valueUsd: 15 },
+            ],
+          },
+        ],
       },
       {
         numeroApolice: "SUSPENSA-1",
         state: "SUSPENSA",
         birthDate: "1970-01-01",
         issuanceMonth: "2026-08",
-        coverages: [{ code: "RC", name: "Responsabilidade Civil", premiumUsd: 999 }],
+        coverages: [
+          {
+            code: "RC",
+            name: "Responsabilidade Civil",
+            components: [{ nature: "PREMIO", type: "DIRETO", valueUsd: 999 }],
+          },
+        ],
       },
       {
         numeroApolice: "CANCELADA-1",
@@ -144,6 +176,9 @@ test("carteira consolida estados, idades e prêmio apenas de apólices ativas", 
   );
   assert.equal(result.coveragePremiums.length, 1);
   assert.equal(result.coveragePremiums[0].premiumUsd, 200);
+  assert.equal(result.coveragePremiums[0].excelsiorUsd, 150);
+  assert.equal(result.coveragePremiums[0].oleUsd, 40);
+  assert.equal(result.coveragePremiums[0].brokerageUsd, 10);
   assert.equal(result.coveragePremiums[0].policies, 2);
 });
 

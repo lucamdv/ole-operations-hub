@@ -11,6 +11,7 @@ export interface BillingHealthRow {
 
 export interface FinancialHealth {
   activeContracts: number;
+  compliantContracts: number;
   lateContracts: number;
   delinquentContracts: number;
   lateRevenueUsd: number;
@@ -48,7 +49,11 @@ export type PortfolioState = "ATIVA" | "CANCELADA" | "SUSPENSA";
 export interface PortfolioCoverageInput {
   code: string | null;
   name: string;
-  premiumUsd: number;
+  components: Array<{
+    nature: string;
+    type: string;
+    valueUsd: number;
+  }>;
 }
 
 export interface PortfolioPolicyInput {
@@ -76,6 +81,9 @@ export interface CoveragePremiumPoint {
   coverage: string;
   month: string | null;
   premiumUsd: number;
+  excelsiorUsd: number;
+  oleUsd: number;
+  brokerageUsd: number;
   policies: number;
 }
 
@@ -130,38 +138,15 @@ function dateAtNoonUtc(value: string) {
  * configurado (10 dias por padrão).
  */
 export function deriveFinancialHealth(
-  policyNumbers: string[],
+  activePolicyNumbers: string[],
   rows: BillingHealthRow[],
   thresholdDays: number,
   referenceDate: string,
 ): FinancialHealth {
   const safeThreshold = Math.max(1, Math.round(thresholdDays) || 10);
-  const rowsByPolicy = new Map<string, BillingHealthRow[]>();
-  for (const row of rows) {
-    const policy = row.numero_apolice.trim();
-    if (!policy) continue;
-    const list = rowsByPolicy.get(policy) ?? [];
-    list.push(row);
-    rowsByPolicy.set(policy, list);
-  }
-
-  const activePolicies = new Set(policyNumbers.map((policy) => policy.trim()).filter(Boolean));
-  for (const [policy, policyRows] of rowsByPolicy) {
-    const latestSequence = Math.max(
-      ...policyRows.map((row) => endorsementNumber(row.numero_endosso)),
-    );
-    const latestRows = policyRows.filter(
-      (row) => endorsementNumber(row.numero_endosso) === latestSequence,
-    );
-    if (
-      latestRows.length > 0 &&
-      latestRows.every((row) => normalized(row.situacao_emissao).startsWith("cancel"))
-    ) {
-      activePolicies.delete(policy);
-    } else {
-      activePolicies.add(policy);
-    }
-  }
+  const activePolicies = new Set(
+    activePolicyNumbers.map((policy) => policy.trim()).filter(Boolean),
+  );
 
   const reference = dateAtNoonUtc(referenceDate);
   const latePolicies = new Set<string>();
@@ -201,10 +186,14 @@ export function deriveFinancialHealth(
     }
   }
 
+  const activeContracts = activePolicies.size;
+  const lateContracts = latePolicies.size;
+  const delinquentContracts = delinquentPolicies.size;
   return {
-    activeContracts: activePolicies.size,
-    lateContracts: latePolicies.size,
-    delinquentContracts: delinquentPolicies.size,
+    activeContracts,
+    compliantContracts: Math.max(0, activeContracts - lateContracts - delinquentContracts),
+    lateContracts,
+    delinquentContracts,
     lateRevenueUsd: round2(lateRevenueUsd),
     delinquentRevenueUsd: round2(delinquentRevenueUsd),
     thresholdDays: safeThreshold,
@@ -338,10 +327,7 @@ export function derivePortfolioAnalytics(
     totalPolicies: policies.length,
   };
   const policyAges: PolicyAgePoint[] = [];
-  const coverageBuckets = new Map<
-    string,
-    CoveragePremiumPoint & { policyNumbers: Set<string> }
-  >();
+  const coverageBuckets = new Map<string, CoveragePremiumPoint & { policyNumbers: Set<string> }>();
 
   for (const policy of policies) {
     if (policy.state === "CANCELADA") status.cancelledPolicies += 1;
@@ -353,7 +339,18 @@ export function derivePortfolioAnalytics(
     if (policy.state !== "ATIVA") continue;
 
     for (const coverage of policy.coverages) {
-      const premiumUsd = money(coverage.premiumUsd);
+      let excelsiorUsd = 0;
+      let oleUsd = 0;
+      let brokerageUsd = 0;
+      for (const component of coverage.components) {
+        const valueUsd = money(component.valueUsd);
+        if (valueUsd === 0) continue;
+        const type = normalizedKey(component.type).replace(/[\s-]+/g, "_");
+        if (type === "direto") excelsiorUsd += valueUsd;
+        else if (type === "comissao_corretagem") brokerageUsd += valueUsd;
+        else oleUsd += valueUsd;
+      }
+      const premiumUsd = excelsiorUsd + oleUsd + brokerageUsd;
       if (premiumUsd <= 0) continue;
       const name = coverage.name.trim() || coverage.code?.trim() || "Cobertura sem nome";
       const identity = normalizedKey(coverage.code) || normalizedKey(name);
@@ -364,10 +361,16 @@ export function derivePortfolioAnalytics(
         coverage: name,
         month,
         premiumUsd: 0,
+        excelsiorUsd: 0,
+        oleUsd: 0,
+        brokerageUsd: 0,
         policies: 0,
         policyNumbers: new Set<string>(),
       };
       current.premiumUsd += premiumUsd;
+      current.excelsiorUsd += excelsiorUsd;
+      current.oleUsd += oleUsd;
+      current.brokerageUsd += brokerageUsd;
       current.policyNumbers.add(policy.numeroApolice);
       coverageBuckets.set(key, current);
     }
@@ -378,6 +381,9 @@ export function derivePortfolioAnalytics(
     coverage: bucket.coverage,
     month: bucket.month,
     premiumUsd: round2(bucket.premiumUsd),
+    excelsiorUsd: round2(bucket.excelsiorUsd),
+    oleUsd: round2(bucket.oleUsd),
+    brokerageUsd: round2(bucket.brokerageUsd),
     policies: bucket.policyNumbers.size,
   })).sort(
     (left, right) =>

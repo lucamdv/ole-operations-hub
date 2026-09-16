@@ -232,7 +232,7 @@ test("analytics exibe somente os painéis operacionais e financeiros definidos",
     "Reincidências por tipo de erro",
     "Contratos inadimplentes",
     "Contratos atrasados",
-    "Contratos ativos",
+    "Contratos em conformidade",
     "Situação das apólices",
     "Apólices por faixa etária",
     "Prêmio gerado por cobertura",
@@ -283,6 +283,10 @@ test("analytics exibe somente os painéis operacionais e financeiros definidos",
   assert.match(charts, /includeCancelled/);
   assert.match(charts, /includeSuspended/);
   assert.match(charts, /buildDynamicAgeHistogram/);
+  assert.match(charts, /Excelsior/);
+  assert.match(charts, /Corretagem para repasse/);
+  assert.match(charts, /dataKey="oleUsd"/);
+  assert.match(charts, /visibleRecipients/);
   assert.match(settings, /inadimplenciaDias/);
   assert.match(analytics, /PolicyAgeHistogram/);
   assert.match(analytics, /CoveragePremiumChart/);
