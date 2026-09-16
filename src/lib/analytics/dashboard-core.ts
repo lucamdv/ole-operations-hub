@@ -43,6 +43,48 @@ export interface HistogramBucket {
   count: number;
 }
 
+export type PortfolioState = "ATIVA" | "CANCELADA" | "SUSPENSA";
+
+export interface PortfolioCoverageInput {
+  code: string | null;
+  name: string;
+  premiumUsd: number;
+}
+
+export interface PortfolioPolicyInput {
+  numeroApolice: string;
+  state: PortfolioState;
+  birthDate: string | null;
+  issuanceMonth: string | null;
+  coverages: PortfolioCoverageInput[];
+}
+
+export interface PortfolioStatusSummary {
+  activePolicies: number;
+  cancelledPolicies: number;
+  suspendedPolicies: number;
+  totalPolicies: number;
+}
+
+export interface PolicyAgePoint {
+  state: PortfolioState;
+  age: number;
+}
+
+export interface CoveragePremiumPoint {
+  code: string | null;
+  coverage: string;
+  month: string | null;
+  premiumUsd: number;
+  policies: number;
+}
+
+export interface PortfolioAnalytics {
+  status: PortfolioStatusSummary;
+  policyAges: PolicyAgePoint[];
+  coveragePremiums: CoveragePremiumPoint[];
+}
+
 const DAY_MS = 86_400_000;
 
 function normalized(value: unknown) {
@@ -67,6 +109,13 @@ function money(value: unknown) {
 
 function round2(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function normalizedKey(value: unknown) {
+  return normalized(value)
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ");
 }
 
 function dateAtNoonUtc(value: string) {
@@ -238,6 +287,139 @@ function niceStep(raw: number) {
   const fraction = raw / power;
   const nice = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
   return nice * power;
+}
+
+function civilDateParts(value: string | null | undefined) {
+  const match = value?.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return { year, month, day };
+}
+
+export function ageAtDate(
+  birthDate: string | null | undefined,
+  referenceDate: string,
+): number | null {
+  const birth = civilDateParts(birthDate);
+  const reference = civilDateParts(referenceDate);
+  if (!birth || !reference) return null;
+  let age = reference.year - birth.year;
+  if (
+    reference.month < birth.month ||
+    (reference.month === birth.month && reference.day < birth.day)
+  ) {
+    age -= 1;
+  }
+  return age >= 0 && age <= 120 ? age : null;
+}
+
+/**
+ * Consolida somente dados não identificáveis usados pelos painéis da carteira.
+ * Prêmio por cobertura considera apólices ativas e linhas de prêmio positivo.
+ */
+export function derivePortfolioAnalytics(
+  policies: PortfolioPolicyInput[],
+  referenceDate: string,
+): PortfolioAnalytics {
+  const status: PortfolioStatusSummary = {
+    activePolicies: 0,
+    cancelledPolicies: 0,
+    suspendedPolicies: 0,
+    totalPolicies: policies.length,
+  };
+  const policyAges: PolicyAgePoint[] = [];
+  const coverageBuckets = new Map<
+    string,
+    CoveragePremiumPoint & { policyNumbers: Set<string> }
+  >();
+
+  for (const policy of policies) {
+    if (policy.state === "CANCELADA") status.cancelledPolicies += 1;
+    else if (policy.state === "SUSPENSA") status.suspendedPolicies += 1;
+    else status.activePolicies += 1;
+
+    const age = ageAtDate(policy.birthDate, referenceDate);
+    if (age !== null) policyAges.push({ state: policy.state, age });
+    if (policy.state !== "ATIVA") continue;
+
+    for (const coverage of policy.coverages) {
+      const premiumUsd = money(coverage.premiumUsd);
+      if (premiumUsd <= 0) continue;
+      const name = coverage.name.trim() || coverage.code?.trim() || "Cobertura sem nome";
+      const identity = normalizedKey(coverage.code) || normalizedKey(name);
+      const month = policy.issuanceMonth;
+      const key = `${identity}#${month ?? "sem-mes"}`;
+      const current = coverageBuckets.get(key) ?? {
+        code: coverage.code?.trim() || null,
+        coverage: name,
+        month,
+        premiumUsd: 0,
+        policies: 0,
+        policyNumbers: new Set<string>(),
+      };
+      current.premiumUsd += premiumUsd;
+      current.policyNumbers.add(policy.numeroApolice);
+      coverageBuckets.set(key, current);
+    }
+  }
+
+  const coveragePremiums = Array.from(coverageBuckets.values(), (bucket) => ({
+    code: bucket.code,
+    coverage: bucket.coverage,
+    month: bucket.month,
+    premiumUsd: round2(bucket.premiumUsd),
+    policies: bucket.policyNumbers.size,
+  })).sort(
+    (left, right) =>
+      (left.month ?? "").localeCompare(right.month ?? "") ||
+      right.premiumUsd - left.premiumUsd ||
+      left.coverage.localeCompare(right.coverage, "pt-BR"),
+  );
+
+  return { status, policyAges, coveragePremiums };
+}
+
+/** Intervalos etários alinhados e adaptados à dispersão real da carteira. */
+export function buildDynamicAgeHistogram(values: number[]): HistogramBucket[] {
+  const safeValues = values
+    .map((value) => Math.round(value))
+    .filter((value) => Number.isFinite(value) && value >= 0 && value <= 120);
+  if (safeValues.length === 0) return [];
+
+  const minimum = Math.min(...safeValues);
+  const maximum = Math.max(...safeValues);
+  if (minimum === maximum) {
+    return [{ label: String(minimum), min: minimum, max: maximum, count: safeValues.length }];
+  }
+
+  const desiredBins = Math.min(8, Math.max(4, Math.ceil(Math.sqrt(safeValues.length))));
+  const step = niceStep((maximum - minimum + 1) / desiredBins);
+  const start = Math.max(0, Math.floor(minimum / step) * step);
+  const buckets: HistogramBucket[] = [];
+  for (let min = start; min <= maximum; min += step) {
+    const max = min + step - 1;
+    buckets.push({
+      label: min === max ? String(min) : `${min}–${max}`,
+      min,
+      max,
+      count: 0,
+    });
+  }
+  for (const value of safeValues) {
+    const index = Math.min(buckets.length - 1, Math.floor((value - start) / step));
+    buckets[index]!.count += 1;
+  }
+  return buckets;
 }
 
 /** Cria intervalos que crescem junto com a amplitude real da carteira. */

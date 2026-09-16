@@ -10,11 +10,19 @@ import { derivePaidActivePremiums } from "@/lib/analytics/paid-active";
 import {
   classifyAEndorsements,
   deriveFinancialHealth,
+  derivePortfolioAnalytics,
   type BillingHealthRow,
   type CorrectionPolicyBucket,
+  type CoveragePremiumPoint,
   type FinancialHealth,
+  type PolicyAgePoint,
+  type PortfolioPolicyInput,
+  type PortfolioState,
+  type PortfolioStatusSummary,
 } from "@/lib/analytics/dashboard-core";
 import { dedupeBillingRecords, type BillingRecord } from "@/lib/billing/status";
+import { translateProposta } from "@/lib/excelsior/translate";
+import { derivePolicyStatus, type PolicyEndorsementSignal } from "@/lib/policies/status";
 
 export interface IssuanceBucket {
   month: string;
@@ -33,6 +41,9 @@ export interface AnalyticsAggregates {
   correctionsByPolicy: CorrectionPolicyBucket[];
   financialHealth: FinancialHealth;
   repasseByMonth: RepasseBucket[];
+  portfolioStatus: PortfolioStatusSummary;
+  policyAges: PolicyAgePoint[];
+  coveragePremiums: CoveragePremiumPoint[];
 }
 
 interface PolicyRow {
@@ -113,6 +124,20 @@ function currentFortalezaDate() {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
+}
+
+function normalizedText(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toUpperCase();
+}
+
+function portfolioState(status: ReturnType<typeof derivePolicyStatus>["status"]): PortfolioState {
+  if (status === "CANCELADA") return "CANCELADA";
+  if (status === "SUSPENSA") return "SUSPENSA";
+  return "ATIVA";
 }
 
 export const getAnalyticsAggregates = createServerFn({ method: "GET" })
@@ -271,12 +296,76 @@ export const getAnalyticsAggregates = createServerFn({ method: "GET" })
       firstOperationMonth;
     const repasseByMonth = buildRepasseSeries(repasseInputByMonth, repasseStartMonth ?? null);
 
+    const referenceDate = currentFortalezaDate();
+    const dedupedBilling = dedupeBillingRecords(billing);
     const financialHealth = deriveFinancialHealth(
       policyNumbers,
-      dedupeBillingRecords(billing),
+      dedupedBilling,
       data.delinquencyDays,
-      currentFortalezaDate(),
+      referenceDate,
     );
+
+    const billingByPolicy = new Map<string, BillingRecord[]>();
+    for (const row of dedupedBilling) {
+      const rows = billingByPolicy.get(row.numero_apolice) ?? [];
+      rows.push(row);
+      billingByPolicy.set(row.numero_apolice, rows);
+    }
+
+    const endorsementSignalsByPolicy = new Map<string, PolicyEndorsementSignal[]>();
+    for (const emission of emissions) {
+      const translated = translateProposta(emission.proposta);
+      const signals = endorsementSignalsByPolicy.get(emission.numero_apolice) ?? [];
+      signals.push({
+        tipo_endosso: translated.tipoEndosso,
+        motivo_endosso: [
+          translated.motivoEndosso?.codigo,
+          translated.motivoEndosso?.descricao,
+          translated.motivoEndosso?.tipoCancelamento,
+          translated.cancelamento?.motivo,
+          translated.cancelamento?.descricaoMotivo,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
+      endorsementSignalsByPolicy.set(emission.numero_apolice, signals);
+    }
+
+    const portfolioInput: PortfolioPolicyInput[] = policies.map((policy) => {
+      const translated = translateProposta(policy.proposta);
+      const insured = translated.partes.find(
+        (party) => normalizedText(party.papel) === "SEGURADO",
+      );
+      const status = derivePolicyStatus(
+        billingByPolicy.get(policy.numero_apolice) ?? [],
+        endorsementSignalsByPolicy.get(policy.numero_apolice) ?? [],
+        { delinquencyAfterDays: data.delinquencyDays, referenceAt: `${referenceDate}T12:00:00Z` },
+      );
+      const issuanceMonth =
+        pickMonth(
+          translated.datas.dataEmissao ??
+            translated.datas.assinatura ??
+            translated.datas.conclusaoSubscricao ??
+            translated.datas.registroOrigem,
+        ) ?? startMonthByPolicy.get(policy.numero_apolice) ?? null;
+
+      return {
+        numeroApolice: policy.numero_apolice,
+        state: portfolioState(status.status),
+        birthDate: insured?.dataNascimentoFundacao ?? null,
+        issuanceMonth,
+        coverages: translated.itens.flatMap((item) =>
+          item.coberturas.map((coverage) => ({
+            code: coverage.codigo,
+            name: coverage.nome,
+            premiumUsd: coverage.composicaoPremio
+              .filter((line) => normalizedText(line.natureza) === "PREMIO")
+              .reduce((sum, line) => sum + line.valor, 0),
+          })),
+        ),
+      };
+    });
+    const portfolio = derivePortfolioAnalytics(portfolioInput, referenceDate);
 
     console.info("[analytics] agregados calculados", {
       policies: policies.length,
@@ -284,6 +373,11 @@ export const getAnalyticsAggregates = createServerFn({ method: "GET" })
       billing: billing.length,
       paidBilling: paidActive.eligibleRows,
       matchedPaidBilling: paidActive.matchedRows,
+      activePolicies: portfolio.status.activePolicies,
+      cancelledPolicies: portfolio.status.cancelledPolicies,
+      suspendedPolicies: portfolio.status.suspendedPolicies,
+      knownAges: portfolio.policyAges.length,
+      coverageBuckets: portfolio.coveragePremiums.length,
     });
 
     return {
@@ -291,6 +385,9 @@ export const getAnalyticsAggregates = createServerFn({ method: "GET" })
       correctionsByPolicy: classifiedA.correctionsByPolicy,
       financialHealth,
       repasseByMonth,
+      portfolioStatus: portfolio.status,
+      policyAges: portfolio.policyAges,
+      coveragePremiums: portfolio.coveragePremiums,
     };
   });
 

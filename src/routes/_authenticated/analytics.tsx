@@ -4,8 +4,11 @@ import { useMemo, useState } from "react";
 import { CompareChartsDialog } from "@/components/analytics/compare-dialog";
 import {
   CorrectionHistogram,
+  CoveragePremiumChart,
   FinancialHealthPanel,
   IssuancesChart,
+  PolicyAgeHistogram,
+  PortfolioStatusPanel,
   RecurrencePanel,
   RepasseChart,
   type AnalyticsCategory,
@@ -130,7 +133,7 @@ function AnalyticsPage() {
               <p className="mt-1 text-[11.5px] text-muted-foreground">
                 {category === "operational"
                   ? "Consistência das auditorias, correções e cadência das emissões."
-                  : "Exposição de cobrança e composição dos repasses realizados."}
+                  : "Composição da carteira, perfil dos segurados, coberturas e repasses."}
               </p>
             </div>
             {aggregatesQuery.isFetching ? (
@@ -155,6 +158,11 @@ function AnalyticsPage() {
             </div>
           ) : (
             <div role="tabpanel" className="space-y-4">
+              <PortfolioStatusPanel aggregates={aggregates} />
+              <div className="grid items-start gap-4 xl:grid-cols-2">
+                <PolicyAgeHistogram aggregates={aggregates} />
+                <CoveragePremiumChart aggregates={aggregates} bounds={bounds} />
+              </div>
               <FinancialHealthPanel aggregates={aggregates} />
               <RepasseChart aggregates={aggregates} bounds={bounds} />
             </div>

@@ -1,5 +1,12 @@
 import { Link } from "@tanstack/react-router";
-import { AlertTriangle, ChevronDown, Clock3, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  Ban,
+  ChevronDown,
+  Clock3,
+  PauseCircle,
+  ShieldCheck,
+} from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   Bar,
@@ -17,7 +24,10 @@ import {
 import { ResponsiveContainer } from "@/components/charts/in-view-container";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { REPASSE_RULES } from "@/lib/analytics/repasse-rules";
-import { buildDynamicHistogram } from "@/lib/analytics/dashboard-core";
+import {
+  buildDynamicAgeHistogram,
+  buildDynamicHistogram,
+} from "@/lib/analytics/dashboard-core";
 import type { AnalyticsAggregates } from "@/lib/analytics.functions";
 import { KNOWN_AUDIT_ERROR_TYPES } from "@/lib/audit/error-groups";
 import { formatCompact, formatInt, formatUSD } from "@/lib/format";
@@ -26,7 +36,14 @@ import { cn } from "@/lib/utils";
 
 export type AnalyticsCategory = "operational" | "financial";
 export type AnalyticsChartId =
-  "financialHealth" | "repasse" | "recurrence" | "corrections" | "issuances";
+  | "portfolioStatus"
+  | "ageDistribution"
+  | "coveragePremium"
+  | "financialHealth"
+  | "repasse"
+  | "recurrence"
+  | "corrections"
+  | "issuances";
 
 export interface AnalyticsCatalogItem {
   id: AnalyticsChartId;
@@ -65,6 +82,33 @@ export const ANALYTICS_CATALOG: readonly AnalyticsCatalogItem[] = [
     categoryLabel: "Operacional",
     chartType: "Barras",
     thumbnail: [42, 64, 53, 78, 68],
+  },
+  {
+    id: "portfolioStatus",
+    title: "Situação das apólices",
+    description: "Apólices ativas, canceladas e suspensas.",
+    category: "financial",
+    categoryLabel: "Financeiro",
+    chartType: "Indicadores",
+    thumbnail: [84, 24, 14],
+  },
+  {
+    id: "ageDistribution",
+    title: "Apólices por faixa etária",
+    description: "Distribuição dinâmica de idade dos segurados.",
+    category: "financial",
+    categoryLabel: "Financeiro",
+    chartType: "Histograma",
+    thumbnail: [21, 48, 76, 62, 29],
+  },
+  {
+    id: "coveragePremium",
+    title: "Prêmio gerado por cobertura",
+    description: "Participação de cada cobertura no prêmio da carteira ativa.",
+    category: "financial",
+    categoryLabel: "Financeiro",
+    chartType: "Barras",
+    thumbnail: [88, 70, 51, 34, 19],
   },
   {
     id: "financialHealth",
@@ -190,6 +234,325 @@ function RevenueSummary({ label, value }: { label: string; value: string }) {
       </div>
       <div className="mt-1 truncate font-mono text-[13px] font-semibold tabular-nums text-foreground sm:text-[14px]">
         {value}
+      </div>
+    </div>
+  );
+}
+
+export function PortfolioStatusPanel({ aggregates }: { aggregates: AnalyticsAggregates }) {
+  const status = aggregates.portfolioStatus;
+  return (
+    <AnalyticsCard
+      title="Situação das apólices"
+      subtitle="Visão contratual atual. Cancelamento exige endosso A por resilição; suspensão exige endosso C por inadimplência."
+      actions={
+        <span className="rounded-full border border-border bg-surface-2 px-2.5 py-1 font-mono text-[10px] text-muted-foreground">
+          {formatInt(status.totalPolicies)} apólices
+        </span>
+      }
+    >
+      <div className="grid gap-3 md:grid-cols-3">
+        <PortfolioStatusMetric
+          icon={<ShieldCheck className="h-4 w-4" />}
+          label="Apólices ativas"
+          value={status.activePolicies}
+          hint="inclui pagas, abertas, atrasadas e inadimplentes"
+          tone="active"
+        />
+        <PortfolioStatusMetric
+          icon={<PauseCircle className="h-4 w-4" />}
+          label="Apólices suspensas"
+          value={status.suspendedPolicies}
+          hint="endosso C por inadimplência"
+          tone="suspended"
+        />
+        <PortfolioStatusMetric
+          icon={<Ban className="h-4 w-4" />}
+          label="Apólices canceladas"
+          value={status.cancelledPolicies}
+          hint="endosso A por resilição"
+          tone="cancelled"
+        />
+      </div>
+    </AnalyticsCard>
+  );
+}
+
+function PortfolioStatusMetric({
+  icon,
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: number;
+  hint: string;
+  tone: "active" | "suspended" | "cancelled";
+}) {
+  const styles = {
+    active: "border-success/25 bg-success/5 text-success",
+    suspended: "border-violet-500/25 bg-violet-500/5 text-violet-600 dark:text-violet-400",
+    cancelled: "border-destructive/25 bg-destructive/5 text-destructive",
+  };
+  return (
+    <div className={cn("rounded-2xl border p-4", styles[tone])}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[10px] font-semibold uppercase tracking-wider">{label}</span>
+        {icon}
+      </div>
+      <div className="mt-3 font-mono text-[30px] font-semibold leading-none tabular-nums">
+        {formatInt(value)}
+      </div>
+      <div className="mt-2 text-[10.5px] leading-4 text-muted-foreground">{hint}</div>
+    </div>
+  );
+}
+
+export function PolicyAgeHistogram({ aggregates }: { aggregates: AnalyticsAggregates }) {
+  const [includeCancelled, setIncludeCancelled] = useState(false);
+  const [includeSuspended, setIncludeSuspended] = useState(false);
+  const includedStates = useMemo(
+    () =>
+      new Set([
+        "ATIVA",
+        ...(includeCancelled ? (["CANCELADA"] as const) : []),
+        ...(includeSuspended ? (["SUSPENSA"] as const) : []),
+      ]),
+    [includeCancelled, includeSuspended],
+  );
+  const ages = useMemo(
+    () =>
+      aggregates.policyAges
+        .filter((policy) => includedStates.has(policy.state))
+        .map((policy) => policy.age),
+    [aggregates.policyAges, includedStates],
+  );
+  const data = useMemo(() => buildDynamicAgeHistogram(ages), [ages]);
+  const selectedPolicies =
+    aggregates.portfolioStatus.activePolicies +
+    (includeCancelled ? aggregates.portfolioStatus.cancelledPolicies : 0) +
+    (includeSuspended ? aggregates.portfolioStatus.suspendedPolicies : 0);
+  const missingAges = Math.max(0, selectedPolicies - ages.length);
+
+  return (
+    <AnalyticsCard
+      title="Apólices por faixa etária"
+      subtitle="Segurados de apólices ativas por padrão. Os intervalos se adaptam à idade mínima, máxima e ao tamanho da carteira."
+      actions={
+        <div className="flex flex-wrap items-center gap-1 rounded-xl border border-border bg-surface-2 p-1">
+          <span className="px-1.5 text-[9.5px] font-medium uppercase tracking-wider text-muted-foreground">
+            Incluir
+          </span>
+          <AgeStateToggle
+            label="Canceladas"
+            active={includeCancelled}
+            onClick={() => setIncludeCancelled((current) => !current)}
+          />
+          <AgeStateToggle
+            label="Suspensas"
+            active={includeSuspended}
+            onClick={() => setIncludeSuspended((current) => !current)}
+          />
+        </div>
+      }
+    >
+      {data.length === 0 ? (
+        <EmptyChart text="Não há datas de nascimento válidas nas apólices selecionadas." />
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap gap-2 text-[10px] text-muted-foreground">
+            <span className="rounded-full bg-surface-2 px-2.5 py-1">
+              {formatInt(ages.length)} com idade identificada
+            </span>
+            {missingAges > 0 ? (
+              <span className="rounded-full bg-surface-2 px-2.5 py-1">
+                {formatInt(missingAges)} sem data válida
+              </span>
+            ) : null}
+          </div>
+          <div className="h-[300px] w-full min-w-0 sm:h-[340px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={data} margin={{ top: 28, right: 16, left: 0, bottom: 8 }}>
+                <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" vertical={false} />
+                <XAxis {...chartXAxisProps} dataKey="label" />
+                <YAxis {...chartYAxisProps} />
+                <Tooltip
+                  {...tooltipProps}
+                  formatter={(value) => [formatInt(Number(value)), "Apólices"]}
+                  labelFormatter={(label) => `${label} anos`}
+                />
+                <Bar dataKey="count" name="Apólices" fill="var(--info)" radius={[6, 6, 0, 0]}>
+                  <LabelList
+                    dataKey="count"
+                    position="top"
+                    formatter={numberLabel}
+                    fill="var(--foreground)"
+                    fontSize={11}
+                    fontWeight={600}
+                  />
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </>
+      )}
+    </AnalyticsCard>
+  );
+}
+
+function AgeStateToggle({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        "h-7 rounded-lg px-2.5 text-[10px] font-medium transition",
+        active
+          ? "bg-primary text-primary-foreground shadow-sm"
+          : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+interface CoverageChartDatum {
+  code: string | null;
+  coverage: string;
+  displayName: string;
+  premiumUsd: number;
+  policies: number;
+}
+
+export function CoveragePremiumChart({
+  aggregates,
+  bounds,
+}: {
+  aggregates: AnalyticsAggregates;
+  bounds: AnalyticsRangeBounds;
+}) {
+  const data = useMemo(() => {
+    const byCoverage = new Map<string, CoverageChartDatum>();
+    for (const row of aggregates.coveragePremiums) {
+      if (row.month && !monthInRange(row.month, bounds)) continue;
+      if (!row.month && (bounds.from || bounds.to)) continue;
+      const key = row.code?.trim() || normalizedError(row.coverage);
+      const current = byCoverage.get(key) ?? {
+        code: row.code,
+        coverage: row.coverage,
+        displayName: row.coverage,
+        premiumUsd: 0,
+        policies: 0,
+      };
+      current.premiumUsd += row.premiumUsd;
+      current.policies += row.policies;
+      byCoverage.set(key, current);
+    }
+    return Array.from(byCoverage.values())
+      .map((row) => ({
+        ...row,
+        displayName: row.coverage.length > 28 ? `${row.coverage.slice(0, 27)}…` : row.coverage,
+      }))
+      .sort(
+        (left, right) =>
+          right.premiumUsd - left.premiumUsd ||
+          left.coverage.localeCompare(right.coverage, "pt-BR"),
+      );
+  }, [aggregates.coveragePremiums, bounds]);
+  const totalPremium = data.reduce((sum, row) => sum + row.premiumUsd, 0);
+  const chartHeight = Math.max(300, data.length * 42 + 36);
+
+  return (
+    <AnalyticsCard
+      title="Prêmio gerado por cobertura"
+      subtitle="Prêmio das coberturas nas apólices ativas, pela competência de emissão e no período selecionado."
+      actions={
+        <span className="rounded-full border border-border bg-surface-2 px-2.5 py-1 font-mono text-[10px] text-muted-foreground">
+          {formatUSD(totalPremium, { maximumFractionDigits: 2 })}
+        </span>
+      }
+    >
+      {data.length === 0 ? (
+        <EmptyChart text="Sem prêmio por cobertura no período selecionado." />
+      ) : (
+        <div className="max-h-[620px] min-w-0 overflow-y-auto pr-1">
+          <div className="w-full min-w-0" style={{ height: chartHeight }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={data}
+                layout="vertical"
+                margin={{ top: 8, right: 24, left: 8, bottom: 8 }}
+              >
+                <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" horizontal={false} />
+                <XAxis
+                  {...chartXAxisProps}
+                  type="number"
+                  tickFormatter={(value) => `$${formatCompact(Number(value))}`}
+                />
+                <YAxis
+                  {...chartYAxisProps}
+                  type="category"
+                  dataKey="displayName"
+                  width={156}
+                  allowDecimals={undefined}
+                />
+                <Tooltip
+                  {...tooltipProps}
+                  cursor={{ fill: "var(--accent)", opacity: 0.35 }}
+                  content={<CoveragePremiumTooltip />}
+                />
+                <Bar
+                  dataKey="premiumUsd"
+                  name="Prêmio"
+                  fill="var(--primary)"
+                  radius={[0, 6, 6, 0]}
+                  maxBarSize={26}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+    </AnalyticsCard>
+  );
+}
+
+function CoveragePremiumTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload: CoverageChartDatum }>;
+}) {
+  if (!active || !payload?.[0]) return null;
+  const row = payload[0].payload;
+  return (
+    <div className="min-w-[220px] rounded-xl border border-border bg-surface/95 p-3 shadow-elevated backdrop-blur">
+      <div className="max-w-[280px] text-[11px] font-semibold leading-4">{row.coverage}</div>
+      {row.code ? (
+        <div className="mt-0.5 font-mono text-[9.5px] text-muted-foreground">{row.code}</div>
+      ) : null}
+      <div className="mt-2.5 flex items-center justify-between gap-6 border-t border-border/70 pt-2.5 text-[11px]">
+        <span className="text-muted-foreground">Prêmio gerado</span>
+        <span className="font-mono font-semibold tabular-nums">
+          {formatUSD(row.premiumUsd, { maximumFractionDigits: 2 })}
+        </span>
+      </div>
+      <div className="mt-1.5 flex items-center justify-between gap-6 text-[11px]">
+        <span className="text-muted-foreground">Apólices</span>
+        <span className="font-mono tabular-nums">{formatInt(row.policies)}</span>
       </div>
     </div>
   );
@@ -841,6 +1204,12 @@ export function AnalyticsChartView({
   loadingRecurrence?: boolean;
 }) {
   switch (id) {
+    case "portfolioStatus":
+      return <PortfolioStatusPanel aggregates={aggregates} />;
+    case "ageDistribution":
+      return <PolicyAgeHistogram aggregates={aggregates} />;
+    case "coveragePremium":
+      return <CoveragePremiumChart aggregates={aggregates} bounds={bounds} />;
     case "financialHealth":
       return <FinancialHealthPanel aggregates={aggregates} />;
     case "repasse":

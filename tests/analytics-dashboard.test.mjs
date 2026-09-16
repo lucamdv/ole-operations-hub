@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  ageAtDate,
+  buildDynamicAgeHistogram,
   buildDynamicHistogram,
   classifyAEndorsements,
   deriveFinancialHealth,
+  derivePortfolioAnalytics,
 } from "../src/lib/analytics/dashboard-core.ts";
 
 test("endossos A respeitam uma fatura esperada por mês transcorrido", () => {
@@ -78,4 +81,79 @@ test("saúde financeira separa atraso, inadimplência e contratos cancelados", (
   assert.equal(result.delinquentContracts, 1);
   assert.equal(result.lateRevenueUsd, 100);
   assert.equal(result.delinquentRevenueUsd, 250);
+});
+
+test("idade civil respeita o aniversário e descarta datas inválidas", () => {
+  assert.equal(ageAtDate("1990-09-17", "2026-09-16"), 35);
+  assert.equal(ageAtDate("1990-09-16", "2026-09-16"), 36);
+  assert.equal(ageAtDate("2026-02-30", "2026-09-16"), null);
+  assert.equal(ageAtDate("1800-01-01", "2026-09-16"), null);
+});
+
+test("carteira consolida estados, idades e prêmio apenas de apólices ativas", () => {
+  const result = derivePortfolioAnalytics(
+    [
+      {
+        numeroApolice: "ATIVA-1",
+        state: "ATIVA",
+        birthDate: "1990-09-17",
+        issuanceMonth: "2026-08",
+        coverages: [
+          { code: "RC", name: "Responsabilidade Civil", premiumUsd: 120.105 },
+          { code: "RC", name: "Responsabilidade Civil", premiumUsd: 29.895 },
+        ],
+      },
+      {
+        numeroApolice: "ATIVA-2",
+        state: "ATIVA",
+        birthDate: "1980-01-01",
+        issuanceMonth: "2026-08",
+        coverages: [{ code: "RC", name: "Responsabilidade Civil", premiumUsd: 50 }],
+      },
+      {
+        numeroApolice: "SUSPENSA-1",
+        state: "SUSPENSA",
+        birthDate: "1970-01-01",
+        issuanceMonth: "2026-08",
+        coverages: [{ code: "RC", name: "Responsabilidade Civil", premiumUsd: 999 }],
+      },
+      {
+        numeroApolice: "CANCELADA-1",
+        state: "CANCELADA",
+        birthDate: null,
+        issuanceMonth: "2026-08",
+        coverages: [],
+      },
+    ],
+    "2026-09-16",
+  );
+
+  assert.deepEqual(result.status, {
+    activePolicies: 2,
+    cancelledPolicies: 1,
+    suspendedPolicies: 1,
+    totalPolicies: 4,
+  });
+  assert.deepEqual(
+    result.policyAges.map((policy) => [policy.state, policy.age]),
+    [
+      ["ATIVA", 35],
+      ["ATIVA", 46],
+      ["SUSPENSA", 56],
+    ],
+  );
+  assert.equal(result.coveragePremiums.length, 1);
+  assert.equal(result.coveragePremiums[0].premiumUsd, 200);
+  assert.equal(result.coveragePremiums[0].policies, 2);
+});
+
+test("histograma etário cria faixas dinâmicas sem perder segurados", () => {
+  const buckets = buildDynamicAgeHistogram([18, 23, 24, 39, 41, 67, 68]);
+  assert.equal(
+    buckets.reduce((sum, bucket) => sum + bucket.count, 0),
+    7,
+  );
+  assert.ok(buckets.length >= 4);
+  assert.ok(buckets[0].min <= 18);
+  assert.ok(buckets.at(-1).max >= 68);
 });

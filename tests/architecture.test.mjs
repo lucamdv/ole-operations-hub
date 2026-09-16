@@ -233,6 +233,9 @@ test("analytics exibe somente os painéis operacionais e financeiros definidos",
     "Contratos inadimplentes",
     "Contratos atrasados",
     "Contratos ativos",
+    "Situação das apólices",
+    "Apólices por faixa etária",
+    "Prêmio gerado por cobertura",
     "Endossos de correção por apólice",
     "Emissões por mês e por tipo",
     "Repasse Excelsior mês a mês",
@@ -277,13 +280,23 @@ test("analytics exibe somente os painéis operacionais e financeiros definidos",
   assert.match(charts, /endossoAFatura/);
   assert.match(charts, /endossoACorrecao/);
   assert.doesNotMatch(charts, /endossoB|endossoD/);
+  assert.match(charts, /includeCancelled/);
+  assert.match(charts, /includeSuspended/);
+  assert.match(charts, /buildDynamicAgeHistogram/);
   assert.match(settings, /inadimplenciaDias/);
+  assert.match(analytics, /PolicyAgeHistogram/);
+  assert.match(analytics, /CoveragePremiumChart/);
   assert.match(policiesPage, /useKpiTargets/);
   assert.match(policiesPage, /targets\.inadimplenciaDias/);
   assert.doesNotMatch(policiesPage, /usePolicyStatusRules/);
   assert.match(errorGroups, /KNOWN_AUDIT_ERROR_TYPES/);
   assert.match(kpis, /deriveRecurrenceKpi/);
   assert.doesNotMatch(profileSettings, /Visualização de gráficos/);
+
+  const aggregateSource = await read("src/lib/analytics.functions.ts");
+  assert.match(aggregateSource, /derivePolicyStatus/);
+  assert.match(aggregateSource, /delinquencyAfterDays: data\.delinquencyDays/);
+  assert.match(aggregateSource, /derivePortfolioAnalytics/);
 });
 
 test("analytics permite comparar, manipular, salvar e exportar painéis", async () => {
