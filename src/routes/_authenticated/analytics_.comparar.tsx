@@ -44,7 +44,7 @@ interface ComparisonSearch {
   view?: string;
 }
 
-export const Route = createFileRoute("/_authenticated/analytics/comparar")({
+export const Route = createFileRoute("/_authenticated/analytics_/comparar")({
   validateSearch: (search: Record<string, unknown>): ComparisonSearch => ({
     charts: typeof search.charts === "string" ? search.charts : undefined,
     view: typeof search.view === "string" ? search.view : undefined,
@@ -93,6 +93,13 @@ function ComparisonPage() {
   const [exporting, setExporting] = useState(false);
   const [recurrenceMonth, setRecurrenceMonth] = useState(() => fortalezaDateKey().slice(0, 7));
   const exportRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (search.view) return;
+    setCharts(chartsFromSearch(search.charts));
+    setSavedViewId(undefined);
+    setViewName("Nova visualização");
+  }, [search.charts, search.view]);
 
   useEffect(() => {
     const saved = findComparisonView(search.view);
@@ -158,6 +165,9 @@ function ComparisonPage() {
   const availableToAdd = ANALYTICS_CATALOG.filter(
     (item) => !charts.some((chart) => chart.id === item.id),
   );
+  const effectiveAddId = availableToAdd.some((item) => item.id === addId)
+    ? addId
+    : availableToAdd[0]?.id;
 
   return (
     <div className="mx-auto w-full max-w-[1540px] space-y-5">
@@ -179,7 +189,7 @@ function ComparisonPage() {
           {availableToAdd.length > 0 ? (
             <div className="flex h-9 items-center rounded-lg border border-border bg-surface p-1">
               <select
-                value={addId}
+                value={effectiveAddId}
                 onChange={(event) => setAddId(event.target.value as AnalyticsChartId)}
                 aria-label="Gráfico para adicionar"
                 className="h-7 min-w-36 bg-transparent px-2 text-[11px] outline-none"
@@ -193,8 +203,9 @@ function ComparisonPage() {
               <button
                 type="button"
                 onClick={() => {
-                  setCharts((current) => [...current, defaultComparisonChart(addId)]);
-                  const remaining = availableToAdd.find((item) => item.id !== addId);
+                  if (!effectiveAddId) return;
+                  setCharts((current) => [...current, defaultComparisonChart(effectiveAddId)]);
+                  const remaining = availableToAdd.find((item) => item.id !== effectiveAddId);
                   if (remaining) setAddId(remaining.id);
                 }}
                 className="flex h-7 items-center gap-1 rounded-md bg-surface-2 px-2 text-[10.5px] font-medium hover:bg-accent"

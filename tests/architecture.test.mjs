@@ -286,7 +286,8 @@ test("analytics permite comparar, manipular, salvar e exportar painéis", async 
   const analytics = await read("src/routes/_authenticated/analytics.tsx");
   const charts = await read("src/components/analytics/dashboard-charts.tsx");
   const dialog = await read("src/components/analytics/compare-dialog.tsx");
-  const comparison = await read("src/routes/_authenticated/analytics.comparar.tsx");
+  const comparison = await read("src/routes/_authenticated/analytics_.comparar.tsx");
+  const routeTree = await read("src/routeTree.gen.ts");
   const storage = await read("src/lib/analytics/comparison-views.ts");
 
   assert.match(analytics, /CompareChartsDialog/);
@@ -298,6 +299,18 @@ test("analytics permite comparar, manipular, salvar e exportar painéis", async 
   assert.match(comparison, /Zoom/);
   assert.match(comparison, /exportChartsPdf/);
   assert.match(comparison, /saveComparisonView/);
+  assert.match(comparison, /\/_authenticated\/analytics_\/comparar/);
+  assert.match(
+    routeTree,
+    /'\/_authenticated\/analytics_\/comparar': \{[\s\S]{0,500}parentRoute: typeof AuthenticatedRouteRoute/,
+  );
+  assert.doesNotMatch(
+    routeTree,
+    /'\/_authenticated\/analytics_\/comparar':[\s\S]{0,500}parentRoute: typeof AuthenticatedAnalyticsRoute/,
+  );
+  assert.match(dialog, /to="\/analytics\/comparar"/);
+  assert.match(charts, /type="linear"/);
+  assert.match(charts, /stackId=\{filter === "A" \? "selected-a" : undefined\}/);
   assert.match(storage, /ole\.analytics\.comparison-views\.v1/);
 });
 

@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { BarChart3, Check, GitCompareArrows, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -45,8 +46,6 @@ export function CompareChartsDialog() {
         .includes(normalized);
     });
   }, [category, chartType, query]);
-
-  const comparisonHref = `/analytics/comparar?charts=${encodeURIComponent(selected.join(","))}`;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -108,16 +107,17 @@ export function CompareChartsDialog() {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {savedViews.slice(0, 6).map((view) => (
-                    <a
+                    <Link
                       key={view.id}
-                      href={`/analytics/comparar?view=${encodeURIComponent(view.id)}`}
+                      to="/analytics/comparar"
+                      search={{ view: view.id }}
                       className="rounded-lg border border-border bg-surface-2 px-3 py-2 text-[11px] transition hover:border-primary/50 hover:text-primary"
                     >
                       {view.name}
                       <span className="ml-2 font-mono text-[9px] text-muted-foreground">
                         {view.charts.length}
                       </span>
-                    </a>
+                    </Link>
                   ))}
                 </div>
               </div>
@@ -187,18 +187,23 @@ export function CompareChartsDialog() {
               ? "Selecione pelo menos um painel"
               : `${selected.length} painel(is) selecionado(s)`}
           </span>
-          <Button asChild disabled={selected.length === 0} className="h-9 gap-2 text-[12px]">
-            <a
-              href={selected.length > 0 ? comparisonHref : undefined}
-              aria-disabled={selected.length === 0}
-              onClick={(event) => {
-                if (selected.length === 0) event.preventDefault();
-              }}
-            >
+          {selected.length > 0 ? (
+            <Button asChild className="h-9 gap-2 text-[12px]">
+              <Link
+                to="/analytics/comparar"
+                search={{ charts: selected.join(",") }}
+                onClick={() => setOpen(false)}
+              >
+                <GitCompareArrows className="h-3.5 w-3.5" />
+                Abrir comparação
+              </Link>
+            </Button>
+          ) : (
+            <Button disabled className="h-9 gap-2 text-[12px]">
               <GitCompareArrows className="h-3.5 w-3.5" />
               Abrir comparação
-            </a>
-          </Button>
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

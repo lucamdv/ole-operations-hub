@@ -533,6 +533,23 @@ export function IssuancesChart({
                 iconType="circle"
                 iconSize={8}
               />
+              {filter !== "all" ? (
+                <Line
+                  type="linear"
+                  dataKey="trend"
+                  name="Evolução"
+                  stroke="var(--foreground)"
+                  strokeWidth={2}
+                  dot={{
+                    fill: "var(--surface)",
+                    stroke: "var(--foreground)",
+                    strokeWidth: 2,
+                    r: 3.5,
+                  }}
+                  activeDot={{ r: 5 }}
+                  connectNulls
+                />
+              ) : null}
               {(filter === "all" || filter === "policy") && (
                 <Bar dataKey="apolices" name="Apólice" fill="var(--primary)" radius={[4, 4, 0, 0]}>
                   <LabelList
@@ -548,7 +565,8 @@ export function IssuancesChart({
                   dataKey="endossoAFatura"
                   name="A (Fatura)"
                   fill="var(--info)"
-                  radius={[4, 4, 0, 0]}
+                  radius={filter === "A" ? [0, 0, 0, 0] : [4, 4, 0, 0]}
+                  stackId={filter === "A" ? "selected-a" : undefined}
                 >
                   <LabelList
                     dataKey="endossoAFatura"
@@ -564,6 +582,7 @@ export function IssuancesChart({
                   name="A (Correção)"
                   fill="var(--destructive)"
                   radius={[4, 4, 0, 0]}
+                  stackId={filter === "A" ? "selected-a" : undefined}
                 >
                   <LabelList
                     dataKey="endossoACorrecao"
@@ -583,22 +602,6 @@ export function IssuancesChart({
                   />
                 </Bar>
               )}
-              {filter !== "all" ? (
-                <Line
-                  type="monotone"
-                  dataKey="trend"
-                  name="Tendência"
-                  stroke="var(--foreground)"
-                  strokeWidth={2.5}
-                  dot={{
-                    fill: "var(--surface)",
-                    stroke: "var(--foreground)",
-                    strokeWidth: 2,
-                    r: 4,
-                  }}
-                  activeDot={{ r: 6 }}
-                />
-              ) : null}
             </ComposedChart>
           </ResponsiveContainer>
         </div>
