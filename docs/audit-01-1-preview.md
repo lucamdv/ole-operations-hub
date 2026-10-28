@@ -25,6 +25,17 @@ A conta Supabase conectada lista apenas `OleCockpit` ativo e dois projetos inati
 
 O bloqueio temporário usa a configuração oficial `git.deploymentEnabled` por branch; não modifica main nem configurações globais de deploy.
 
+Sequência conferida: o primeiro commit `2fb2f1019a15753dc8ed522068f48846263b44e7` foi enviado sem gerar deployment. Em seguida foram criados e lidos 22 overrides, todos exclusivamente `target=preview` e `gitBranch=codex/audit-01-webhook-contract`. As definições anteriores de Production mantiveram IDs, chaves, tipos e targets. Só então o bloqueio temporário de `vercel.json` foi removido para o segundo push; o arquivo retorna ao conteúdo original de main.
+
+| Grupo | Configuração desta branch |
+| --- | --- |
+| Supabase público/servidor | URLs `.invalid`, chaves públicas fictícias e IDs de bloqueio; service role vazia. |
+| n8n | URLs de auditoria, correção, motor e endosso vazias. |
+| Excelsior | URLs-base `.invalid`; usuário e senha vazios. |
+| Agendamentos e callbacks | `CRON_SECRET`, `SCHEDULER_HOOK_SECRET`, `POLICY_SYNC_HOOK_SECRET`, `BILLING_RETRY_HOOK_SECRET`, `AUDIT_CALLBACK_SECRET`, `BILLING_CALLBACK_SECRET` e `ENDORSEMENT_CALLBACK_SECRET` vazios. |
+
+Essa configuração impede operações reais; não representa infraestrutura de homologação funcional. Não se deve habilitar login, auditoria ou sincronização neste Preview antes de substituir os bloqueios por serviços isolados.
+
 ## Resolução do callback
 
 `src/lib/audit/callback-url.ts` resolve a URL sem acessar banco/rede:

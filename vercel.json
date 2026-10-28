@@ -1,9 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "fluid": true,
-  "git": {
-    "deploymentEnabled": {
-      "codex/audit-01-webhook-contract": false
-    }
-  }
+  "fluid": true
 }
