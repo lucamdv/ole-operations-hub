@@ -57,6 +57,14 @@ Para AUDIT-02 + AUDIT-01: disponibilizar banco Supabase de homologação, dados 
 
 ## Evidências finais
 
+O deployment automático do segundo push (`d08085d3cbaef8220c6df5ad7d04c59e7b47636d`, ID `dpl_9xJQmLWSguUxihYjAEC87oqhDfKj`) foi bloqueado pela Vercel antes do build com `BLOCKED_PACKAGE`: o lockfile ainda usava `@tanstack/react-start@1.168.49`, afetado pela CVE-2026-102989. O erro foi confirmado contra o [aviso oficial do TanStack](https://github.com/TanStack/router/security/advisories/GHSA-qx66-fv34-fjm8).
+
+Correção estritamente necessária à publicação: fixar `@tanstack/react-start@1.168.61`, `@tanstack/react-router@1.170.42` e `@tanstack/router-plugin@1.168.43`, mantendo a família de versões e dependências alinhadas; o núcleo transitivo passou a `@tanstack/start-server-core@1.169.40`. Lockfile atualizado com scripts de instalação desativados. A opção de bypass de vulnerabilidade sugerida no erro **não foi configurada**. A atualização permanece apenas nesta branch; main/Production não foram modificadas. O gate completo é repetido após a atualização antes do novo push.
+
+O Router corrigido tipa `ErrorComponentProps.error` como `unknown`. O typecheck detectou a assinatura antiga que exigia `Error` em `src/routes/__root.tsx`; a adaptação usa o tipo oficial e estreitamento `instanceof Error` ao exibir a mensagem. Essa é a única adaptação de componente necessária à atualização; não altera login, permissões, regras ou layout.
+
+Após essa adaptação: 128/128 testes estáticos passaram novamente, typecheck passou, lint permaneceu sem erros (o arquivo adaptado também foi verificado isoladamente) e o build final completo passou com o código atualizado. Revisão independente confirmou o alinhamento manifesto/lockfile e ausência das versões antigas vulneráveis de Start/server-core no lockfile.
+
 O relatório de publicação entregue após READY contém os commits, deployment ID/URL/SHA, smoke e configurações verificadas. O exemplo completo do contrato está em [audit-01-contract.md](audit-01-contract.md); o pedido real não inclui diagnósticos internos ou credenciais.
 
 - Testes específicos de AUDIT: 34/34 passaram (26 originais + 6 de resolução + 2 de integração Preview).

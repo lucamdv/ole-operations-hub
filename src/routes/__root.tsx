@@ -4,6 +4,7 @@ import {
   createRootRouteWithContext,
   HeadContent,
   Scripts,
+  type ErrorComponentProps,
 } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 
@@ -29,7 +30,7 @@ function NotFoundComponent() {
   );
 }
 
-function ErrorComponent({ error }: { error: Error; reset: () => void }) {
+function ErrorComponent({ error }: ErrorComponentProps) {
   useEffect(() => {
     console.error(error);
   }, [error]);
@@ -37,7 +38,7 @@ function ErrorComponent({ error }: { error: Error; reset: () => void }) {
     <div className="p-6">
       <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-6">
         <div className="text-[14px] font-semibold text-destructive">Falha no carregamento</div>
-        <div className="text-[12px] text-muted-foreground mt-1">{error.message}</div>
+        <div className="text-[12px] text-muted-foreground mt-1">{error instanceof Error ? error.message : "Erro inesperado."}</div>
       </div>
     </div>
   );
