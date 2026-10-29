@@ -1,9 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "fluid": true,
-  "git": {
-    "deploymentEnabled": {
-      "codex/env-homolog-routing": false
-    }
-  }
+  "fluid": true
 }
