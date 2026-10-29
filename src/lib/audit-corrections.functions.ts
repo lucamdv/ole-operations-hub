@@ -21,10 +21,12 @@ export const requestAuditCorrection = createServerFn({ method: "POST" })
     RequestCorrectionSchema.parse(value),
   )
   .handler(async ({ data, context }) => {
-    const { withIntegrationContext, getOperationalContext } =
+    const { withIntegrationContext, getOperationalContext, assertProductionExternalAccess } =
       await import("./environment/context.server");
     const { resolveIntegrationWebhook } = await import("./environment/webhooks.server");
     return withIntegrationContext(data.mode, async () => {
+      // AUDIT-02.2 authorizes real reads, not corrective mutations in upstream systems.
+      assertProductionExternalAccess();
       const webhookUrl = resolveIntegrationWebhook("correction", getOperationalContext());
       let parsedWebhookUrl: URL;
       try {

@@ -67,3 +67,11 @@ export const supabaseAdmin: Pick<SupabaseClient<Database>, "from" | "rpc" | "aut
 export function executionRegistry() {
   return rawAdmin().schema("homolog").from("execution_contexts");
 }
+
+/** Auditing real policies may read these four public sources, but never obtain a public writer. */
+export async function loadProductionAuditExclusionsSnapshot(snapshotAt?: string) {
+  const { createAuditSourceReadAccess } = await import("../../lib/audit/source-access.server.ts");
+  const { loadAuditExclusionsSnapshot } =
+    await import("../../lib/audit/exclusions-snapshot.server.ts");
+  return loadAuditExclusionsSnapshot(createAuditSourceReadAccess(rawAdmin()), snapshotAt);
+}

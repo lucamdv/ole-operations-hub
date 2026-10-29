@@ -8,10 +8,7 @@ import { resolveIntegrationWebhook } from "./environment/webhooks.server.ts";
 import { registerExecution } from "./environment/execution.server.ts";
 import { buildAuditTriggerPayload } from "./audit/trigger-payload.ts";
 import { AuditCallbackConfigurationError, resolveAuditCallbackUrl } from "./audit/callback-url.ts";
-import {
-  AuditPreparationError,
-  loadAuditExclusionsSnapshot,
-} from "./audit/exclusions-snapshot.server.ts";
+import { AuditPreparationError } from "./audit/exclusions-snapshot.server.ts";
 
 // Implementação server-only do disparo da auditoria.
 // Usada tanto pela server function protegida (botão manual) quanto pelo
@@ -31,7 +28,8 @@ async function dispatchAudit(trigger: string) {
       "Secret N8N_AUDIT_WEBHOOK_URL não configurada. Cole a URL de produção do webhook n8n (/webhook/...) nos secrets do projeto.",
     );
   }
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { supabaseAdmin, loadProductionAuditExclusionsSnapshot } =
+    await import("@/integrations/supabase/client.server");
 
   const { data: runRow, error: insertErr } = await supabaseAdmin
     .from("audit_runs")
@@ -60,7 +58,7 @@ async function dispatchAudit(trigger: string) {
     // Configuration failures after insert must also close the run as error.
     const callbackUrl = resolveAuditCallbackUrl(runId, process.env);
 
-    const snapshot = await loadAuditExclusionsSnapshot(supabaseAdmin);
+    const snapshot = await loadProductionAuditExclusionsSnapshot();
     const payload = buildAuditTriggerPayload({
       runId,
       callbackUrl,

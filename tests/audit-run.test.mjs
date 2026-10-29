@@ -11,7 +11,7 @@ registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === "@/integrations/supabase/client.server") {
       return {
-        url: "data:text/javascript,export const supabaseAdmin = { from: (...args) => globalThis.__auditTestDbClient.from(...args) }; export const executionRegistry = () => ({ insert: async record => { globalThis.__auditRegistryRecords.push(record); return {error:null}; } });",
+        url: `data:text/javascript,export const supabaseAdmin = { from: (...args) => globalThis.__auditTestDbClient.from(...args) }; export const executionRegistry = () => ({ insert: async record => { globalThis.__auditRegistryRecords.push(record); return {error:null}; } }); export async function loadProductionAuditExclusionsSnapshot(){ const {loadAuditExclusionsSnapshot} = await import(${JSON.stringify(new URL("../src/lib/audit/exclusions-snapshot.server.ts", import.meta.url).href)}); return loadAuditExclusionsSnapshot(globalThis.__auditTestDbClient); }`,
         shortCircuit: true,
       };
     }
@@ -38,8 +38,6 @@ function setup(t, data = cancelledPolicyData(), options = {}) {
     VERCEL_PROJECT_PRODUCTION_URL: "",
     VERCEL_URL: "",
     VERCEL_ENV: "production",
-    N8N_AUDIT_HOMOLOG_WEBHOOK_URL: "https://n8n.example/webhook-test/test-only",
-    HOMOLOG_EXTERNAL_WEBHOOKS_ENABLED: "true",
     SUPABASE_SERVICE_ROLE_KEY: "SECRET-NEVER-SEND",
     AUDIT_CALLBACK_SECRET: "SECRET-CALLBACK",
   };

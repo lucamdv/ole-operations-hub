@@ -37,7 +37,7 @@ export function assertProductionIdentityMutation() {
 }
 export function assertProductionExternalAccess() {
   if (getOperationalContext().scope !== "production")
-    throw new Error("API externa produtiva bloqueada em homologação. Utilize fixtures sintéticas.");
+    throw new Error("Operação externa produtiva bloqueada em homologação.");
 }
 export function assertProductionScheduler() {
   if (

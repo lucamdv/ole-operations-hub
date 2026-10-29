@@ -1,4 +1,5 @@
 import type { Integration, OperationalContext } from "./scope.ts";
+import { resolveWebhookUrl } from "../webhook-mode.ts";
 
 const names = {
   audit: "N8N_AUDIT",
@@ -12,8 +13,7 @@ export function resolveIntegrationWebhook(
   env: Record<string, string | undefined> = process.env,
 ): string {
   const prefix = names[integration];
-  const key =
-    context.scope === "homolog" ? `${prefix}_HOMOLOG_WEBHOOK_URL` : `${prefix}_WEBHOOK_URL`;
+  const key = `${prefix}_WEBHOOK_URL`;
   const raw = env[key]?.trim();
   if (!raw) throw new Error(`Destino ${context.scope} da integração não configurado (${key}).`);
   let url: URL;
@@ -24,13 +24,8 @@ export function resolveIntegrationWebhook(
   }
   if (url.protocol !== "https:" || url.username || url.password)
     throw new Error(`URL insegura em ${key}.`);
-  if (context.scope === "homolog") {
-    if (
-      env.HOMOLOG_EXTERNAL_WEBHOOKS_ENABLED !== "true" ||
-      !url.pathname.includes("/webhook-test/")
-    )
-      throw new Error("Webhook isolado de homologação não habilitado. Operação externa bloqueada.");
-    return url.toString();
-  }
-  return url.toString().replace("/webhook-test/", "/webhook/");
+  const resolved = resolveWebhookUrl(url.toString(), context.webhookMode);
+  if (context.scope === "homolog" && !new URL(resolved).pathname.includes("/webhook-test/"))
+    throw new Error(`URL de teste inválida em ${key}: esperado caminho /webhook-test/.`);
+  return resolved;
 }

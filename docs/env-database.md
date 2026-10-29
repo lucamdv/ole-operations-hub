@@ -1,5 +1,7 @@
 # ENV-01 — banco de homologação
 
+Nota AUDIT-02.2: este documento registra a criação/validação estrutural e o seed inicial sintético. A auditoria de teste agora lê explicitamente as quatro fontes reais autorizadas de public para preparar o payload v2, mas grava resultados somente em homolog. Não houve nova migration, grant ou cópia de carteira; ver `env-homolog-routing.md` para o contrato operacional atualizado.
+
 ## Catálogo e escopo
 
 Base: `64d7ed827e15138291ca7d3a5b69a973075e6dee` (AUDIT-01 v2). Projeto confirmado pela API: **OleCockpit**, `otljnpasmhkoehmwnjvl`, PostgreSQL `17.6.1.155`, região `us-west-2`. A inspeção de 28/10/2026 consultou somente metadados: colunas/defaults/tipos, constraints, FKs, índices, sequências, triggers/funções, RLS e grants. Nenhuma linha real foi utilizada como fixture.

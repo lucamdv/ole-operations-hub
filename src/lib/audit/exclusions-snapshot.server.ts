@@ -1,26 +1,31 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database } from "../../integrations/supabase/types.ts";
 import type { BillingRecord } from "../billing/status.ts";
 import { buildAuditExclusions, type AuditIgnoreSource } from "./trigger-payload.ts";
+import {
+  AUDIT_SOURCE_COLUMNS,
+  type AuditSourceTable,
+  type AuditSnapshotClient,
+} from "./source-access.server.ts";
 
 const PAGE_SIZE = 1_000;
-type SourceTable = "policies" | "endorsements" | "policy_billing" | "audit_ignores";
 
 /** Only controlled messages reach logs/audit_runs, never raw provider errors. */
 export class AuditPreparationError extends Error {}
 
 export async function loadAuditExclusionsSnapshot(
-  client: Pick<SupabaseClient<Database>, "from">,
+  client: AuditSnapshotClient,
   snapshotAt = new Date().toISOString(),
 ) {
   const signal = AbortSignal.timeout(30_000);
 
-  async function readPages<T>(table: SourceTable, columns: string): Promise<T[]> {
+  async function readPages<T>(table: AuditSourceTable): Promise<T[]> {
     const rows: T[] = [];
     let cursor: string | undefined;
     for (;;) {
       try {
-        let query = client.from(table).select(columns).order("id", { ascending: true });
+        let query = client
+          .from(table)
+          .select(AUDIT_SOURCE_COLUMNS[table])
+          .order("id", { ascending: true });
         if (cursor) query = query.gt("id", cursor);
         const { data, error } = await query.range(0, PAGE_SIZE - 1).abortSignal(signal);
         if (error) {
@@ -53,17 +58,11 @@ export async function loadAuditExclusionsSnapshot(
   }
 
   const [policies, endorsements, billing, ignores] = await Promise.all([
-    readPages<{ numero_apolice: string }>("policies", "id, numero_apolice"),
-    readPages<{ numero_apolice: string; proposta: unknown }>(
-      "endorsements",
-      "id, numero_apolice, proposta",
-    ),
-    readPages<BillingRecord>(
-      "policy_billing",
-      "id, numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_quitacao, data_vencimento, updated_at",
-    ),
+    readPages<{ numero_apolice: string }>("policies"),
+    readPages<{ numero_apolice: string; proposta: unknown }>("endorsements"),
+    readPages<BillingRecord>("policy_billing"),
     // Whole-policy entries are read ONLY for diagnostics, never mapped to a status.
-    readPages<AuditIgnoreSource>("audit_ignores", "id, scope, apolice, tipo_erro, motivo"),
+    readPages<AuditIgnoreSource>("audit_ignores"),
   ]);
   try {
     return buildAuditExclusions({
