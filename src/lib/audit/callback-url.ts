@@ -1,6 +1,7 @@
 export interface AuditCallbackEnvironment {
   VERCEL_ENV?: string;
   VERCEL_URL?: string;
+  VERCEL_BRANCH_URL?: string;
   VERCEL_PROJECT_PRODUCTION_URL?: string;
   PUBLIC_APP_URL?: string;
 }
@@ -31,10 +32,14 @@ function origin(value: string | undefined, key: string, local = false): string {
 export function resolveAuditCallbackUrl(runId: string, env: AuditCallbackEnvironment): string {
   let base: string;
   if (env.VERCEL_ENV === "preview") {
-    base = origin(env.VERCEL_URL, "VERCEL_URL (preview)");
+    // Alias da branch é estável entre deploys; VERCEL_URL é o domínio de um deploy específico.
+    // URL da branch inválida falha fechado; fallback apenas quando ausente/vazia.
+    const hasBranchUrl = !!env.VERCEL_BRANCH_URL?.trim();
+    const previewKey = hasBranchUrl ? "VERCEL_BRANCH_URL (preview)" : "VERCEL_URL (preview)";
+    base = origin(hasBranchUrl ? env.VERCEL_BRANCH_URL : env.VERCEL_URL, previewKey);
     if (!new URL(base).hostname.endsWith(".vercel.app")) {
       throw new AuditCallbackConfigurationError(
-        "VERCEL_URL deve identificar o deployment Preview.",
+        `${previewKey} deve identificar um endereço Preview da Vercel.`,
       );
     }
     for (const configured of [env.PUBLIC_APP_URL, env.VERCEL_PROJECT_PRODUCTION_URL]) {
@@ -48,7 +53,7 @@ export function resolveAuditCallbackUrl(runId: string, env: AuditCallbackEnviron
       }
       if (base === productionOrigin) {
         throw new AuditCallbackConfigurationError(
-          "VERCEL_URL do Preview coincide com o domínio de produção.",
+          "URL de callback do Preview coincide com o domínio de produção.",
         );
       }
     }
