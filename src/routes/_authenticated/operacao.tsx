@@ -23,6 +23,8 @@ import type { AuditHistoryItem } from "@/lib/audit/types";
 import { formatDateTime, formatInt, formatPct, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { AuditCoverageNotice } from "@/components/audit/audit-coverage-notice";
+import { auditResultSummary } from "@/lib/audit/result-summary";
 
 export const Route = createFileRoute("/_authenticated/operacao")({
   head: () => ({
@@ -79,7 +81,8 @@ function OperacaoPage() {
   const aprov = run?.aprovados ?? 0;
   const durationMs = run?.duration_ms ?? null;
   const statusGeral = (run?.status_geral ?? "").toUpperCase();
-  const conformity = total > 0 ? (aprov / total) * 100 : 0;
+  const coverage = auditResultSummary(run ?? {});
+  const conformity = coverage.approvalRate;
   const daily = operationKpis?.daily ?? {
     runAt: null,
     referenceDate: "",
@@ -105,6 +108,7 @@ function OperacaoPage() {
   };
 
   const healthSeries: HealthPoint[] = [...history]
+    .filter((item) => !auditResultSummary(item).partial && item.total_processado > 0)
     .sort((a, b) => +new Date(a.created_at) - +new Date(b.created_at))
     .slice(-20)
     .map((item, index) => ({
@@ -119,7 +123,8 @@ function OperacaoPage() {
     }));
   const currentHealth = healthSeries.at(-1)?.conformity ?? conformity;
   const previousHealth = healthSeries.at(-2)?.conformity ?? currentHealth;
-  const healthDelta = currentHealth - previousHealth;
+  const healthDelta =
+    currentHealth !== null && previousHealth !== null ? currentHealth - previousHealth : null;
   const healthFloor = Math.max(
     0,
     Math.floor(Math.min(100, ...healthSeries.map((point) => point.conformity)) - 3),
@@ -141,7 +146,7 @@ function OperacaoPage() {
   const healthTone =
     statusGeral === "SUCESSO"
       ? "success"
-      : statusGeral === "ALERTA"
+      : statusGeral === "ALERTA" || coverage.partial
         ? "warning"
         : statusGeral === "ERRO"
           ? "destructive"
@@ -200,6 +205,8 @@ function OperacaoPage() {
           </Link>
         </div>
       </section>
+
+      {run && <AuditCoverageNotice run={run} />}
 
       {/* Empty state */}
       {noData && (
@@ -276,14 +283,14 @@ function OperacaoPage() {
                 <Gauge className="h-4 w-4 text-primary" /> Saúde da carteira no tempo
               </div>
               <div className="mt-0.5 text-[11px] text-muted-foreground">
-                Conformidade por execução · últimas {healthSeries.length} runs
+                Conformidade de auditorias completas · últimas {healthSeries.length} execuções
               </div>
             </div>
             <div className="text-right">
               <div className="text-[20px] font-semibold tabular-nums">
-                {formatPct(currentHealth)}
+                {currentHealth === null ? "—" : formatPct(currentHealth)}
               </div>
-              {healthSeries.length > 1 && (
+              {healthSeries.length > 1 && healthDelta !== null && (
                 <div
                   className={cn(
                     "flex items-center justify-end gap-0.5 text-[10.5px] font-mono",
@@ -672,6 +679,9 @@ function RunHistoryTable({ history }: { history: AuditHistoryItem[] }) {
               <th className="px-3 py-2.5 text-left">Origem</th>
               <th className="px-3 py-2.5 text-left">Resultado</th>
               <th className="px-3 py-2.5 text-right">Processadas</th>
+              <th className="px-3 py-2.5 text-right">Candidatas</th>
+              <th className="px-3 py-2.5 text-right">Excluídas</th>
+              <th className="px-3 py-2.5 text-right">Ignoradas</th>
               <th className="px-3 py-2.5 text-right">Com desvio</th>
               <th className="px-3 py-2.5 text-right">Conformidade</th>
               <th className="px-3 py-2.5 text-right">Duração</th>
@@ -681,12 +691,11 @@ function RunHistoryTable({ history }: { history: AuditHistoryItem[] }) {
           <tbody>
             {rows.map((item, index) => {
               const older = rows[index + 1];
-              const itemHealth =
-                item.total_processado > 0 ? (item.aprovados / item.total_processado) * 100 : 0;
-              const olderHealth = older?.total_processado
-                ? (older.aprovados / older.total_processado) * 100
-                : itemHealth;
-              const delta = itemHealth - olderHealth;
+              const itemCoverage = auditResultSummary(item);
+              const itemHealth = itemCoverage.approvalRate;
+              const olderHealth = older ? auditResultSummary(older).approvalRate : null;
+              const delta =
+                itemHealth !== null && olderHealth !== null ? itemHealth - olderHealth : null;
               const status = item.status_geral.toUpperCase();
 
               return (
@@ -711,21 +720,29 @@ function RunHistoryTable({ history }: { history: AuditHistoryItem[] }) {
                       className={cn(
                         "rounded px-1.5 py-0.5 font-mono text-[9.5px] uppercase",
                         status === "SUCESSO" && "bg-success/10 text-success",
-                        status === "ALERTA" && "bg-warning/10 text-warning",
+                        (status === "ALERTA" || itemCoverage.partial) &&
+                          "bg-warning/10 text-warning",
                         status === "ERRO" && "bg-destructive/10 text-destructive",
                       )}
                     >
-                      {status || "—"}
+                      {itemCoverage.partial ? "PARCIAL" : status || "—"}
                     </span>
                   </td>
                   <td className="px-3 py-3 text-right font-mono tabular-nums">
                     {formatInt(item.total_processado)}
                   </td>
+                  {[itemCoverage.candidates, itemCoverage.excluded, itemCoverage.ignored].map(
+                    (value, i) => (
+                      <td key={i} className="px-3 py-3 text-right font-mono tabular-nums">
+                        {value === null ? "—" : formatInt(value)}
+                      </td>
+                    ),
+                  )}
                   <td className="px-3 py-3 text-right font-mono tabular-nums text-destructive">
                     {formatInt(item.reprovados)}
                   </td>
                   <td className="px-3 py-3 text-right font-mono tabular-nums">
-                    {formatPct(itemHealth)}
+                    {itemHealth === null ? "—" : formatPct(itemHealth)}
                   </td>
                   <td className="px-3 py-3 text-right font-mono text-muted-foreground">
                     {formatDuration(item.duration_ms)}
@@ -734,12 +751,12 @@ function RunHistoryTable({ history }: { history: AuditHistoryItem[] }) {
                     className={cn(
                       "px-5 py-3 text-right font-mono tabular-nums",
                       !older && "text-muted-foreground/40",
-                      older && delta > 0 && "text-success",
-                      older && delta < 0 && "text-destructive",
+                      delta !== null && delta > 0 && "text-success",
+                      delta !== null && delta < 0 && "text-destructive",
                       older && delta === 0 && "text-muted-foreground",
                     )}
                   >
-                    {older ? `${delta > 0 ? "+" : ""}${delta.toFixed(1)} pp` : "—"}
+                    {delta !== null ? `${delta > 0 ? "+" : ""}${delta.toFixed(1)} pp` : "—"}
                   </td>
                 </tr>
               );

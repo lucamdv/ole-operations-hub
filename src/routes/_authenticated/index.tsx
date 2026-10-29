@@ -10,6 +10,8 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { AuditEmptyState } from "@/components/audit/empty-state";
+import { AuditCoverageNotice } from "@/components/audit/audit-coverage-notice";
+import { auditResultSummary } from "@/lib/audit/result-summary";
 import { FindingsListDialog } from "@/components/audit/findings-list-dialog";
 import { RunAuditButton } from "@/components/audit/run-audit-button";
 import { NextRunCountdown } from "@/components/automation/next-run-countdown";
@@ -126,20 +128,32 @@ function AuditOverview({
   const priorityPolicies = groupByApolice(latest.findings).slice(0, 5);
   const needsAttention = kpis.rejected > 0 || severity.erros > 0;
   const hasWarnings = !needsAttention && latest.findings.length > 0;
-  const tone = needsAttention ? "danger" : hasWarnings ? "warning" : "success";
-  const title = needsAttention
-    ? "A auditoria encontrou pontos que exigem atenção."
-    : hasWarnings
-      ? "A carteira está estável, com ressalvas para revisar."
-      : "A auditoria não encontrou desvios.";
-  const description = needsAttention
-    ? `${formatInt(kpis.affectedPolicies)} apólice${kpis.affectedPolicies === 1 ? " precisa" : "s precisam"} de revisão antes do próximo ciclo.`
-    : hasWarnings
-      ? "Não há falhas críticas, mas existem ocorrências informativas pendentes."
-      : `${formatInt(kpis.audited)} apólices foram verificadas e estão em conformidade.`;
+  const coverage = auditResultSummary(latest.run);
+  const tone = coverage.partial
+    ? "warning"
+    : needsAttention
+      ? "danger"
+      : hasWarnings
+        ? "warning"
+        : "success";
+  const title = coverage.partial
+    ? "Auditoria parcialmente concluída."
+    : needsAttention
+      ? "A auditoria encontrou pontos que exigem atenção."
+      : hasWarnings
+        ? "A carteira está estável, com ressalvas para revisar."
+        : "A auditoria não encontrou desvios.";
+  const description = coverage.partial
+    ? "Os achados disponíveis exigem análise; parte da carteira não pôde ser auditada."
+    : needsAttention
+      ? `${formatInt(kpis.affectedPolicies)} apólice${kpis.affectedPolicies === 1 ? " precisa" : "s precisam"} de revisão antes do próximo ciclo.`
+      : hasWarnings
+        ? "Não há falhas críticas, mas existem ocorrências informativas pendentes."
+        : `${formatInt(kpis.audited)} apólices foram verificadas e estão em conformidade.`;
 
   return (
     <>
+      <AuditCoverageNotice run={latest.run} />
       {preferences.auditSummary && (
         <section
           className={cn(
@@ -194,7 +208,9 @@ function AuditOverview({
             </div>
 
             <div className="border-t border-border pt-5 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
-              <div className="metric-label">Conformidade</div>
+              <div className="metric-label">
+                {coverage.partial ? "Conformidade pendente" : "Conformidade"}
+              </div>
               <div className="mt-2 flex items-baseline gap-2">
                 <span
                   className={cn(
@@ -202,7 +218,7 @@ function AuditOverview({
                     tone === "success" ? "text-success" : "text-foreground",
                   )}
                 >
-                  {formatPct(kpis.approvedRate)}
+                  {coverage.partial ? "—" : formatPct(kpis.approvedRate)}
                 </span>
               </div>
               <p className="mt-1 text-[11px] text-muted-foreground">
@@ -270,10 +286,20 @@ function AuditOverview({
 
               {priorityPolicies.length === 0 ? (
                 <div className="flex min-h-56 flex-col items-center justify-center px-6 py-12 text-center">
-                  <CheckCircle2 className="mb-3 h-7 w-7 text-success" />
-                  <div className="text-sm font-semibold">Nada para tratar agora</div>
+                  {coverage.partial ? (
+                    <AlertTriangle className="mb-3 h-7 w-7 text-warning" />
+                  ) : (
+                    <CheckCircle2 className="mb-3 h-7 w-7 text-success" />
+                  )}
+                  <div className="text-sm font-semibold">
+                    {coverage.partial
+                      ? "Nenhum achado entre as auditadas"
+                      : "Nada para tratar agora"}
+                  </div>
                   <p className="mt-1 max-w-sm text-[12px] leading-relaxed text-muted-foreground">
-                    A execução mais recente terminou sem achados pendentes.
+                    {coverage.partial
+                      ? "A conclusão das apólices ignoradas ainda está pendente."
+                      : "A execução mais recente terminou sem achados pendentes."}
                   </p>
                 </div>
               ) : (

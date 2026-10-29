@@ -1,6 +1,6 @@
 // OLÉ COPILOT — contrato real vindo do webhook n8n.
 
-export type AuditStatusGeral = "SUCESSO" | "ALERTA" | "ERRO";
+export type AuditStatusGeral = "SUCESSO" | "ALERTA" | "PARCIAL" | "ERRO";
 
 export interface AuditError {
   tipo_erro: string;
@@ -23,10 +23,17 @@ export interface AuditPayload {
     aprovados: number;
     reprovados: number;
     total_processado: number;
+    total_candidatas?: number;
+    total_excluidas?: number;
+    total_ignoradas?: number;
+    achados_dispensados?: number;
   };
   status_geral: AuditStatusGeral;
   mensagem_geral: string;
   apolices_com_erro: ApoliceComErro[];
+  apolices_ignoradas?: Array<{ apolice: string; motivo: string }>;
+  audit_contract_version?: 2;
+  exclusions_snapshot_at?: string;
 }
 
 export interface AuditRunRow {
@@ -69,4 +76,5 @@ export interface AuditHistoryItem {
   reprovados: number;
   duration_ms: number | null;
   origem?: "manual" | "auto" | string | null;
+  raw?: AuditPayload | null;
 }

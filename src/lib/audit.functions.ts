@@ -1,8 +1,9 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
-import type { AuditHistoryItem, LatestAudit } from "./audit/types";
+import type { AuditHistoryItem, AuditPayload, LatestAudit } from "./audit/types";
 import type { WebhookMode } from "@/lib/webhook-mode";
+import { auditResultSummary } from "./audit/result-summary";
 
 /**
  * Dispara a auditoria de forma ASSÍNCRONA (implementação em audit-run.server.ts).
@@ -33,7 +34,9 @@ export const getAuditRunStatus = createServerFn({ method: "GET" })
       const { resolutionsAsIgnoreEntries } = await import("./audit/resolution-filter");
       const { data: run, error } = await supabaseAdmin
         .from("audit_runs")
-        .select("id, status, status_geral, error_message, total_processado, aprovados, reprovados")
+        .select(
+          "id, status, status_geral, error_message, total_processado, aprovados, reprovados, raw",
+        )
         .eq("id", data.runId)
         .maybeSingle();
       if (error) throw new Error(error.message);
@@ -47,6 +50,7 @@ export const getAuditRunStatus = createServerFn({ method: "GET" })
         total_processado: number;
         aprovados: number;
         reprovados: number;
+        raw: AuditPayload | null;
       };
 
       // Desconta exceções da AUDITORIA (audit_ignores) nos números do toast final.
@@ -151,7 +155,7 @@ export const getAuditHistory = createServerFn({ method: "GET" })
     const { data, error } = await supabaseAdmin
       .from("audit_runs")
       .select(
-        "id, created_at, data_auditoria, status_geral, total_processado, aprovados, reprovados, duration_ms, origem",
+        "id, created_at, data_auditoria, status_geral, total_processado, aprovados, reprovados, duration_ms, origem, raw",
       )
       .eq("status", "success")
       .order("created_at", { ascending: false })
@@ -214,7 +218,9 @@ export const getSystemStatus = createServerFn({ method: "GET" })
     const [{ data: lastRun }, { data: lastSync }] = await Promise.all([
       supabaseAdmin
         .from("audit_runs")
-        .select("id, status, error_message, created_at, aprovados, reprovados, total_processado")
+        .select(
+          "id, status, status_geral, error_message, created_at, aprovados, reprovados, total_processado, raw",
+        )
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle(),
@@ -238,6 +244,8 @@ export const getSystemStatus = createServerFn({ method: "GET" })
       aprovados: number | null;
       reprovados: number | null;
       total_processado: number | null;
+      status_geral: string | null;
+      raw: unknown;
     } | null;
     const sync = lastSync as { status: string; created_at: string } | null;
 
@@ -277,14 +285,16 @@ export const getSystemStatus = createServerFn({ method: "GET" })
       aprovadosAjustado = adj.aprovados;
     }
 
-    const approvalRate =
-      run && (run.total_processado ?? 0) > 0
-        ? (aprovadosAjustado / (run.total_processado as number)) * 100
-        : null;
+    const coverage = auditResultSummary({ ...run, aprovados: aprovadosAjustado });
+    const approvalRate = coverage.approvalRate;
 
     let state: "operational" | "degraded" | "down" = "operational";
     if (run?.status === "error" || sync?.status === "error") state = "down";
-    else if (run?.status === "running" || (approvalRate != null && approvalRate < 95))
+    else if (
+      run?.status === "running" ||
+      coverage.partial ||
+      (approvalRate != null && approvalRate < 95)
+    )
       state = "degraded";
 
     return {
@@ -292,6 +302,7 @@ export const getSystemStatus = createServerFn({ method: "GET" })
       approvalRate,
       lastRunAt: run?.created_at ?? null,
       lastRunStatus: run?.status ?? null,
+      lastRunPartial: coverage.partial,
       lastSyncAt: sync?.created_at ?? null,
       lastSyncStatus: sync?.status ?? null,
     };

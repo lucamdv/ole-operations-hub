@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { getSystemStatus } from "@/lib/audit.functions";
 import { getInitials, useProfile } from "@/hooks/use-settings";
 import { useCurrentRole } from "@/hooks/use-current-role";
+import { systemStatusPresentation } from "@/lib/audit/result-summary";
 
 export function SystemStatusPill({ compact = false }: { compact?: boolean }) {
   const fetchStatus = useServerFn(getSystemStatus);
@@ -17,12 +18,7 @@ export function SystemStatusPill({ compact = false }: { compact?: boolean }) {
   const state = status?.state ?? "operational";
   const tone =
     state === "operational" ? "success" : state === "degraded" ? "warning" : "destructive";
-  const label =
-    state === "operational"
-      ? "Sistema Operacional"
-      : state === "degraded"
-        ? "Sistema Degradado"
-        : "Sistema Instável";
+  const presentation = systemStatusPresentation(status);
   const metric =
     status?.approvalRate != null
       ? `${status.approvalRate.toFixed(status.approvalRate >= 99.95 ? 2 : 1)}%`
@@ -30,11 +26,7 @@ export function SystemStatusPill({ compact = false }: { compact?: boolean }) {
 
   return (
     <div
-      title={
-        status?.approvalRate != null
-          ? `Taxa de aprovação da última auditoria: ${status.approvalRate.toFixed(2)}%`
-          : "Sem auditorias registradas"
-      }
+      title={presentation.description}
       className={cn(
         "flex items-center gap-2 rounded-2xl border",
         compact ? "justify-center px-1.5 py-2" : "px-2 py-1.5",
@@ -71,7 +63,7 @@ export function SystemStatusPill({ compact = false }: { compact?: boolean }) {
               tone === "destructive" && "text-destructive",
             )}
           >
-            {label}
+            {presentation.label}
           </div>
           <div
             className={cn(

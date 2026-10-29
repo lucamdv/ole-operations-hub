@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
+import { auditCompletionNotice } from "@/lib/audit/result-summary";
 import {
   getAuditHistory,
   getAuditRunStatus,
@@ -67,15 +68,10 @@ export function useRunAudit() {
       if (!row) {
         // ainda não disponível, segue polling
       } else if (row.status === "success") {
-        const reprov = row.reprovados ?? 0;
-        const total = row.total_processado ?? 0;
-        toast.success("Auditoria concluída", {
-          description:
-            reprov === 0
-              ? `${total} apólices · todas em conformidade.`
-              : `${reprov} de ${total} com inconsistências.`,
-        });
+        const notice = auditCompletionNotice(row);
+        toast[notice.tone](notice.title, { description: notice.description });
         qc.invalidateQueries({ queryKey: ["audit"] });
+        qc.invalidateQueries({ queryKey: ["system-status"] });
         stopPolling();
         return;
       } else if (row.status === "error") {

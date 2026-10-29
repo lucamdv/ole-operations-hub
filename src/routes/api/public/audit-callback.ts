@@ -1,5 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { CallbackPayloadSchema } from "@/lib/audit/callback-payload";
+import { auditResultSummary, isCompleteAuditResult } from "@/lib/audit/result-summary";
+import { previousCompleteAudit } from "@/lib/audit/previous-complete.server";
+import { auditFindingId } from "@/lib/audit/finding-id.server";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -70,6 +73,17 @@ export const Route = createFileRoute("/api/public/audit-callback")({
                     run_id:
                       (root as { run_id?: string }).run_id ??
                       (root as { payload: { run_id?: string } }).payload.run_id,
+                    // A technical failure on either envelope layer must not become success.
+                    ...((root as { status?: string }).status === "error" ||
+                    (root as { error?: string }).error ||
+                    (root as { error_message?: string }).error_message
+                      ? {
+                          status: "error",
+                          error_message:
+                            (root as { error_message?: string }).error_message ??
+                            "Falha técnica no envelope do motor.",
+                        }
+                      : {}),
                   }
                 : root;
             const parsed = CallbackPayloadSchema.safeParse(candidate);
@@ -96,12 +110,35 @@ export const Route = createFileRoute("/api/public/audit-callback")({
             // 3. Confirma run existente
             const { data: existing, error: fetchErr } = await supabaseAdmin
               .from("audit_runs")
-              .select("id, created_at")
+              .select("id, created_at, status, raw")
               .eq("id", runId)
               .maybeSingle();
 
             if (fetchErr) return json({ error: fetchErr.message }, 500);
             if (!existing) return json({ error: "run_id not found" }, 404);
+            // Terminal callbacks are immutable: no duplicated findings or late error overwrite.
+            if (existing.status !== "running")
+              return json({ ok: true, run_id: runId, duplicate: true, status: existing.status });
+
+            const original =
+              existing.raw && typeof existing.raw === "object" && !Array.isArray(existing.raw)
+                ? (existing.raw as Record<string, unknown>)
+                : {};
+            const exclusions = Array.isArray(original.apolices_excluidas)
+              ? (original.apolices_excluidas as Array<{ apolice: string }>)
+              : [];
+            const specifics = Array.isArray(original.excecoes_especificas)
+              ? (original.excecoes_especificas as Array<{ apolice: string; tipo_erro: string }>)
+              : [];
+            const resultRaw = {
+              ...payload,
+              status_geral: auditResultSummary({ status_geral: payload.status_geral, raw: payload })
+                .partial
+                ? "PARCIAL"
+                : (payload.status_geral ?? "SUCESSO"),
+              apolices_excluidas: exclusions,
+              excecoes_especificas: specifics,
+            };
 
             const startedAt = new Date((existing as { created_at: string }).created_at).getTime();
             const durationMs = Date.now() - startedAt;
@@ -128,38 +165,24 @@ export const Route = createFileRoute("/api/public/audit-callback")({
               }
 
               console.error("[audit-callback] n8n returned error", { runId });
-              const { error: errUpd } = await supabaseAdmin
+              const { data: failed, error: errUpd } = await supabaseAdmin
                 .from("audit_runs")
                 .update({
                   status: "error",
                   status_geral: "ERRO",
                   error_message: message,
                   duration_ms: durationMs,
-                  raw: payload as unknown as Record<string, unknown>,
+                  raw: resultRaw,
                 } as never)
-                .eq("id", runId);
+                .eq("id", runId)
+                .eq("status", "running")
+                .select("id")
+                .maybeSingle();
 
               if (errUpd) return json({ error: errUpd.message }, 500);
+              if (!failed) return json({ ok: true, run_id: runId, duplicate: true });
               return json({ ok: true, run_id: runId, status: "error", duration_ms: durationMs });
             }
-
-            // 4. Atualiza audit_run com sucesso
-            const { error: updErr } = await supabaseAdmin
-              .from("audit_runs")
-              .update({
-                status: "success",
-                data_auditoria: payload.data_auditoria ?? new Date().toISOString(),
-                status_geral: payload.status_geral ?? "SUCESSO",
-                mensagem_geral: payload.mensagem_geral ?? null,
-                total_processado: payload.resumo?.total_processado ?? 0,
-                aprovados: payload.resumo?.aprovados ?? 0,
-                reprovados: payload.resumo?.reprovados ?? 0,
-                duration_ms: durationMs,
-                raw: payload as unknown as Record<string, unknown>,
-              } as never)
-              .eq("id", runId);
-
-            if (updErr) return json({ error: updErr.message }, 500);
 
             // 5. Insere findings (normaliza nomes alternativos vindos do n8n)
             const findings = payload.apolices_com_erro.flatMap((a) =>
@@ -192,7 +215,10 @@ export const Route = createFileRoute("/api/public/audit-callback")({
             if (findings.length > 0) {
               const { error: findErr } = await supabaseAdmin
                 .from("audit_findings")
-                .insert(findings as never);
+                .upsert(findings.map((f) => ({ id: auditFindingId(f), ...f })) as never, {
+                  onConflict: "id",
+                  ignoreDuplicates: true,
+                });
               if (findErr) return json({ error: findErr.message }, 500);
             }
 
@@ -204,10 +230,15 @@ export const Route = createFileRoute("/api/public/audit-callback")({
 
             let reopened = 0;
             if (findings.length > 0) {
-              const { data: ativas } = await supabaseAdmin
+              const { data: ativas, error: reopenReadError } = await supabaseAdmin
                 .from("audit_resolutions")
                 .select("id, apolice, tipo_erro, endosso")
                 .is("reopened_at", null);
+              if (reopenReadError)
+                return json(
+                  { error: "Falha ao consultar resoluções para reabertura; reenvie o callback." },
+                  500,
+                );
               const paraReabrir = (
                 (ativas ?? []) as Array<{
                   id: string;
@@ -222,34 +253,59 @@ export const Route = createFileRoute("/api/public/audit-callback")({
                 const { error: reopenErr } = await supabaseAdmin
                   .from("audit_resolutions")
                   .update({ reopened_at: new Date().toISOString() } as never)
-                  .in("id", paraReabrir);
+                  .in("id", paraReabrir)
+                  .is("reopened_at", null);
                 if (reopenErr) {
-                  console.error("[audit-callback] falha ao reabrir resoluções", reopenErr.message);
+                  return json({ error: "Falha ao reabrir resoluções; reenvie o callback." }, 500);
                 } else {
                   reopened = paraReabrir.length;
                 }
               }
             }
 
+            // Publish only after findings AND required reopening. Failed reads/writes remain retryable.
+            const result = {
+              status: "success",
+              data_auditoria: payload.data_auditoria ?? new Date().toISOString(),
+              status_geral: resultRaw.status_geral,
+              mensagem_geral: payload.mensagem_geral ?? null,
+              total_processado: payload.resumo?.total_processado ?? 0,
+              aprovados: payload.resumo?.aprovados ?? 0,
+              reprovados: payload.resumo?.reprovados ?? 0,
+              duration_ms: durationMs,
+              raw: resultRaw,
+            };
+            const { data: finalized, error: updErr } = await supabaseAdmin
+              .from("audit_runs")
+              .update(result as never)
+              .eq("id", runId)
+              .eq("status", "running")
+              .select("id")
+              .maybeSingle();
+            if (updErr) return json({ error: updErr.message }, 500);
+            if (!finalized) return json({ ok: true, run_id: runId, duplicate: true });
+
             // 7. Resolução AUTOMÁTICA: achados presentes na auditoria anterior que
             //    não aparecem mais nesta. Exceções (audit_ignores) nunca contam como
             //    resolvidas, e resoluções ativas não são duplicadas.
             let autoResolved = 0;
-            try {
-              const { data: prevRun } = await supabaseAdmin
-                .from("audit_runs")
-                .select("id, created_at")
-                .eq("status", "success")
-                .neq("id", runId)
-                .lt("created_at", (existing as { created_at: string }).created_at)
-                .order("created_at", { ascending: false })
-                .limit(1)
-                .maybeSingle();
+            const summary = auditResultSummary({
+              status_geral: payload.status_geral,
+              raw: payload,
+            });
+            // Missing exclusion identities are not evidence of correction either.
+            const reliableScope = (summary.excluded ?? 0) <= exclusions.length;
+            if (payload.resumo && isCompleteAuditResult(result) && reliableScope) {
+              try {
+                const prevRun = await previousCompleteAudit(supabaseAdmin, existing);
 
-              if (prevRun) {
-                const prevId = (prevRun as { id: string }).id;
-                const [{ data: prevFindings }, { data: ignores }, { data: ativas }] =
-                  await Promise.all([
+                if (prevRun) {
+                  const prevId = (prevRun as { id: string }).id;
+                  const [
+                    { data: prevFindings, error: prevError },
+                    { data: ignores, error: ignoreError },
+                    { data: ativas, error: activeError },
+                  ] = await Promise.all([
                     supabaseAdmin
                       .from("audit_findings")
                       .select("apolice, tipo_erro, endosso")
@@ -260,87 +316,96 @@ export const Route = createFileRoute("/api/public/audit-callback")({
                       .select("apolice, tipo_erro, endosso")
                       .is("reopened_at", null),
                   ]);
+                  if (prevError || ignoreError || activeError)
+                    throw new Error("Leitura incompleta para resolução automática.");
 
-                const { buildIgnoreSets, isIgnoredFinding } =
-                  await import("@/lib/audit/ignore-filter");
-                const { resolutionsAsIgnoreEntries } =
-                  await import("@/lib/audit/resolution-filter");
-                const ignoreSets = buildIgnoreSets(
-                  (ignores ?? []) as Array<{ apolice: string; tipo_erro: string | null }>,
-                );
-                const resolvidasSets = buildIgnoreSets(
-                  resolutionsAsIgnoreEntries(
-                    (ativas ?? []) as Array<{
-                      apolice: string;
-                      tipo_erro: string;
-                      endosso: string | null;
-                    }>,
-                  ),
-                );
-
-                const candidatos = new Map<
-                  string,
-                  { apolice: string; tipo_erro: string; endosso: string | null }
-                >();
-                for (const f of (prevFindings ?? []) as Array<{
-                  apolice: string;
-                  tipo_erro: string;
-                  endosso: string | null;
-                }>) {
-                  const chave = chaveDe(f);
-                  if (chavesAtuais.has(chave)) continue; // ainda presente
-                  if (isIgnoredFinding(ignoreSets, f)) continue; // exceção: não é resolução
-                  if (isIgnoredFinding(resolvidasSets, f)) continue; // já resolvido
-                  candidatos.set(chave, f);
-                }
-
-                if (candidatos.size > 0) {
-                  const apolices = Array.from(
-                    new Set(Array.from(candidatos.values()).map((c) => c.apolice)),
+                  const { buildIgnoreSets, isIgnoredFinding } =
+                    await import("@/lib/audit/ignore-filter");
+                  const { resolutionsAsIgnoreEntries } =
+                    await import("@/lib/audit/resolution-filter");
+                  const ignoreSets = buildIgnoreSets([
+                    ...((ignores ?? []) as Array<{ apolice: string; tipo_erro: string | null }>),
+                    ...exclusions.map((e) => ({ apolice: e.apolice, tipo_erro: null })),
+                    ...specifics,
+                  ]);
+                  const resolvidasSets = buildIgnoreSets(
+                    resolutionsAsIgnoreEntries(
+                      (ativas ?? []) as Array<{
+                        apolice: string;
+                        tipo_erro: string;
+                        endosso: string | null;
+                      }>,
+                    ),
                   );
-                  const { data: historico } = await supabaseAdmin
-                    .from("audit_findings")
-                    .select("apolice, tipo_erro, endosso, created_at")
-                    .in("apolice", apolices);
-                  const firstSeen = new Map<string, string>();
-                  for (const h of (historico ?? []) as Array<{
+
+                  const candidatos = new Map<
+                    string,
+                    { apolice: string; tipo_erro: string; endosso: string | null }
+                  >();
+                  for (const f of (prevFindings ?? []) as Array<{
                     apolice: string;
                     tipo_erro: string;
                     endosso: string | null;
-                    created_at: string;
                   }>) {
-                    const chave = chaveDe(h);
-                    const atual = firstSeen.get(chave);
-                    if (!atual || h.created_at < atual) firstSeen.set(chave, h.created_at);
+                    const chave = chaveDe(f);
+                    if (chavesAtuais.has(chave)) continue; // ainda presente
+                    if (isIgnoredFinding(ignoreSets, f)) continue; // exceção: não é resolução
+                    if (isIgnoredFinding(resolvidasSets, f)) continue; // já resolvido
+                    candidatos.set(chave, f);
                   }
 
-                  const resolvedAt = new Date().toISOString();
-                  const linhas = Array.from(candidatos.entries()).map(([chave, c]) => ({
-                    apolice: c.apolice,
-                    tipo_erro: c.tipo_erro,
-                    endosso: c.endosso,
-                    run_id: runId,
-                    first_seen_at: firstSeen.get(chave) ?? null,
-                    resolved_at: resolvedAt,
-                    resolved_by: null,
-                    origem: "auto",
-                    motivo: "Resolvido automaticamente: ausente na auditoria seguinte",
-                  }));
-                  const { error: autoErr } = await supabaseAdmin
-                    .from("audit_resolutions")
-                    .insert(linhas as never);
-                  if (autoErr) {
-                    console.error(
-                      "[audit-callback] falha ao registrar resoluções automáticas",
-                      autoErr.message,
+                  if (candidatos.size > 0) {
+                    const apolices = Array.from(
+                      new Set(Array.from(candidatos.values()).map((c) => c.apolice)),
                     );
-                  } else {
-                    autoResolved = linhas.length;
+                    const { data: historico, error: historyError } = await supabaseAdmin
+                      .from("audit_findings")
+                      .select("apolice, tipo_erro, endosso, created_at")
+                      .in("apolice", apolices);
+                    if (historyError)
+                      throw new Error("Histórico indisponível para resolução automática.");
+                    const firstSeen = new Map<string, string>();
+                    for (const h of (historico ?? []) as Array<{
+                      apolice: string;
+                      tipo_erro: string;
+                      endosso: string | null;
+                      created_at: string;
+                    }>) {
+                      const chave = chaveDe(h);
+                      const atual = firstSeen.get(chave);
+                      if (!atual || h.created_at < atual) firstSeen.set(chave, h.created_at);
+                    }
+
+                    const resolvedAt = new Date().toISOString();
+                    const linhas = Array.from(candidatos.entries()).map(([chave, c]) => ({
+                      apolice: c.apolice,
+                      tipo_erro: c.tipo_erro,
+                      endosso: c.endosso,
+                      run_id: runId,
+                      first_seen_at: firstSeen.get(chave) ?? null,
+                      resolved_at: resolvedAt,
+                      resolved_by: null,
+                      origem: "auto",
+                      motivo: "Resolvido automaticamente: ausente na auditoria seguinte",
+                    }));
+                    const { error: autoErr } = await supabaseAdmin
+                      .from("audit_resolutions")
+                      .insert(linhas as never);
+                    if (autoErr) {
+                      console.error(
+                        "[audit-callback] falha ao registrar resoluções automáticas",
+                        autoErr.message,
+                      );
+                    } else {
+                      autoResolved = linhas.length;
+                    }
                   }
                 }
+              } catch {
+                console.error(
+                  "[audit-callback] resolução automática pendente por falha de leitura/gravação",
+                );
               }
-            } catch (e) {
-              console.error("[audit-callback] erro na resolução automática", e);
             }
 
             return json({
