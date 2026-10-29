@@ -11,7 +11,7 @@ registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === "@/integrations/supabase/client.server") {
       return {
-        url: "data:text/javascript,export const supabaseAdmin = { from: (...args) => globalThis.__auditTestDbClient.from(...args) };",
+        url: "data:text/javascript,export const supabaseAdmin = { from: (...args) => globalThis.__auditTestDbClient.from(...args) }; export const executionRegistry = () => ({ insert: async record => { globalThis.__auditRegistryRecords.push(record); return {error:null}; } });",
         shortCircuit: true,
       };
     }
@@ -30,13 +30,16 @@ const { runAuditImpl } = await import("../src/lib/audit-run.server.ts");
 function setup(t, data = cancelledPolicyData(), options = {}) {
   const db = auditDatabase(data, options);
   globalThis.__auditTestDbClient = db.client;
+  globalThis.__auditRegistryRecords = [];
   const oldEnv = {};
   const env = {
     N8N_AUDIT_WEBHOOK_URL: "https://n8n.example/webhook/test-only",
     PUBLIC_APP_URL: "https://cockpit.example",
     VERCEL_PROJECT_PRODUCTION_URL: "",
     VERCEL_URL: "",
-    VERCEL_ENV: "",
+    VERCEL_ENV: "production",
+    N8N_AUDIT_HOMOLOG_WEBHOOK_URL: "https://n8n.example/webhook-test/test-only",
+    HOMOLOG_EXTERNAL_WEBHOOKS_ENABLED: "true",
     SUPABASE_SERVICE_ROLE_KEY: "SECRET-NEVER-SEND",
     AUDIT_CALLBACK_SECRET: "SECRET-CALLBACK",
   };
@@ -50,6 +53,7 @@ function setup(t, data = cancelledPolicyData(), options = {}) {
       else process.env[key] = value;
     }
     delete globalThis.__auditTestDbClient;
+    delete globalThis.__auditRegistryRecords;
   });
   const sent = [];
   const logs = [];

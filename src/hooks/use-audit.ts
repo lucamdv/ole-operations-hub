@@ -1,11 +1,7 @@
 import { useWebhookMode } from "@/hooks/use-webhook-mode";
+import type { WebhookMode } from "@/lib/webhook-mode";
 import { useEffect, useRef, useState } from "react";
-import {
-  queryOptions,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import {
@@ -41,7 +37,7 @@ export function useAuditHistory() {
 export function useRunAudit() {
   const qc = useQueryClient();
   const fireFn = useServerFn(runAudit);
-  const { mode } = useWebhookMode();
+  const { mode } = useWebhookMode("audit");
   const statusFn = useServerFn(getAuditRunStatus);
 
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -65,9 +61,9 @@ export function useRunAudit() {
     setActiveRunId(null);
   };
 
-  const pollOnce = async (runId: string, startedAt: number) => {
+  const pollOnce = async (runId: string, startedAt: number, submittedMode: WebhookMode) => {
     try {
-      const row = await statusFn({ data: { runId } });
+      const row = await statusFn({ data: { runId, mode: submittedMode } });
       if (!row) {
         // ainda não disponível, segue polling
       } else if (row.status === "success") {
@@ -86,7 +82,11 @@ export function useRunAudit() {
         toast.error("Falha na auditoria", {
           description: row.error_message ?? "Erro desconhecido no motor.",
           duration: 30_000,
-          style: { whiteSpace: "pre-wrap", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: "12px" },
+          style: {
+            whiteSpace: "pre-wrap",
+            fontFamily: "ui-monospace, SFMono-Regular, monospace",
+            fontSize: "12px",
+          },
         });
         stopPolling();
         return;
@@ -104,19 +104,23 @@ export function useRunAudit() {
       return;
     }
 
-    pollTimer.current = setTimeout(() => pollOnce(runId, startedAt), 3_000);
+    pollTimer.current = setTimeout(() => pollOnce(runId, startedAt, submittedMode), 3_000);
   };
 
   const mutation = useMutation({
-    mutationFn: () => fireFn({ data: { mode } }),
-    onSuccess: ({ runId }) => {
+    mutationFn: async () => {
+      const submittedMode = mode;
+      const result = await fireFn({ data: { mode: submittedMode } });
+      return { ...result, submittedMode };
+    },
+    onSuccess: ({ runId, submittedMode }) => {
       setActiveRunId(runId);
       setIsPolling(true);
       toast.info("Auditoria iniciada", {
         description: "Aguardando retorno do motor n8n…",
       });
       const startedAt = Date.now();
-      pollTimer.current = setTimeout(() => pollOnce(runId, startedAt), 3_000);
+      pollTimer.current = setTimeout(() => pollOnce(runId, startedAt, submittedMode), 3_000);
     },
     onError: (err: Error) => {
       toast.error("Falha ao disparar auditoria", { description: err.message });

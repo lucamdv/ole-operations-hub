@@ -603,7 +603,14 @@ export const Route = createFileRoute("/api/public/policy-sync-callback")({
   server: {
     handlers: {
       OPTIONS: async () => new Response(null, { status: 204, headers: CORS }),
-      POST: (context) => handlePolicySyncCallback(context),
+      POST: async (context) => {
+        const { handleScopedCallback } = await import("@/lib/environment/callback.server");
+        return handleScopedCallback(context.request, {
+          integration: "policy_sync",
+          secrets: [process.env.AUDIT_CALLBACK_SECRET],
+          handler: () => handlePolicySyncCallback(context),
+        });
+      },
     },
   },
 });

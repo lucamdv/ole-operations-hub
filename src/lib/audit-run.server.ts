@@ -1,4 +1,11 @@
-import { resolveWebhookUrl, type WebhookMode } from "@/lib/webhook-mode";
+import type { WebhookMode } from "@/lib/webhook-mode";
+import {
+  withIntegrationContext,
+  getOperationalContext,
+  assertProductionScheduler,
+} from "./environment/context.server.ts";
+import { resolveIntegrationWebhook } from "./environment/webhooks.server.ts";
+import { registerExecution } from "./environment/execution.server.ts";
 import { buildAuditTriggerPayload } from "./audit/trigger-payload.ts";
 import { AuditCallbackConfigurationError, resolveAuditCallbackUrl } from "./audit/callback-url.ts";
 import {
@@ -13,8 +20,12 @@ import {
 class AuditDispatchError extends Error {}
 
 export async function runAuditImpl(trigger = "ole-copilot", webhookMode?: WebhookMode | null) {
-  const rawUrl = process.env.N8N_AUDIT_WEBHOOK_URL;
-  const url = rawUrl ? resolveWebhookUrl(rawUrl, webhookMode) : rawUrl;
+  if (trigger === "scheduler") assertProductionScheduler();
+  return withIntegrationContext(webhookMode, () => dispatchAudit(trigger));
+}
+
+async function dispatchAudit(trigger: string) {
+  const url = resolveIntegrationWebhook("audit", getOperationalContext());
   if (!url) {
     throw new Error(
       "Secret N8N_AUDIT_WEBHOOK_URL não configurada. Cole a URL de produção do webhook n8n (/webhook/...) nos secrets do projeto.",
@@ -45,6 +56,7 @@ export async function runAuditImpl(trigger = "ole-copilot", webhookMode?: Webhoo
   const startedAt = Date.now();
   let phase: "preparing" | "persisting" | "sending" = "preparing";
   try {
+    await registerExecution(runId, "audit");
     // Configuration failures after insert must also close the run as error.
     const callbackUrl = resolveAuditCallbackUrl(runId, process.env);
 

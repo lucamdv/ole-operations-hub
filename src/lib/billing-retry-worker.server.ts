@@ -1,5 +1,9 @@
 import { ExcelsiorMotorClient } from "@/lib/excelsior/motor-client.server";
 import {
+  assertProductionScheduler,
+  assertProductionExternalAccess,
+} from "./environment/context.server";
+import {
   flattenApiItems,
   normalizeBillingResponse,
   planBillingRefresh,
@@ -65,6 +69,8 @@ async function finishRecoveredRuns(runIds: Set<string>) {
 
 /** Processa um lote curto; o cron seguinte continua de onde o lease parou. */
 export async function processBillingFallbacks(maxItems = 2) {
+  assertProductionScheduler();
+  assertProductionExternalAccess();
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { data: claimed, error } = await supabaseAdmin.rpc("claim_billing_sync_fallbacks", {
     max_items: maxItems,

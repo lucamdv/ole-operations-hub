@@ -8,6 +8,8 @@ const roleSchema = z.enum(["admin", "manager", "user"]);
 export const listUsers = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
+    const { assertProductionIdentityMutation } = await import("./environment/context.server");
+    assertProductionIdentityMutation();
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
@@ -101,9 +103,7 @@ export const updateUser = createServerFn({ method: "POST" })
 
 export const deleteUser = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((input: unknown) =>
-    z.object({ user_id: z.string().uuid() }).parse(input),
-  )
+  .inputValidator((input: unknown) => z.object({ user_id: z.string().uuid() }).parse(input))
   .handler(async ({ data, context }) => {
     await assertAdmin(context);
     if (data.user_id === context.userId) throw new Error("Não pode remover a própria conta");
@@ -116,6 +116,8 @@ export const deleteUser = createServerFn({ method: "POST" })
 export const listInvites = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }) => {
+    const { assertProductionIdentityMutation } = await import("./environment/context.server");
+    assertProductionIdentityMutation();
     await assertAdmin(context);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const { data, error } = await supabaseAdmin

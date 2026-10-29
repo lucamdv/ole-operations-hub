@@ -19,6 +19,13 @@ export const Route = createFileRoute("/api/public/hooks/billing-retry")({
         const provided = request.headers.get("x-hook-secret");
         if (!expected || provided !== expected) return json({ error: "Unauthorized" }, 401);
 
+        const { assertProductionScheduler } = await import("@/lib/environment/context.server");
+        try {
+          assertProductionScheduler();
+        } catch {
+          return json({ error: "Workers automáticos desabilitados neste ambiente." }, 403);
+        }
+
         keepRequestAlive(
           Promise.allSettled([processBillingFallbacks(2), runDueAutomations()]).then((results) => {
             const [billing, automations] = results;

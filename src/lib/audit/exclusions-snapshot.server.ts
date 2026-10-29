@@ -10,7 +10,7 @@ type SourceTable = "policies" | "endorsements" | "policy_billing" | "audit_ignor
 export class AuditPreparationError extends Error {}
 
 export async function loadAuditExclusionsSnapshot(
-  client: SupabaseClient<Database>,
+  client: Pick<SupabaseClient<Database>, "from">,
   snapshotAt = new Date().toISOString(),
 ) {
   const signal = AbortSignal.timeout(30_000);

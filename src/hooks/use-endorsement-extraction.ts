@@ -1,4 +1,5 @@
 import { useWebhookMode } from "@/hooks/use-webhook-mode";
+import type { WebhookMode } from "@/lib/webhook-mode";
 import { useEffect, useRef, useState } from "react";
 import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -36,7 +37,7 @@ export function useEndorsementExceptions() {
 export function useRunEndorsementExtraction() {
   const qc = useQueryClient();
   const fireFn = useServerFn(runEndorsementExtraction);
-  const { mode } = useWebhookMode();
+  const { mode } = useWebhookMode("extraction");
   const statusFn = useServerFn(getExtractionStatus);
   const [isPolling, setIsPolling] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,9 +55,9 @@ export function useRunEndorsementExtraction() {
     setIsPolling(false);
   };
 
-  const pollOnce = async (runId: string, startedAt: number) => {
+  const pollOnce = async (runId: string, startedAt: number, submittedMode: WebhookMode) => {
     try {
-      const row = await statusFn({ data: { runId } });
+      const row = await statusFn({ data: { runId, mode: submittedMode } });
       if (row?.status === "success") {
         toast.success("Extração concluída", {
           description: `${row.total_apolices} apólices retornadas.`,
@@ -81,16 +82,20 @@ export function useRunEndorsementExtraction() {
       stop();
       return;
     }
-    timer.current = setTimeout(() => pollOnce(runId, startedAt), 3_000);
+    timer.current = setTimeout(() => pollOnce(runId, startedAt, submittedMode), 3_000);
   };
 
   const mutation = useMutation({
-    mutationFn: () => fireFn({ data: { mode } }),
-    onSuccess: ({ runId }) => {
+    mutationFn: async () => {
+      const submittedMode = mode;
+      const result = await fireFn({ data: { mode: submittedMode } });
+      return { ...result, submittedMode };
+    },
+    onSuccess: ({ runId, submittedMode }) => {
       setIsPolling(true);
       toast.info("Extração iniciada", { description: "Aguardando o fluxo n8n…" });
       const startedAt = Date.now();
-      timer.current = setTimeout(() => pollOnce(runId, startedAt), 3_000);
+      timer.current = setTimeout(() => pollOnce(runId, startedAt, submittedMode), 3_000);
     },
     onError: (err: Error) => {
       toast.error("Falha ao disparar extração", { description: err.message });
@@ -104,11 +109,8 @@ export function useAddEndorsementException() {
   const qc = useQueryClient();
   const fn = useServerFn(addEndorsementException);
   return useMutation({
-    mutationFn: (input: {
-      policy_number: string;
-      motivo: string;
-      reason_tag_id?: string | null;
-    }) => fn({ data: input }),
+    mutationFn: (input: { policy_number: string; motivo: string; reason_tag_id?: string | null }) =>
+      fn({ data: input }),
     onSuccess: (res, vars) => {
       qc.invalidateQueries({ queryKey: ["endorsement-exceptions"] });
       qc.invalidateQueries({ queryKey: ["endorsement-extraction"] });

@@ -2,7 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { assertAdmin } from "@/lib/assert-admin";
-import { resolveWebhookUrl, type WebhookMode } from "@/lib/webhook-mode";
+import type { WebhookMode } from "@/lib/webhook-mode";
 
 export interface ExtractionItem {
   policy_number: string;
@@ -31,106 +31,109 @@ export interface EndorsementExceptionRow {
 /** Dispara o fluxo n8n de extração dos últimos endossos (assíncrono, com callback). */
 export const runEndorsementExtraction = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d?: { mode?: WebhookMode }) => d ?? {})
+  .inputValidator((d?: { mode?: WebhookMode }) =>
+    z.object({ mode: z.enum(["test", "production"]).optional() }).parse(d ?? {}),
+  )
   .handler(async ({ context, data }) => {
-    const rawUrl = process.env.N8N_ENDORSEMENT_WEBHOOK_URL;
-    const url = rawUrl ? resolveWebhookUrl(rawUrl, data.mode) : rawUrl;
-    if (!url) {
-      throw new Error(
-        "Secret N8N_ENDORSEMENT_WEBHOOK_URL não configurada. Cole a URL de produção do webhook n8n (/webhook/...).",
+    const { withIntegrationContext, getOperationalContext } =
+      await import("./environment/context.server");
+    const { resolveIntegrationWebhook } = await import("./environment/webhooks.server");
+    return withIntegrationContext(data.mode, async () => {
+      const url = resolveIntegrationWebhook("extraction", getOperationalContext());
+      if (!url) {
+        throw new Error(
+          "Secret N8N_ENDORSEMENT_WEBHOOK_URL não configurada. Cole a URL de produção do webhook n8n (/webhook/...).",
+        );
+      }
+      const secret = process.env.ENDORSEMENT_CALLBACK_SECRET;
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+
+      // Exceções (não enviadas ao n8n para processamento)
+      const { data: exc } = await context.supabase
+        .from("endorsement_exceptions")
+        .select("policy_number");
+      const excluded = ((exc ?? []) as Array<{ policy_number: string }>).map(
+        (e) => e.policy_number,
       );
-    }
-    const secret = process.env.ENDORSEMENT_CALLBACK_SECRET;
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-    // Exceções (não enviadas ao n8n para processamento)
-    const { data: exc } = await context.supabase
-      .from("endorsement_exceptions")
-      .select("policy_number");
-    const excluded = ((exc ?? []) as Array<{ policy_number: string }>).map(
-      (e) => e.policy_number,
-    );
-
-    const { data: runRow, error: insErr } = await supabaseAdmin
-      .from("endorsement_extraction_runs")
-      .insert({ status: "running", total_apolices: 0, raw: {} } as never)
-      .select("id")
-      .single();
-    if (insErr || !runRow) {
-      throw new Error("Falha ao criar execução: " + (insErr?.message ?? "sem id"));
-    }
-    const runId = (runRow as { id: string }).id;
-
-    // Preferimos a origem da requisição atual: garante que o callback aponte
-    // para o mesmo build que está rodando (preview ou produção).
-    let base =
-      process.env.PUBLIC_APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
-    if (!process.env.PUBLIC_APP_URL) {
-      try {
-        const { getRequest } = await import("@tanstack/react-start/server");
-        const origin = new URL(getRequest().url).origin;
-        if (/^https:\/\//.test(origin) && !origin.includes("localhost")) base = origin;
-      } catch {
-        // mantém o fallback
-      }
-    }
-    if (!base) throw new Error("PUBLIC_APP_URL não configurada e nenhuma URL da Vercel disponível.");
-    const normalizedBase = /^https?:\/\//.test(base) ? base : `https://${base}`;
-    const callbackUrl = `${normalizedBase.replace(/\/$/, "")}/api/public/endorsement-extraction-callback?run_id=${runId}`;
-
-
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          run_id: runId,
-          callback_url: callbackUrl,
-          callback_secret_header: "x-callback-secret",
-          // O n8n devolve este valor no header x-callback-secret ao chamar a callback_url.
-          callback_secret: secret ?? null,
-
-          trigger: "ole-copilot",
-          tool: "extrator-ultimos-endossos",
-          mode: "async_callback",
-          excluded_policies: excluded,
-        }),
-      });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(`n8n respondeu ${res.status}. ${body.slice(0, 300)}`);
-      }
-    } catch (err) {
-      await supabaseAdmin
+      const { data: runRow, error: insErr } = await supabaseAdmin
         .from("endorsement_extraction_runs")
-        .update({
-          status: "error",
-          error_message: err instanceof Error ? err.message : String(err),
-          finished_at: new Date().toISOString(),
-        } as never)
-        .eq("id", runId);
-      throw err instanceof Error ? err : new Error(String(err));
-    }
+        .insert({ status: "running", total_apolices: 0, raw: {} } as never)
+        .select("id")
+        .single();
+      if (insErr || !runRow) {
+        throw new Error("Falha ao criar execução: " + (insErr?.message ?? "sem id"));
+      }
+      const runId = (runRow as { id: string }).id;
 
-    if (!secret) {
-      console.warn("[extracao-endossos] ENDORSEMENT_CALLBACK_SECRET não configurado.");
-    }
+      // Preferimos a origem da requisição atual: garante que o callback aponte
+      // para o mesmo build que está rodando (preview ou produção).
+      try {
+        const { registerExecution } = await import("./environment/execution.server");
+        const { resolveAuditCallbackUrl } = await import("./audit/callback-url");
+        await registerExecution(runId, "extraction");
+        const callbackUrl = resolveAuditCallbackUrl(runId, process.env).replace(
+          "/audit-callback?",
+          "/endorsement-extraction-callback?",
+        );
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            run_id: runId,
+            callback_url: callbackUrl,
+            callback_secret_header: "x-callback-secret",
+            // O n8n devolve este valor no header x-callback-secret ao chamar a callback_url.
+            callback_secret: secret ?? null,
 
-    return { runId, status: "running" as const };
+            trigger: "ole-copilot",
+            tool: "extrator-ultimos-endossos",
+            mode: "async_callback",
+            excluded_policies: excluded,
+          }),
+        });
+        if (!res.ok) {
+          throw new Error(`n8n respondeu HTTP ${res.status}.`);
+        }
+      } catch (err) {
+        await supabaseAdmin
+          .from("endorsement_extraction_runs")
+          .update({
+            status: "error",
+            error_message: err instanceof Error ? err.message : String(err),
+            finished_at: new Date().toISOString(),
+          } as never)
+          .eq("id", runId);
+        throw err instanceof Error ? err : new Error(String(err));
+      }
+
+      if (!secret) {
+        console.warn("[extracao-endossos] ENDORSEMENT_CALLBACK_SECRET não configurado.");
+      }
+
+      return { runId, status: "running" as const };
+    });
   });
 
 export const getExtractionStatus = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((d: { runId: string }) => z.object({ runId: z.string().uuid() }).parse(d))
+  .inputValidator((d: { runId: string; mode?: WebhookMode }) =>
+    z
+      .object({ runId: z.string().uuid(), mode: z.enum(["test", "production"]).optional() })
+      .parse(d),
+  )
   .handler(async ({ data }) => {
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { data: run, error } = await supabaseAdmin
-      .from("endorsement_extraction_runs")
-      .select("id, status, total_apolices, error_message, finished_at, duration_ms, created_at")
-      .eq("id", data.runId)
-      .maybeSingle();
-    if (error) throw new Error(error.message);
-    return (run ?? null) as ExtractionRun | null;
+    const { withRegisteredExecution } = await import("./environment/execution.server");
+    return withRegisteredExecution(data.runId, "extraction", async () => {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const { data: run, error } = await supabaseAdmin
+        .from("endorsement_extraction_runs")
+        .select("id, status, total_apolices, error_message, finished_at, duration_ms, created_at")
+        .eq("id", data.runId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return (run ?? null) as ExtractionRun | null;
+    });
   });
 
 /** Última extração concluída, já com as exceções filtradas em runtime. */

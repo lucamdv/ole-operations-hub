@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
 import { BrandMark } from "@/components/brand/brand-mark";
+import { useOperationalEnvironment } from "@/hooks/use-operational-environment";
 
 export const Route = createFileRoute("/auth")({
   ssr: false,
@@ -18,6 +19,7 @@ export const Route = createFileRoute("/auth")({
 });
 
 function AuthPage() {
+  const environment = useOperationalEnvironment();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -45,6 +47,10 @@ function AuthPage() {
   }
 
   async function handleReset() {
+    if (environment.data?.environment !== "production") {
+      toast.info("A recuperação da senha compartilhada deve ser feita na plataforma de produção.");
+      return;
+    }
     if (!email) {
       toast.error("Informe seu e-mail acima primeiro");
       return;
@@ -62,6 +68,11 @@ function AuthPage() {
         <div className="text-center space-y-3">
           <BrandMark height={56} className="mx-auto" />
           <div className="text-[13px] text-muted-foreground">Entrar no Centro de Comando</div>
+          {environment.data?.dataScope === "homolog" && (
+            <p className="text-xs text-warning" role="status">
+              Homologação · mesmo acesso, dados operacionais separados da produção.
+            </p>
+          )}
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">

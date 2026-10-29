@@ -20,9 +20,17 @@ import {
 import { relativeTime } from "@/lib/format";
 import { useCurrentRole } from "@/hooks/use-current-role";
 import { useWebhookMode } from "@/hooks/use-webhook-mode";
+import { getOperationalEnvironment } from "@/lib/environment.functions";
+import type { WebhookIntegration } from "@/lib/webhook-mode";
 
 export function IntegracoesTab() {
   const fetchFn = useServerFn(getIntegrationsStatus);
+  const environmentFn = useServerFn(getOperationalEnvironment);
+  const environmentQuery = useQuery({
+    queryKey: ["operational-environment"],
+    queryFn: () => environmentFn(),
+    staleTime: 60_000,
+  });
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["integrations-status"],
     queryFn: () => fetchFn(),
@@ -31,7 +39,7 @@ export function IntegracoesTab() {
 
   const { data: roleInfo } = useCurrentRole();
   const isAdmin = !!roleInfo?.isAdmin;
-  const { mode, setMode } = useWebhookMode();
+  const environment = environmentQuery.data;
 
   const pingMotor = useServerFn(pingMotorPolicies);
 
@@ -40,71 +48,62 @@ export function IntegracoesTab() {
     onSuccess: (r) => (r.ok ? toast.success(r.message) : toast.error(r.message)),
     onError: (e: Error) => toast.error(e.message),
   });
-  if (isLoading) {
+  if (isLoading || environmentQuery.isLoading) {
     return <div className="text-[13px] text-muted-foreground">Carregando integrações…</div>;
   }
 
   return (
     <div className="space-y-3 max-w-3xl">
-      {isAdmin && (
-        <div className="panel p-4">
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                {mode === "production" ? (
-                  <Rocket className="h-4 w-4 text-success" />
-                ) : (
-                  <FlaskConical className="h-4 w-4 text-warning" />
-                )}
-                <div className="text-[13.5px] font-semibold">
-                  Modo dos webhooks n8n (somente para você)
-                </div>
-              </div>
-              <p className="text-[12px] text-muted-foreground mt-1.5">
-                Esta preferência vale somente para os fluxos n8n que permanecem ativos: auditoria,
-                extração avulsa de endossos e solicitações de correção dos alertas. Em produção, os
-                disparos usam o caminho
-                <code className="mx-1 px-1 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
-                  /webhook/
-                </code>
-                do n8n. Desativado, usam
-                <code className="mx-1 px-1 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
-                  /webhook-test/
-                </code>
-                (exige “Listen for test event”). Essa preferência é salva apenas neste
-                usuário/navegador e não afeta o MOTOR direto de apólices, endossos e cobranças, os
-                outros usuários nem os disparos automáticos.
-              </p>
-              <div
-                className={`text-[11.5px] mt-2 ${mode === "production" ? "text-success" : "text-warning"}`}
-              >
-                Atualmente: {mode === "production" ? "Produção" : "Teste"}
-              </div>
-            </div>
-            <button
-              role="switch"
-              aria-checked={mode === "production"}
-              aria-label="Ativar modo de produção do webhook"
-              onClick={() => {
-                const next = mode === "production" ? "test" : "production";
-                setMode(next);
-                toast.success(
-                  next === "production"
-                    ? "Modo de produção ativado para você"
-                    : "Modo de teste ativado para você",
-                );
-              }}
-              className={`shrink-0 relative h-6 w-11 rounded-full transition ${
-                mode === "production" ? "bg-primary" : "bg-surface-2 border border-border"
-              }`}
-            >
-              <span
-                className={`absolute top-0.5 h-5 w-5 rounded-full bg-background shadow transition-all ${
-                  mode === "production" ? "left-[22px]" : "left-0.5"
-                }`}
-              />
-            </button>
+      {environment && environment.environment !== "production" && (
+        <div className="panel border-warning/30 bg-warning/5 p-4" role="status">
+          <div className="flex items-center gap-2 text-[13.5px] font-semibold text-warning">
+            <FlaskConical className="h-4 w-4" />
+            Ambiente de homologação
+            {environment.environment === "preview" ? " · Preview" : " · Local"}
           </div>
+          <p className="mt-1.5 text-[12px] text-muted-foreground">
+            Todas as operações utilizam dados de homologação (<code>homolog</code>). Acesso
+            operacional à produção indisponível. Agendamentos operacionais{" "}
+            {environment.schedulersEnabled ? "restritos à homologação" : "desabilitados"}.
+          </p>
+        </div>
+      )}
+      {environmentQuery.isError && (
+        <div className="panel p-4 text-[12px] text-destructive" role="alert">
+          Não foi possível confirmar o ambiente operacional. Os seletores ficam indisponíveis até a
+          confirmação do servidor.
+        </div>
+      )}
+      {isAdmin && environment && (
+        <div className="panel p-4">
+          <div className="text-[13.5px] font-semibold">Modo dos webhooks n8n</div>
+          <p className="text-[12px] text-muted-foreground mt-1.5">
+            Cada integração tem sua própria preferência neste navegador. Os seletores afetam somente
+            os disparos manuais e seus resultados. Os dashboards de produção continuam exibindo
+            dados produtivos; consulte os resultados de teste no Preview de homologação. Os
+            agendamentos e os demais usuários mantêm sua configuração própria.
+          </p>
+          <div className="mt-3 divide-y divide-border">
+            <WebhookModeControl
+              integration="audit"
+              label="Auditoria de emissão"
+              allowProduction={environment.environment === "production"}
+            />
+            <WebhookModeControl
+              integration="extraction"
+              label="Extração de endossos"
+              allowProduction={environment.environment === "production"}
+            />
+            <WebhookModeControl
+              integration="correction"
+              label="Solicitações de correção"
+              allowProduction={environment.environment === "production"}
+            />
+          </div>
+          <p className="mt-2 text-[11.5px] text-muted-foreground">
+            O modo teste exige “Listen for test event” no n8n e utiliza exclusivamente dados de{" "}
+            <code>homolog</code>.
+          </p>
         </div>
       )}
       {(data ?? []).map((it) => (
@@ -135,6 +134,63 @@ export function IntegracoesTab() {
         </code>
         no backend.
       </p>
+    </div>
+  );
+}
+
+function WebhookModeControl({
+  integration,
+  label,
+  allowProduction,
+}: {
+  integration: WebhookIntegration;
+  label: string;
+  allowProduction: boolean;
+}) {
+  const preference = useWebhookMode(integration);
+  const mode = allowProduction ? preference.mode : "test";
+  const isProduction = mode === "production";
+  return (
+    <div className="flex items-start justify-between gap-4 py-3">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2 text-[13px] font-medium">
+          {isProduction ? (
+            <Rocket className="h-4 w-4 text-success" />
+          ) : (
+            <FlaskConical className="h-4 w-4 text-warning" />
+          )}
+          {label}
+        </div>
+        <div className={`mt-1 text-[11.5px] ${isProduction ? "text-success" : "text-warning"}`}>
+          Modo: {isProduction ? "Produção" : "Teste"} · Webhook:{" "}
+          <code>{isProduction ? "/webhook/" : "/webhook-test/"}</code> · Dados:{" "}
+          <code>{isProduction ? "public" : "homolog"}</code>
+        </div>
+      </div>
+      {allowProduction ? (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={isProduction}
+          aria-label={`Ativar modo de produção: ${label}`}
+          onClick={() => {
+            const next = isProduction ? "test" : "production";
+            preference.setMode(next);
+            toast.success(
+              `${label}: modo ${next === "production" ? "produção" : "teste"} ativado neste navegador`,
+            );
+          }}
+          className={`shrink-0 relative h-6 w-11 rounded-full transition ${isProduction ? "bg-primary" : "bg-surface-2 border border-border"}`}
+        >
+          <span
+            className={`absolute top-0.5 h-5 w-5 rounded-full bg-background shadow transition-all ${isProduction ? "left-[22px]" : "left-0.5"}`}
+          />
+        </button>
+      ) : (
+        <span className="shrink-0 rounded border border-warning/30 px-2 py-1 text-[11px] text-warning">
+          Teste fixo
+        </span>
+      )}
     </div>
   );
 }
