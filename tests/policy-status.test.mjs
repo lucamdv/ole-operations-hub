@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { derivePolicyStatus } from "../src/lib/policies/status.ts";
+import { derivePolicyStatus, policyStatusDescription } from "../src/lib/policies/status.ts";
 
 const REFERENCE = "2026-09-16T12:00:00-03:00";
 
@@ -95,5 +95,115 @@ test("cancelamento tem precedência sobre suspensão e atraso", () => {
       1,
     ),
     "CANCELADA",
+  );
+});
+
+const issuance = (sequencial, tipo_endosso = "A") => ({
+  sequencial,
+  tipo_endosso,
+  motivo_endosso: null,
+});
+const cancellation = (sequencial, numero_endosso_cancelado, motivo_endosso = null) => ({
+  sequencial,
+  numero_endosso_cancelado,
+  tipo_endosso: "C",
+  motivo_endosso,
+});
+const original = (overrides = {}) => billing({ numero_endosso: "000000", ...overrides });
+
+test("C com alvo na emissão original e sem substituição cancela apesar do pagamento em aberto", () => {
+  const info = derivePolicyStatus(
+    [original({ situacao_emissao: "Cancelada", data_vencimento: "2025-12-08" })],
+    [issuance("000000", null), cancellation("000001", "000000", "ERRO_EMISSAO")],
+    { referenceAt: REFERENCE },
+  );
+  assert.equal(info.status, "CANCELADA");
+  assert.match(policyStatusDescription(info, 10), /document/i);
+});
+
+test("C documental inequívoco cancela a emissão mesmo sem cobrança", () => {
+  assert.equal(status([], [cancellation("000001", "000000")]), "CANCELADA");
+});
+
+test("C seguido de A vigente usa a cobrança do documento substituto", () => {
+  const docs = [cancellation("000001", "000000"), issuance("000002")];
+  const staleOriginal = original({ data_vencimento: "2025-12-08" });
+  assert.equal(
+    status([staleOriginal, billing({ numero_endosso: "000002", status_pagamento: "Total" })], docs),
+    "PAGA",
+  );
+  assert.equal(
+    status([staleOriginal, billing({ numero_endosso: "000002" })], docs),
+    "ABERTA",
+  );
+  assert.equal(status([], docs), "ABERTA");
+});
+
+test("C que cancela apenas documento secundário não cancela a emissão original", () => {
+  assert.equal(
+    status(
+      [original({ status_pagamento: "Total" }), billing({ data_vencimento: "2025-12-08" })],
+      [issuance("000001", "B"), cancellation("000002", "000001")],
+    ),
+    "PAGA",
+  );
+});
+
+test("substituto cancelado também não mantém a apólice ativa; ordem e duplicatas não importam", () => {
+  const docs = [
+    cancellation("000001", "000000"),
+    issuance("000002"),
+    cancellation("000003", "000002"),
+  ];
+  const rows = [
+    original({ situacao_emissao: "Cancelada" }),
+    billing({ numero_endosso: "000002", situacao_emissao: "Cancelada" }),
+  ];
+  assert.equal(status(rows, docs), "CANCELADA");
+  assert.equal(status([...rows, rows[0]].reverse(), [...docs, docs[0]].reverse()), "CANCELADA");
+});
+
+test("substituto sem baixa documental impede concluir cancelamento apenas pela cobrança", () => {
+  assert.equal(
+    status(
+      [original({ situacao_emissao: "Cancelada" }), billing({ numero_endosso: "000002", situacao_emissao: "Cancelada" })],
+      [cancellation("000001", "000000"), issuance("000002")],
+    ),
+    "ABERTA",
+  );
+});
+
+test("C por inadimplência continua suspenso mesmo fechando a emissão original", () => {
+  assert.equal(
+    status(
+      [original({ situacao_emissao: "Cancelada" })],
+      [cancellation("000001", "000000", "INADIMPLÊNCIA")],
+    ),
+    "SUSPENSA",
+  );
+});
+
+test("não converte evidência ambígua ou incompleta em cancelamento", () => {
+  const cancelledBilling = [original({ situacao_emissao: "Cancelada" })];
+  for (const docs of [
+    [],
+    [cancellation("000001", null)],
+    [cancellation(null, "000000")],
+    [cancellation("000001", "000002")],
+    [cancellation("000002", "000000")],
+    [cancellation("000001", "000000"), issuance("000002", null)],
+    [cancellation("000001", "000000"), cancellation("000001", "000002")],
+    [cancellation("000001", "000000"), issuance("000001")],
+    [cancellation("000001", "000000"), cancellation("000002", "000001")],
+  ]) {
+    assert.equal(status(cancelledBilling, docs), "ABERTA", JSON.stringify(docs));
+  }
+  assert.equal(status([original()], [cancellation("000001", "000000")]), "ABERTA");
+  assert.equal(
+    status(
+      [...cancelledBilling, billing({ numero_endosso: "000002", situacao_emissao: "Cancelada" })],
+      [cancellation("000001", "000000")],
+    ),
+    "ABERTA",
   );
 });

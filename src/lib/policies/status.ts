@@ -6,6 +6,8 @@ export type PolicyStatus =
 export interface PolicyEndorsementSignal {
   tipo_endosso: string | null;
   motivo_endosso: string | null;
+  sequencial?: string | null;
+  numero_endosso_cancelado?: string | null;
 }
 
 export interface PolicyStatusRules {
@@ -19,6 +21,7 @@ export interface PolicyStatusInfo {
   oldestOverdueDate: string | null;
   daysOverdue: number;
   unpaidRecords: number;
+  cancelamentoDocumental?: true;
 }
 
 export const DEFAULT_POLICY_STATUS_RULES: PolicyStatusRules = {
@@ -95,6 +98,66 @@ function hasEndorsementReason(
   );
 }
 
+const ORIGINAL = "000000";
+
+/** A short sequence or a complete document number belonging to this policy. */
+export function policyDocumentSequence(
+  value: string | null | undefined,
+  policyNumber?: string,
+): string | null {
+  const number = value?.trim() ?? "";
+  if (!/^\d+$/.test(number)) return null;
+  if (number.length <= 6) return number.padStart(6, "0");
+  if (
+    policyNumber &&
+    number.length === policyNumber.length &&
+    number.slice(0, -6) === policyNumber.slice(0, -6)
+  ) return number.slice(-6);
+  return null;
+}
+
+function documentChain(endorsements: PolicyEndorsementSignal[], rows: BillingRecord[]) {
+  if (!endorsements.some((item) => normalized(item.tipo_endosso) === "C")) return null;
+
+  const documents = new Map<string, { type: string; target: string | null }>([
+    [ORIGINAL, { type: "", target: null }],
+  ]);
+  let lastSequence = 0;
+  for (const item of endorsements) {
+    const sequence = policyDocumentSequence(item.sequencial);
+    const type = normalized(item.tipo_endosso);
+    if (sequence === ORIGINAL && !type) continue;
+    if (!sequence || sequence === ORIGINAL || !["A", "B", "C"].includes(type)) return null;
+    const target = type === "C" ? policyDocumentSequence(item.numero_endosso_cancelado) : null;
+    if (type === "C" && (!target || target >= sequence)) return null;
+    const previous = documents.get(sequence);
+    if (previous && (previous.type !== type || previous.target !== target)) return null;
+    documents.set(sequence, { type, target });
+    lastSequence = Math.max(lastSequence, Number(sequence));
+  }
+
+  const cancelled = new Set<string>();
+  for (const { target } of documents.values()) {
+    if (!target) continue;
+    const document = documents.get(target);
+    if (!document || document.type === "C") return null;
+    cancelled.add(target);
+  }
+
+  const hasSurvivor = [...documents].some(([seq, doc]) => doc.type !== "C" && !cancelled.has(seq));
+  // A missing sequence, unknown billing document, or active issuance in the
+  // billing source cannot prove the entire chain is closed.
+  const closed =
+    !hasSurvivor &&
+    cancelled.has(ORIGINAL) &&
+    documents.size === lastSequence + 1 &&
+    rows.every((row) => {
+      const seq = policyDocumentSequence(row.numero_endosso, row.numero_apolice);
+      return seq !== null && documents.has(seq) && isCancelledBilling(row);
+    });
+  return { cancelled, hasSurvivor, closed };
+}
+
 /**
  * Consolida o estado da apólice inteira.
  *
@@ -115,7 +178,14 @@ export function derivePolicyStatus(
     Math.floor(options.delinquencyAfterDays ?? DEFAULT_POLICY_STATUS_RULES.delinquencyAfterDays),
   );
   const today = referenceDate(options.referenceAt ?? Date.now());
-  const activeRows = rows.filter((row) => !isCancelledBilling(row));
+  const rescinded = hasEndorsementReason(endorsements, "A", "RESILI");
+  const suspended = !rescinded && hasEndorsementReason(endorsements, "C", "INADIMPL");
+  const chain = rescinded || suspended ? null : documentChain(endorsements, rows);
+  const activeRows = rows.filter((row) => {
+    if (isCancelledBilling(row)) return false;
+    const sequence = policyDocumentSequence(row.numero_endosso, row.numero_apolice);
+    return !(chain?.hasSurvivor && sequence && chain.cancelled.has(sequence));
+  });
   const unpaidRows = activeRows.filter((row) => !isPaidBilling(row));
   const unpaidDueDates = unpaidRows
     .map((row) => civilDate(row.data_vencimento))
@@ -123,17 +193,18 @@ export function derivePolicyStatus(
     .sort();
   const dataVencimento = unpaidDueDates[0] ?? null;
 
-  if (hasEndorsementReason(endorsements, "A", "RESILI")) {
+  if (rescinded || chain?.closed) {
     return {
       status: "CANCELADA",
       dataVencimento,
       oldestOverdueDate: null,
       daysOverdue: 0,
       unpaidRecords: unpaidRows.length,
+      ...(chain?.closed ? { cancelamentoDocumental: true } : {}),
     };
   }
 
-  if (hasEndorsementReason(endorsements, "C", "INADIMPL")) {
+  if (suspended) {
     return {
       status: "SUSPENSA",
       dataVencimento,
@@ -193,7 +264,9 @@ export function policyStatusDescription(
 ): string {
   switch (info.status) {
     case "CANCELADA":
-      return "Endosso A com motivo de resilição";
+      return info.cancelamentoDocumental
+        ? "Emissão cancelada por endosso C, sem documento vigente na cadeia documental"
+        : "Endosso A com motivo de resilição";
     case "SUSPENSA":
       return "Endosso C com motivo de inadimplência";
     case "INADIMPLENTE":

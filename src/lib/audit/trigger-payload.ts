@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { dedupeBillingRecords, type BillingRecord } from "../billing/status.ts";
-import { translateProposta } from "../excelsior/translate.ts";
+import { policyEndorsementSignal } from "../excelsior/translate.ts";
 import {
   derivePolicyStatus,
   type PolicyEndorsementSignal,
@@ -54,7 +54,7 @@ export interface AuditIgnoreSource {
 }
 export interface AuditExclusionsInput {
   policies: Array<{ numero_apolice: string }>;
-  endorsements: Array<{ numero_apolice: string; proposta: unknown }>;
+  endorsements: Array<{ numero_apolice: string; numero_endosso?: string; proposta: unknown }>;
   billing: BillingRecord[];
   ignores: AuditIgnoreSource[];
   referenceAt: string;
@@ -90,20 +90,8 @@ export function buildAuditExclusions(input: AuditExclusionsInput): AuditExclusio
   }
   const signalsByPolicy = new Map<string, PolicyEndorsementSignal[]>();
   for (const row of input.endorsements) {
-    const translated = translateProposta(row.proposta);
     const signals = signalsByPolicy.get(row.numero_apolice) ?? [];
-    signals.push({
-      tipo_endosso: translated.tipoEndosso,
-      motivo_endosso: [
-        translated.motivoEndosso?.codigo,
-        translated.motivoEndosso?.descricao,
-        translated.motivoEndosso?.tipoCancelamento,
-        translated.cancelamento?.motivo,
-        translated.cancelamento?.descricaoMotivo,
-      ]
-        .filter(Boolean)
-        .join(" "),
-    });
+    signals.push(policyEndorsementSignal(row));
     signalsByPolicy.set(row.numero_apolice, signals);
   }
   const statuses = new Map<string, PolicyStatus>();

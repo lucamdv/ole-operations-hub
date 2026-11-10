@@ -59,7 +59,7 @@ export async function loadAuditExclusionsSnapshot(
 
   const [policies, endorsements, billing, ignores] = await Promise.all([
     readPages<{ numero_apolice: string }>("policies"),
-    readPages<{ numero_apolice: string; proposta: unknown }>("endorsements"),
+    readPages<{ numero_apolice: string; numero_endosso: string; proposta: unknown }>("endorsements"),
     readPages<BillingRecord>("policy_billing"),
     // Whole-policy entries are read ONLY for diagnostics, never mapped to a status.
     readPages<AuditIgnoreSource>("audit_ignores"),

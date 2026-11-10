@@ -63,6 +63,7 @@ test("01/02/03/04: exclui somente CANCELADA e SUSPENSA pela derivação canônic
     endorsements: [
       endorsement("0001", "A", "RESILIÇÃO"),
       endorsement("0002", "C", "INADIMPLENCIA"),
+      // Legacy C without an explicit target: a canceled billing row proves nothing.
       endorsement("0007", "C", "ERRO_EMISSAO"),
     ],
     billing: [
@@ -77,6 +78,51 @@ test("01/02/03/04: exclui somente CANCELADA e SUSPENSA pela derivação canônic
     { apolice: "0001", status: "CANCELADA", motivo: "Status operacional: CANCELADA" },
     { apolice: "0002", status: "SUSPENSA", motivo: "Status operacional: SUSPENSA" },
   ]);
+});
+
+function document(numero_apolice, numero_endosso, type, fields = {}, envelope = {}) {
+  return {
+    numero_apolice,
+    numero_endosso,
+    proposta: type
+      ? {
+          [`endosso_${type}`]: {
+            [`proposta_endosso_${type}`]: fields,
+            ...envelope,
+          },
+        }
+      : { itens: [] },
+  };
+}
+
+test("payload v2 exclui a emissão definitivamente cancelada e preserva a substituição vigente", () => {
+  const closed = "000000000000000000000001000000";
+  const replaced = "000000000000000000000002000000";
+  const cancelledOriginal = { numero_endosso: "000000", situacao_emissao: "Cancelada", status_pagamento: "Aberta" };
+  const result = payload(exclusions({
+    policies: [policy(closed), policy(replaced)],
+    endorsements: [
+      document(closed, "000000", null),
+      document(closed, "000001", "C", { numero_endosso_cancelado: "000000", motivo_endosso: "ERRO_EMISSAO" }, { numero_documento_seguradora: closed.slice(0, -6) + "000001" }),
+      document(replaced, "000001", "C", { numero_endosso_cancelado: replaced }),
+      document(replaced, "000002", "A", { proposta: { itens: [] } }),
+    ],
+    billing: [billing(closed, cancelledOriginal), billing(replaced, cancelledOriginal), billing(replaced, { numero_endosso: "000002" })],
+  }));
+  assert.deepEqual(result.apolices_excluidas, [
+    { apolice: closed, status: "CANCELADA", motivo: "Status operacional: CANCELADA" },
+  ]);
+});
+
+test("identidades completas de outra apólice e alvos conflitantes não geram exclusão", () => {
+  const numero = "000000000000000000000001000000";
+  for (const row of [
+    document(numero, "000001", "C", { numero_endosso_cancelado: "000000000000000000000002000000" }),
+    document(numero, "000001", "C", { numero_endosso_cancelado: "000000", proposta: { numero_endosso_cancelado: "000002" } }),
+    document(numero, "000001", "C", { numero_endosso_cancelado: "000000" }, { numero_documento_seguradora: numero.slice(0,-6) + "000002" }),
+  ]) {
+    assert.deepEqual(exclusions({ policies: [policy(numero)], endorsements: [row] }).apolices_excluidas, []);
+  }
 });
 
 test("05/06: preserva nomes canônicos e múltiplos tipos da mesma apólice", () => {

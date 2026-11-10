@@ -1,4 +1,5 @@
 import { sistemaOrigemLabel } from "./codes.ts";
+import { policyDocumentSequence, type PolicyEndorsementSignal } from "../policies/status.ts";
 
 // ====== Tipos do retorno do parser (o que os componentes consomem) ======
 export type TipoEndosso = "A" | "B" | "C";
@@ -577,6 +578,38 @@ export function translateProposta(input: unknown): PropostaTraduzida {
     numeroDocumento,
     raw: proposta,
     isWrapperVazio,
+  };
+}
+
+/** Shared adapter for status readers; keep the database and envelope IDs in agreement. */
+export function policyEndorsementSignal(row: {
+  numero_apolice: string;
+  numero_endosso?: string | null;
+  proposta: unknown;
+}): PolicyEndorsementSignal {
+  const { proposta, envelope, tipoEndosso } = unwrapProposta(row.proposta);
+  const motivo = parseMotivoEndosso(proposta, envelope);
+  const cancelamento = parseCancelamento(proposta, tipoEndosso);
+  const wrapper = envelope?.[`proposta_endosso_${tipoEndosso}`];
+  const sequence = (...values: (string | null | undefined)[]) => {
+    const candidates = new Set(
+      values.filter((value): value is string => value != null)
+        .map((value) => policyDocumentSequence(value, row.numero_apolice)),
+    );
+    return candidates.size === 1 ? [...candidates][0]! : null;
+  };
+  return {
+    tipo_endosso: tipoEndosso,
+    motivo_endosso: [
+      motivo?.codigo, motivo?.descricao, motivo?.tipoCancelamento,
+      cancelamento?.motivo, cancelamento?.descricaoMotivo,
+    ].filter(Boolean).join(" ") || null,
+    sequencial: sequence(row.numero_endosso, asStr(envelope?.numero_documento_seguradora)),
+    numero_endosso_cancelado: sequence(
+      asStr(proposta.numero_endosso_cancelado),
+      isObj(wrapper) ? asStr(wrapper.numero_endosso_cancelado) : null,
+      asStr(envelope?.numero_endosso_cancelado),
+    ),
   };
 }
 

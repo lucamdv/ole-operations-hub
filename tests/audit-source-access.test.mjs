@@ -21,7 +21,7 @@ test("audit source capability only reads four public tables with fixed minimal p
   const source = createAuditSourceReadAccess(client);
   const projections = {
     policies: "id, numero_apolice",
-    endorsements: "id, numero_apolice, proposta",
+    endorsements: "id, numero_apolice, numero_endosso, proposta",
     policy_billing:
       "id, numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_quitacao, data_vencimento, updated_at",
     audit_ignores: "id, scope, apolice, tipo_erro, motivo",

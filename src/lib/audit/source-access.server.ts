@@ -4,7 +4,7 @@ import type { Database } from "../../integrations/supabase/types.ts";
 /** The only production-source exception for audit preparation. Never use for result storage. */
 export const AUDIT_SOURCE_COLUMNS = Object.freeze({
   policies: "id, numero_apolice",
-  endorsements: "id, numero_apolice, proposta",
+  endorsements: "id, numero_apolice, numero_endosso, proposta",
   policy_billing:
     "id, numero_apolice, numero_endosso, numero_parcela, id_parcela_seguradora, numero_proposta, status_pagamento, situacao_emissao, data_quitacao, data_vencimento, updated_at",
   audit_ignores: "id, scope, apolice, tipo_erro, motivo",
