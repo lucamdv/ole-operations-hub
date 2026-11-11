@@ -52,7 +52,9 @@ export function createScopedAccess(
       };
     },
     rpc(name: string, args?: Record<string, unknown>) {
-      if (name !== "claim_billing_sync_fallbacks")
+      // Explicitly reviewed operational RPCs. Each resolves inside the
+      // registered run's schema, never from callback/query body hints.
+      if (name !== "claim_billing_sync_fallbacks" && name !== "commit_audit_callback")
         throw new Error("RPC fora do escopo autorizado.");
       return client.schema(context().schema as "public").rpc(name, args);
     },
