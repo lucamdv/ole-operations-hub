@@ -166,7 +166,7 @@ export function useRunAudit() {
 
   const cancelMutation = useMutation({
     mutationFn: async () => {
-      const runId = activeQuery.data?.id ?? activeRunId;
+      const runId = activeRunId ?? activeQuery.data?.id;
       if (!runId) throw new Error("Nenhuma auditoria em andamento.");
       return cancelFn({ data: { runId, reason: "manual" } });
     },
@@ -193,7 +193,7 @@ export function useRunAudit() {
     isRunning: mutation.isPending || isPolling || Boolean(activeQuery.data?.id),
     isStarting: mutation.isPending,
     isCancelling: cancelMutation.isPending,
-    activeRunId: activeQuery.data?.id ?? activeRunId,
+    activeRunId: activeRunId ?? activeQuery.data?.id ?? null,
     activeRunCreatedAt: activeQuery.data?.created_at ?? null,
     cancel: () => cancelMutation.mutate(),
   };
