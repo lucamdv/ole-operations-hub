@@ -77,15 +77,35 @@ async function dispatchAudit(trigger: string) {
     if (cancellationError) throw new AuditDispatchError("Falha ao cancelar execução anterior.");
     // Configuration failures after insert must also close the run as error.
     const callbackUrl = resolveAuditCallbackUrl(runId, process.env);
-    const useV3 =
+    const previewV3 =
       context.environment === "preview" &&
       context.schema === "homolog" &&
       context.webhookMode === "test" &&
       process.env.AUDIT_TEST_CONTRACT_VERSION === "3";
-    if (useV3 && new URL(callbackUrl).origin !== AUDIT_V3_PREVIEW_ORIGIN) {
+    // Production stays on v2 until the original n8n has been upgraded,
+    // the public SQL RPC has been installed and this opt-in is configured.
+    const productionV3 =
+      context.environment === "production" &&
+      context.schema === "public" &&
+      context.webhookMode === "production" &&
+      process.env.AUDIT_PRODUCTION_CONTRACT_VERSION === "3";
+    const useV3 = previewV3 || productionV3;
+    if (previewV3 && new URL(callbackUrl).origin !== AUDIT_V3_PREVIEW_ORIGIN) {
       throw new AuditCallbackConfigurationError(
         "O contrato v3 requer o alias de homologação preparado no workflow de teste.",
       );
+    }
+    if (productionV3) {
+      const destination = new URL(url);
+      if (
+        new URL(callbackUrl).origin !== "https://olexcockpit.vercel.app" ||
+        !destination.pathname.includes("/webhook/") ||
+        destination.pathname.includes("/webhook-test/")
+      ) {
+        throw new AuditCallbackConfigurationError(
+          "Contrato v3 de produção exige callback oficial e webhook n8n publicado.",
+        );
+      }
     }
 
     const snapshot = await loadProductionAuditExclusionsSnapshot();
@@ -99,11 +119,15 @@ async function dispatchAudit(trigger: string) {
     });
     phase = "persisting";
     // The callback validates results against this persisted snapshot.
-    const { error: snapshotError } = await supabaseAdmin
+    const { data: persisted, error: snapshotError } = await supabaseAdmin
       .from("audit_runs")
       .update({ raw: { ...payload, exclusions_diagnostics: snapshot.diagnostics } } as never)
-      .eq("id", runId);
+      .eq("id", runId)
+      .eq("status", "running")
+      .select("id")
+      .maybeSingle();
     if (snapshotError) throw new AuditDispatchError("Falha ao persistir snapshot da auditoria.");
+    if (!persisted) return { runId, status: "cancelled" as const };
 
     console.info("[audit-run] contrato preparado", {
       run_id: runId,
