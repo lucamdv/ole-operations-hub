@@ -215,3 +215,16 @@ test("falhas HTTP e de rede não expõem respostas ou URLs privadas", async (t) 
   assert.equal(db.state.status, "error");
   assert.doesNotMatch(JSON.stringify({ state: db.state, logs }), /SECRET|private.example/);
 });
+
+test("novo disparo cancela somente runs anteriores antes de consultar o n8n", async (t) => {
+  const { db, sent } = setup(t);
+  await runAuditImpl("ole-copilot", "test");
+  assert.equal(sent.length, 1);
+  const cancellation = db.writes.find(({ body }) => body.status === "cancelled");
+  assert.ok(cancellation, "a run anterior precisa ser cancelada");
+  assert.equal(cancellation.search.get("status"), "eq.running");
+  assert.equal(cancellation.search.get("id"), `neq.${RUN_ID}`);
+  assert.match(cancellation.search.get("created_at"), /^lt\./);
+  assert.match(cancellation.body.mensagem_geral, /automaticamente|nova auditoria/);
+  assert.equal(db.state.status, "running", "a nova execução permanece em andamento");
+});
