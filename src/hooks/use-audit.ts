@@ -47,6 +47,8 @@ export function useRunAudit() {
   const { mode } = useWebhookMode("audit");
 
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  // Local start time belongs to the SAME run as activeRunId, never an old cached query.
+  const [activeRunStartedAt, setActiveRunStartedAt] = useState<string | null>(null);
   const [isPolling, setIsPolling] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollingRun = useRef<string | null>(null);
@@ -74,6 +76,13 @@ export function useRunAudit() {
     }
     setIsPolling(false);
     setActiveRunId(null);
+    setActiveRunStartedAt(null);
+    // A consulta anterior pode estar em cache durante alguns segundos.
+    // Limpa apenas se ela ainda apontar para a run que acabou.
+    qc.setQueryData<{ id: string; created_at: string; status: string } | null>(
+      ["audit", "active", mode],
+      (cached) => (cached?.id === runId ? null : cached),
+    );
   };
 
   const refreshAudit = () => {
@@ -139,9 +148,17 @@ export function useRunAudit() {
     },
     onSuccess: ({ runId, submittedMode, status }) => {
       if (pollTimer.current) clearTimeout(pollTimer.current);
+      const startedAt = new Date().toISOString();
       pollingRun.current = runId;
       setActiveRunId(runId);
+      setActiveRunStartedAt(startedAt);
       setIsPolling(status === "running");
+      // Substitui imediatamente o cache da run antiga, sem esperar o refetch de 3 s.
+      qc.setQueryData(["audit", "active", submittedMode], {
+        id: runId,
+        created_at: startedAt,
+        status,
+      });
       refreshAudit();
       if (status === "cancelled") {
         toast.info("Execução substituída", {
@@ -154,7 +171,7 @@ export function useRunAudit() {
         description: "Aguardando retorno do motor n8n…",
       });
       pollTimer.current = setTimeout(
-        () => pollOnce(runId, Date.now(), submittedMode),
+        () => pollOnce(runId, new Date(startedAt).getTime(), submittedMode),
         3_000,
       );
     },
@@ -172,6 +189,10 @@ export function useRunAudit() {
     },
     onSuccess: (result) => {
       stopPolling(result.runId);
+      qc.setQueryData<{ id: string; created_at: string; status: string } | null>(
+        ["audit", "active", mode],
+        (cached) => (cached?.id === result.runId ? null : cached),
+      );
       refreshAudit();
       if (result.status === "cancelled") {
         toast.info("Auditoria cancelada", {
@@ -194,7 +215,9 @@ export function useRunAudit() {
     isStarting: mutation.isPending,
     isCancelling: cancelMutation.isPending,
     activeRunId: activeRunId ?? activeQuery.data?.id ?? null,
-    activeRunCreatedAt: activeQuery.data?.created_at ?? null,
+    activeRunCreatedAt: activeRunId
+      ? activeRunStartedAt
+      : (activeQuery.data?.created_at ?? null),
     cancel: () => cancelMutation.mutate(),
   };
 }
