@@ -47,7 +47,7 @@ async function dispatchAudit(trigger: string) {
       origem: trigger === "scheduler" ? "auto" : "manual",
       raw: {},
     } as never)
-    .select("id")
+    .select("id, created_at")
     .single();
 
   if (insertErr || !runRow) {
@@ -60,6 +60,21 @@ async function dispatchAudit(trigger: string) {
   let phase: "preparing" | "persisting" | "sending" = "preparing";
   try {
     await registerExecution(runId, "audit");
+    // O disparo mais recente cancela os anteriores. Não toca em execuções mais novas,
+    // inclusive quando duas requisições começam quase simultaneamente.
+    const createdAt = (runRow as { created_at?: string }).created_at ?? new Date().toISOString();
+    const { error: cancellationError } = await supabaseAdmin
+      .from("audit_runs")
+      .update({
+        status: "cancelled",
+        status_geral: "CANCELADA",
+        mensagem_geral: "Cancelada automaticamente pelo início de uma nova auditoria.",
+        error_message: null,
+      } as never)
+      .eq("status", "running")
+      .neq("id", runId)
+      .lt("created_at", createdAt);
+    if (cancellationError) throw new AuditDispatchError("Falha ao cancelar execução anterior.");
     // Configuration failures after insert must also close the run as error.
     const callbackUrl = resolveAuditCallbackUrl(runId, process.env);
     const useV3 =
@@ -108,6 +123,15 @@ async function dispatchAudit(trigger: string) {
       preparation_ms: Date.now() - startedAt,
     });
     phase = "sending";
+    // Uma chamada concorrente pode ter cancelado esta execução durante o preparo.
+    const { data: stillRunning, error: stateError } = await supabaseAdmin
+      .from("audit_runs")
+      .select("id")
+      .eq("id", runId)
+      .eq("status", "running")
+      .maybeSingle();
+    if (stateError) throw new AuditDispatchError("Falha ao validar estado da auditoria.");
+    if (!stillRunning) return { runId, status: "cancelled" as const };
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -150,7 +174,8 @@ async function dispatchAudit(trigger: string) {
             error_message: msg,
             duration_ms: Date.now() - startedAt,
           } as never)
-          .eq("id", runId);
+          .eq("id", runId)
+          .eq("status", "running");
         closed = !error;
       } catch {
         /* Retry a transient failure without logging provider data. */
