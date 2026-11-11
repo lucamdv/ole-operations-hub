@@ -37,6 +37,8 @@ function setup(t, data = cancelledPolicyData(), options = {}) {
     PUBLIC_APP_URL: "https://cockpit.example",
     VERCEL_PROJECT_PRODUCTION_URL: "",
     VERCEL_URL: "",
+    VERCEL_BRANCH_URL: "",
+    AUDIT_TEST_CONTRACT_VERSION: "",
     VERCEL_ENV: "production",
     SUPABASE_SERVICE_ROLE_KEY: "SECRET-NEVER-SEND",
     AUDIT_CALLBACK_SECRET: "SECRET-CALLBACK",
@@ -65,7 +67,9 @@ function setup(t, data = cancelledPolicyData(), options = {}) {
     const body = JSON.parse(init.body);
     sent.push({ url, body });
     assert.ok(
-      db.writes.some((write) => write.body.raw?.audit_contract_version === 2),
+      db.writes.some(
+        (write) => write.body.raw?.audit_contract_version === body.audit_contract_version,
+      ),
       "snapshot must be stored before HTTP send",
     );
     if (options.networkError) throw new Error("SECRET-NEVER-SEND https://private.example/token");
@@ -155,6 +159,31 @@ test("preview sem domínio próprio não envia e encerra execução como error",
   const { db, sent } = setup(t);
   process.env.VERCEL_ENV = "preview";
   await assert.rejects(runAuditImpl(), /VERCEL_URL/);
+  assert.equal(sent.length, 0);
+  assert.equal(db.state.status, "error");
+});
+
+test("v3 requer ativação no Preview e nunca usa o webhook produtivo", async (t) => {
+  const { sent, db } = setup(t);
+  process.env.AUDIT_TEST_CONTRACT_VERSION = "3";
+  await runAuditImpl("ole-copilot", "test");
+  assert.equal(sent[0].body.audit_contract_version, 2);
+  process.env.VERCEL_ENV = "preview";
+  process.env.VERCEL_BRANCH_URL =
+    "olexcockpit-git-codex-env-homolo-3ffb4d-luca-monteiros-projects.vercel.app";
+  await runAuditImpl("ole-copilot", "production");
+  assert.match(sent[1].url, /\/webhook-test\//);
+  assert.equal(sent[1].body.audit_contract_version, 3);
+  assert.deepEqual(sent[1].body.apolices_dispensadas, []);
+  assert.ok(db.writes.some(({ body }) => body.raw?.audit_contract_version === 3));
+});
+
+test("v3 recusa callback fora do alias preparado para o workflow de teste", async (t) => {
+  const { sent, db } = setup(t);
+  process.env.AUDIT_TEST_CONTRACT_VERSION = "3";
+  process.env.VERCEL_ENV = "preview";
+  process.env.VERCEL_URL = "preview-temporario.vercel.app";
+  await assert.rejects(runAuditImpl(), /alias de homologação/);
   assert.equal(sent.length, 0);
   assert.equal(db.state.status, "error");
 });

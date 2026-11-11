@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  normalizeEmissionDocument,
+  selectMissingEndorsementDocuments,
+} from "../src/lib/excelsior/motor-sync.core.ts";
+import {
   buildAuditExclusions,
   buildAuditTriggerPayload,
   AuditTriggerPayloadSchema,
@@ -98,17 +102,33 @@ function document(numero_apolice, numero_endosso, type, fields = {}, envelope = 
 test("payload v2 exclui a emissão definitivamente cancelada e preserva a substituição vigente", () => {
   const closed = "000000000000000000000001000000";
   const replaced = "000000000000000000000002000000";
-  const cancelledOriginal = { numero_endosso: "000000", situacao_emissao: "Cancelada", status_pagamento: "Aberta" };
-  const result = payload(exclusions({
-    policies: [policy(closed), policy(replaced)],
-    endorsements: [
-      document(closed, "000000", null),
-      document(closed, "000001", "C", { numero_endosso_cancelado: "000000", motivo_endosso: "ERRO_EMISSAO" }, { numero_documento_seguradora: closed.slice(0, -6) + "000001" }),
-      document(replaced, "000001", "C", { numero_endosso_cancelado: replaced }),
-      document(replaced, "000002", "A", { proposta: { itens: [] } }),
-    ],
-    billing: [billing(closed, cancelledOriginal), billing(replaced, cancelledOriginal), billing(replaced, { numero_endosso: "000002" })],
-  }));
+  const cancelledOriginal = {
+    numero_endosso: "000000",
+    situacao_emissao: "Cancelada",
+    status_pagamento: "Aberta",
+  };
+  const result = payload(
+    exclusions({
+      policies: [policy(closed), policy(replaced)],
+      endorsements: [
+        document(closed, "000000", null),
+        document(
+          closed,
+          "000001",
+          "C",
+          { numero_endosso_cancelado: "000000", motivo_endosso: "ERRO_EMISSAO" },
+          { numero_documento_seguradora: closed.slice(0, -6) + "000001" },
+        ),
+        document(replaced, "000001", "C", { numero_endosso_cancelado: replaced }),
+        document(replaced, "000002", "A", { proposta: { itens: [] } }),
+      ],
+      billing: [
+        billing(closed, cancelledOriginal),
+        billing(replaced, cancelledOriginal),
+        billing(replaced, { numero_endosso: "000002" }),
+      ],
+    }),
+  );
   assert.deepEqual(result.apolices_excluidas, [
     { apolice: closed, status: "CANCELADA", motivo: "Status operacional: CANCELADA" },
   ]);
@@ -118,10 +138,22 @@ test("identidades completas de outra apólice e alvos conflitantes não geram ex
   const numero = "000000000000000000000001000000";
   for (const row of [
     document(numero, "000001", "C", { numero_endosso_cancelado: "000000000000000000000002000000" }),
-    document(numero, "000001", "C", { numero_endosso_cancelado: "000000", proposta: { numero_endosso_cancelado: "000002" } }),
-    document(numero, "000001", "C", { numero_endosso_cancelado: "000000" }, { numero_documento_seguradora: numero.slice(0,-6) + "000002" }),
+    document(numero, "000001", "C", {
+      numero_endosso_cancelado: "000000",
+      proposta: { numero_endosso_cancelado: "000002" },
+    }),
+    document(
+      numero,
+      "000001",
+      "C",
+      { numero_endosso_cancelado: "000000" },
+      { numero_documento_seguradora: numero.slice(0, -6) + "000002" },
+    ),
   ]) {
-    assert.deepEqual(exclusions({ policies: [policy(numero)], endorsements: [row] }).apolices_excluidas, []);
+    assert.deepEqual(
+      exclusions({ policies: [policy(numero)], endorsements: [row] }).apolices_excluidas,
+      [],
+    );
   }
 });
 
@@ -267,4 +299,101 @@ test("validação runtime rejeita contrato incompleto e status de exclusão inv�
       snapshot: exclusions(),
     }),
   );
+});
+
+test("v3 dispensa somente exceções integrais da carteira sem exclusão por status", () => {
+  const whole = (apolice, id, motivo) => ignore(apolice, null, { id, motivo, scope: "apolice" });
+  const input = {
+    policies: ["0001", "0002", "0003", "0004", "0005", "0006", "0007", "0008"].map(policy),
+    endorsements: [
+      endorsement("0001", "A", "RESILIÇÃO"),
+      endorsement("0002", "C", "INADIMPLÊNCIA"),
+      endorsement("0008", "A", "RESILIÇÃO"),
+    ],
+    billing: [
+      billing("0003", { status_pagamento: "Aberta", data_vencimento: "2026-09-01" }),
+      billing("0004", { status_pagamento: "Aberta", data_vencimento: "2026-09-01" }),
+      billing("0005"),
+    ],
+    ignores: [
+      whole("0004", "b", "Duplicata"),
+      whole("0004", "a", "Pré-suspensão"),
+      whole("0005", "c", "  Revisão operacional "),
+      ignore("0006", "PRÊMIO FORA DO PADRÃO"),
+      whole("0007", "d", null),
+      ignore("0007", "TAXA DE ADMINISTRAÇÃO INCORRETA"),
+      whole("0008", "e", "Encerrada"),
+      whole("0009", "f", "Fora da carteira"),
+    ],
+  };
+  const snapshot = exclusions(input);
+  assert.deepEqual(
+    snapshot.apolices_excluidas.map(({ apolice }) => apolice),
+    ["0001", "0002", "0008"],
+  );
+  assert.deepEqual(snapshot.apolices_dispensadas, [
+    { apolice: "0004", motivo: "Pré-suspensão", origem: "EXCECAO_INTEGRAL" },
+    { apolice: "0005", motivo: "Revisão operacional", origem: "EXCECAO_INTEGRAL" },
+    { apolice: "0007", motivo: null, origem: "EXCECAO_INTEGRAL" },
+  ]);
+  assert.deepEqual(
+    snapshot.apolices_dispensadas,
+    exclusions({
+      ...input,
+      ignores: [...input.ignores].reverse(),
+    }).apolices_dispensadas,
+  );
+  assert.deepEqual(
+    snapshot.excecoes_especificas.map(({ apolice }) => apolice),
+    ["0006", "0007"],
+  );
+  assert.equal(Object.hasOwn(payload(snapshot), "apolices_dispensadas"), false);
+  const version3 = buildAuditTriggerPayload({
+    runId: RUN_ID,
+    callbackUrl: `https://cockpit.example/api/public/audit-callback?run_id=${RUN_ID}`,
+    trigger: "ole-copilot",
+    at: AT,
+    snapshot,
+    version: 3,
+  });
+  assert.equal(version3.audit_contract_version, 3);
+  assert.deepEqual(version3.apolices_dispensadas, snapshot.apolices_dispensadas);
+  assert.equal(
+    AuditTriggerPayloadSchema.safeParse({
+      ...version3,
+      audit_contract_version: 2,
+    }).success,
+    false,
+  );
+  for (const invalid of [
+    { ...version3, apolices_dispensadas: undefined },
+    {
+      ...version3,
+      apolices_dispensadas: [snapshot.apolices_dispensadas[0], snapshot.apolices_dispensadas[0]],
+    },
+    {
+      ...version3,
+      apolices_dispensadas: [{ ...snapshot.apolices_dispensadas[0], apolice: "0001" }],
+    },
+  ])
+    assert.equal(AuditTriggerPayloadSchema.safeParse(invalid).success, false);
+});
+
+test("dispensa da auditoria não retira novo endosso da sincronização da carteira", () => {
+  const apolice = "056902026000213910012345000000";
+  const numero = "056902026000213910012345000002";
+  const snapshot = exclusions({
+    policies: [policy(apolice)],
+    ignores: [ignore(apolice, null, { scope: "apolice" })],
+  });
+  assert.equal(snapshot.apolices_dispensadas[0].apolice, apolice);
+  const missing = selectMissingEndorsementDocuments(apolice, 2, ["000000", "000001"]);
+  assert.deepEqual(missing, [numero]);
+  const synced = normalizeEmissionDocument(
+    { endosso: { numero_apolice_seguradora: numero, proposta: { itens: [] } } },
+    apolice,
+    missing[0],
+  );
+  assert.equal(synced.numero_apolice_seguradora, apolice);
+  assert.equal(synced.numero_endosso_seguradora, "000002");
 });

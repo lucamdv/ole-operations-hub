@@ -1,0 +1,117 @@
+// AUDIT-02.5 | valida os contratos v2 e v3 antes de consultar a API Excelsior.
+// Entradas: body do Webhook; saídas: _audit_contract_ok, _audit_request.
+const request = $input.first()?.json ?? {};
+const body = request.body ?? request;
+const version = body.audit_contract_version;
+const v3 = version === 3;
+const issues = [];
+const text = (s) => (typeof s === "string" ? s.trim() : "");
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const runId = text(body.run_id);
+const callback = text(body.callback_url);
+// Sem URL confiável não há destino seguro para sinalizar erro: falhar fechado.
+if (!uuidPattern.test(runId)) throw new Error("AUDIT-02: run_id ausente ou inválido.");
+const previewHost = "olexcockpit-git-codex-env-homolo-3ffb4d-luca-monteiros-projects.vercel.app";
+const allowedHosts = [
+  "olexcockpit.vercel.app",
+  "olexcockpit-cgtioyubj-luca-monteiros-projects.vercel.app",
+  previewHost,
+  "olexcockpit-7p21zxefn-luca-monteiros-projects.vercel.app",
+];
+
+// Validação por correspondência exata.
+// Compatível com o sandbox JavaScript do n8n.
+const allowedCallbacks = (v3 ? [previewHost] : allowedHosts).map(
+  (host) => `https://${host}/api/public/audit-callback?run_id=${runId}`,
+);
+
+if (!allowedCallbacks.includes(callback)) {
+  throw new Error("AUDIT-02: callback_url não autorizada; nenhuma chamada externa executada.");
+}
+if (version !== 2 && !v3) issues.push("audit_contract_version deve ser 2 ou 3");
+if (v3 && !Array.isArray(body.apolices_dispensadas))
+  issues.push("apolices_dispensadas deve ser array no contrato v3");
+if (version === 2 && Object.prototype.hasOwnProperty.call(body, "apolices_dispensadas"))
+  issues.push("apolices_dispensadas é exclusiva do contrato v3");
+if (!Array.isArray(body.apolices_excluidas)) issues.push("apolices_excluidas deve ser array");
+if (!Array.isArray(body.excecoes_especificas)) issues.push("excecoes_especificas deve ser array");
+const snapshotAt = body.exclusions_snapshot_at;
+const snapshotTime = typeof snapshotAt === "string" ? Date.parse(snapshotAt) : NaN;
+if (
+  !Number.isFinite(snapshotTime) ||
+  (v3 &&
+    (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(snapshotAt) ||
+      new Date(snapshotTime).toISOString().slice(0, 19) !== snapshotAt.slice(0, 19)))
+)
+  issues.push("exclusions_snapshot_at inválido");
+const excluded = Array.isArray(body.apolices_excluidas) ? body.apolices_excluidas : [];
+const specific = Array.isArray(body.excecoes_especificas) ? body.excecoes_especificas : [];
+const dispensed = v3 && Array.isArray(body.apolices_dispensadas) ? body.apolices_dispensadas : [];
+if (excluded.length > 100000 || specific.length > 100000 || dispensed.length > 100000)
+  issues.push("array de exceções excede limite de segurança");
+const number = (x) => typeof x === "string" && /^\d+$/.test(x.trim());
+for (const [index, e] of excluded.entries()) {
+  if (!e || !number(e.apolice) || !["CANCELADA", "SUSPENSA"].includes(e.status)) {
+    issues.push(`apolices_excluidas[${index}] inválida`);
+    break;
+  }
+}
+for (const [index, e] of specific.entries()) {
+  if (
+    !e ||
+    !number(e.apolice) ||
+    !text(e.tipo_erro) ||
+    (e.motivo != null && typeof e.motivo !== "string")
+  ) {
+    issues.push(`excecoes_especificas[${index}] inválida`);
+    break;
+  }
+}
+const excludedSet = new Set(
+  excluded.filter((e) => e && number(e.apolice)).map((e) => text(e.apolice)),
+);
+const dispensedSet = new Set();
+for (const [index, e] of dispensed.entries()) {
+  if (
+    !e ||
+    typeof e !== "object" ||
+    Array.isArray(e) ||
+    Object.keys(e).length !== 3 ||
+    typeof e.apolice !== "string" ||
+    !/^\d{1,120}$/.test(e.apolice) ||
+    e.origem !== "EXCECAO_INTEGRAL" ||
+    (e.motivo !== null && typeof e.motivo !== "string")
+  ) {
+    issues.push(`apolices_dispensadas[${index}] inválida`);
+    break;
+  }
+  if (dispensedSet.has(e.apolice) || excludedSet.has(e.apolice)) {
+    issues.push(`apolices_dispensadas[${index}] duplicada ou já excluída por status`);
+    break;
+  }
+  dispensedSet.add(e.apolice);
+}
+const specificMap = {};
+for (const e of specific) {
+  if (e && number(e.apolice) && text(e.tipo_erro)) {
+    (specificMap[e.apolice] ||= []).push(e.tipo_erro);
+  }
+}
+for (const key of Object.keys(specificMap)) specificMap[key] = [...new Set(specificMap[key])];
+return [
+  {
+    json: {
+      _audit_contract_ok: issues.length === 0,
+      _audit_error: issues.join("; ").slice(0, 1000),
+      _audit_request: {
+        run_id: runId,
+        callback_url: callback,
+        audit_contract_version: version,
+        exclusions_snapshot_at: snapshotAt,
+        excludedPolicies: [...excludedSet],
+        specificRules: specificMap,
+        ...(v3 ? { dispensedPolicies: dispensed } : {}),
+      },
+    },
+  },
+];

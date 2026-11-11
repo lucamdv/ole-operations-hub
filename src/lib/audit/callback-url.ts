@@ -8,6 +8,9 @@ export interface AuditCallbackEnvironment {
 
 export class AuditCallbackConfigurationError extends Error {}
 
+export const AUDIT_V3_PREVIEW_ORIGIN =
+  "https://olexcockpit-git-codex-env-homolo-3ffb4d-luca-monteiros-projects.vercel.app";
+
 function origin(value: string | undefined, key: string, local = false): string {
   try {
     if (!value?.trim()) throw new Error();

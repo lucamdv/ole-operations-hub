@@ -25,6 +25,7 @@ export interface AuditPayload {
     total_processado: number;
     total_candidatas?: number;
     total_excluidas?: number;
+    total_dispensadas?: number;
     total_ignoradas?: number;
     achados_dispensados?: number;
   };
@@ -32,7 +33,13 @@ export interface AuditPayload {
   mensagem_geral: string;
   apolices_com_erro: ApoliceComErro[];
   apolices_ignoradas?: Array<{ apolice: string; motivo: string }>;
-  audit_contract_version?: 2;
+  apolices_candidatas?: string[];
+  apolices_dispensadas?: Array<{
+    apolice: string;
+    motivo: string | null;
+    origem: "EXCECAO_INTEGRAL";
+  }>;
+  audit_contract_version?: 2 | 3;
   exclusions_snapshot_at?: string;
 }
 

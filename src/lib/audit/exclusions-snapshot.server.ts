@@ -61,7 +61,6 @@ export async function loadAuditExclusionsSnapshot(
     readPages<{ numero_apolice: string }>("policies"),
     readPages<{ numero_apolice: string; numero_endosso: string; proposta: unknown }>("endorsements"),
     readPages<BillingRecord>("policy_billing"),
-    // Whole-policy entries are read ONLY for diagnostics, never mapped to a status.
     readPages<AuditIgnoreSource>("audit_ignores"),
   ]);
   try {

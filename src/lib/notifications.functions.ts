@@ -1,5 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
+import { auditCompletionNotice, isAuditContractV3 } from "./audit/result-summary";
 
 export type NotifSeverity = "critical" | "high" | "info" | "low";
 export type NotifKind =
@@ -49,7 +50,9 @@ export const getNotifications = createServerFn({ method: "GET" }).middleware([re
     // 1) audit runs (last 7d)
     const { data: runs } = await supabaseAdmin
       .from("audit_runs")
-      .select("id, status, error_message, total_processado, aprovados, reprovados, created_at")
+      .select(
+        "id, status, status_geral, error_message, total_processado, aprovados, reprovados, created_at, raw",
+      )
       .gte("created_at", since)
       .in("status", ["success", "error"])
       .order("created_at", { ascending: false })
@@ -88,11 +91,13 @@ export const getNotifications = createServerFn({ method: "GET" }).middleware([re
     for (const r of (runs ?? []) as Array<{
       id: string;
       status: string;
+      status_geral: string | null;
       error_message: string | null;
       total_processado: number | null;
       aprovados: number | null;
       reprovados: number | null;
       created_at: string;
+      raw: unknown;
     }>) {
       if (r.status === "error") {
         out.push({
@@ -103,25 +108,26 @@ export const getNotifications = createServerFn({ method: "GET" }).middleware([re
           createdAt: r.created_at,
         });
       } else {
-        const adjusted = adjustRunCounts(
-          {
-            total_processado: r.total_processado ?? 0,
-            aprovados: r.aprovados ?? 0,
-            reprovados: r.reprovados ?? 0,
-          },
-          ignoreSets,
-          byRun.get(r.id) ?? [],
-        );
-        const reprov = adjusted.reprovados;
-        const total = adjusted.total_processado;
+        const result = isAuditContractV3(r)
+          ? r
+          : {
+              ...r,
+              ...adjustRunCounts(
+                {
+                  total_processado: r.total_processado ?? 0,
+                  aprovados: r.aprovados ?? 0,
+                  reprovados: r.reprovados ?? 0,
+                },
+                ignoreSets,
+                byRun.get(r.id) ?? [],
+              ),
+            };
+        const notice = auditCompletionNotice(result);
         out.push({
           id: `audit:${r.id}`,
           kind: "auditoria_concluida",
-          severity: reprov > 0 ? "high" : "low",
-          text:
-            reprov === 0
-              ? `Auditoria concluída — ${total} apólices em conformidade`
-              : `Auditoria concluída — ${reprov} de ${total} com inconsistências`,
+          severity: notice.tone === "warning" || (result.reprovados ?? 0) > 0 ? "high" : "low",
+          text: `${notice.title}. ${notice.description}`,
           createdAt: r.created_at,
         });
       }

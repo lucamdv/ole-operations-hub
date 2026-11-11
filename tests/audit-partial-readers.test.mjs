@@ -80,3 +80,79 @@ test("a sync failure retains down-state precedence beside a partial audit", asyn
   assert.match(display.label, /Instável/);
   assert.match(display.description, /parcial/i);
 });
+
+test("v3 readers keep the snapshot counts when an audited policy gets a later exception", async (t) => {
+  const h = callbackHarness(t);
+  const run = h.addRun({
+    status: "success",
+    status_geral: "ALERTA",
+    aprovados: 1,
+    reprovados: 1,
+    total_processado: 2,
+    raw: {
+      audit_contract_version: 3,
+      resumo: {
+        aprovados: 1,
+        reprovados: 1,
+        total_processado: 2,
+        total_candidatas: 4,
+        total_excluidas: 1,
+        total_dispensadas: 1,
+        total_ignoradas: 0,
+      },
+      apolices_candidatas: ["0001", "0002", "0003", "0004"],
+      apolices_dispensadas: [
+        { apolice: "0003", motivo: "Pré-suspensão", origem: "EXCECAO_INTEGRAL" },
+      ],
+    },
+  });
+  h.state.homolog.audit_findings.push({
+    run_id: run.id,
+    apolice: "0002",
+    tipo_erro: "GAP DE DIA",
+    endosso: null,
+  });
+  h.state.homolog.audit_ignores.push({ apolice: "0002", tipo_erro: null, scope: "apolice" });
+  const context = { supabase: supabaseAdmin };
+  const polled = await readers.getAuditRunStatus({ data: { runId: run.id }, context });
+  const latest = await readers.getLatestAudit({ context });
+  const [previous] = await readers.getAuditHistory({ context });
+  for (const row of [polled, latest.run, previous]) {
+    assert.equal(row.aprovados, 1);
+    assert.equal(row.reprovados, 1);
+    assert.equal(row.raw.resumo.total_dispensadas, 1);
+    assert.equal(row.raw.apolices_dispensadas[0].apolice, "0003");
+  }
+  assert.equal(latest.findings.length, 0);
+  const status = await readers.getSystemStatus({ context });
+  assert.equal(status.approvalRate, 50);
+  assert.equal(status.lastRunPartial, false);
+});
+
+test("completed v3 coverage with only dispenses and exclusions sends a neutral notification", async (t) => {
+  const h = callbackHarness(t);
+  h.addRun({
+    created_at: new Date().toISOString(),
+    status: "success",
+    status_geral: "SUCESSO",
+    raw: {
+      audit_contract_version: 3,
+      resumo: {
+        aprovados: 0,
+        reprovados: 0,
+        total_processado: 0,
+        total_candidatas: 3,
+        total_excluidas: 1,
+        total_dispensadas: 2,
+        total_ignoradas: 0,
+      },
+    },
+  });
+  const { getNotifications } = await import("../src/lib/notifications.functions.ts");
+  const [notice] = await getNotifications({ data: {} });
+  assert.equal(notice.kind, "auditoria_concluida");
+  assert.equal(notice.severity, "low");
+  assert.match(notice.text, /Nenhuma apólice foi auditada/);
+  assert.match(notice.text, /2 dispensadas/);
+  assert.doesNotMatch(notice.text, /em conformidade|parcial/i);
+});

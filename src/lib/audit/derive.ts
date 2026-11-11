@@ -1,10 +1,11 @@
 import type { AuditFindingRow, AuditHistoryItem, AuditRunRow, LatestAudit } from "./types";
+import { auditResultSummary } from "./result-summary";
 
 export interface KpiBundle {
   audited: number;
   approved: number;
   rejected: number;
-  approvedRate: number;
+  approvedRate: number | null;
   activeAlerts: number;
   operationalRisk: number;
   uniqueErrorTypes: number;
@@ -36,7 +37,7 @@ export function deriveKpis({ latest, history }: DeriveInput): KpiBundle | null {
   const audited = r.total_processado;
   const approved = r.aprovados;
   const rejected = r.reprovados;
-  const approvedRate = pct(approved, audited);
+  const approvedRate = auditResultSummary(r).approvalRate;
   const operationalRisk = pct(rejected, audited);
   const affectedPolicies = new Set(findings.map((f) => f.apolice)).size;
   const uniqueErrorTypes = new Set(findings.map((f) => f.tipo_erro)).size;

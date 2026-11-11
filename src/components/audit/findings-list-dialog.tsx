@@ -115,7 +115,8 @@ export function FindingsListDialog({
 
   const copyAll = () => {
     const lines: string[] = [];
-    if (auditResultSummary(latest.run).partial) {
+    const coverage = auditResultSummary(latest.run);
+    if (coverage.partial || coverage.hasCoverageCounters || coverage.processed === 0) {
       const notice = auditCompletionNotice(latest.run);
       lines.push(`${notice.title} — ${notice.description}`);
     }

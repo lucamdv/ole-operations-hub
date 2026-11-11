@@ -73,7 +73,7 @@ export function buildAuditPdf(latest: LatestAudit, history: AuditHistoryItem[] =
     theme: "grid",
     styles: { fontSize: 10, cellPadding: 7, halign: "center" },
     headStyles: { fillColor: COLORS.header, textColor: 255, fontStyle: "bold" },
-    head: [["Total processado", "OK", "Intervencoes", "Erros", "Alertas", "Conformidade"]],
+    head: [["Apolices auditadas", "Aprovadas", "Reprovadas", "Erros", "Alertas", "Conformidade"]],
     body: [
       [
         formatInt(total),
@@ -81,28 +81,34 @@ export function buildAuditPdf(latest: LatestAudit, history: AuditHistoryItem[] =
         formatInt(reprov),
         formatInt(sev.erros),
         formatInt(sev.alertas),
-        conformidade === null ? "Pendente" : formatPct(conformidade, 1),
+        coverage.partial
+          ? "Pendente"
+          : conformidade !== null
+            ? formatPct(conformidade, 1)
+            : "Sem apolices auditadas",
       ],
     ],
     margin: { left: margin, right: margin },
   });
 
   let cursorY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 22;
-  if (coverage.partial) {
+  if (coverage.partial || coverage.hasCoverageCounters) {
+    const coverageColumns = [
+      { label: coverage.partial ? "PARCIAL - Auditadas" : "Auditadas", value: total },
+      { label: "Candidatas", value: coverage.candidates },
+      { label: "Excluidas por status", value: coverage.excluded },
+      ...(coverage.contractV3
+        ? [{ label: "Dispensadas por excecao integral", value: coverage.dispensed }]
+        : []),
+      { label: "Ignoradas por falha", value: coverage.ignored },
+    ];
     autoTable(doc, {
       startY: cursorY,
       theme: "grid",
       styles: { fontSize: 9, cellPadding: 6 },
-      headStyles: { fillColor: COLORS.warn },
-      head: [["PARCIAL - Auditadas", "Candidatas", "Excluidas", "Ignoradas"]],
-      body: [
-        [
-          total,
-          coverage.candidates ?? "Nao informado",
-          coverage.excluded ?? "Nao informado",
-          coverage.ignored ?? "Nao informado",
-        ],
-      ],
+      headStyles: { fillColor: coverage.partial ? COLORS.warn : COLORS.header },
+      head: [coverageColumns.map(({ label }) => label)],
+      body: [coverageColumns.map(({ value }) => value ?? "Nao informado")],
       margin: { left: margin, right: margin },
     });
     cursorY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 22;

@@ -12,6 +12,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useLatestAudit } from "@/hooks/use-audit";
+import { auditResultSummary } from "@/lib/audit/result-summary";
 import { useFindingRecurrence } from "@/hooks/use-audit-recurrence";
 import { useEscalationRules } from "@/hooks/use-escalation-rules";
 import { useUrgencyOverrides } from "@/hooks/use-urgency-overrides";
@@ -69,6 +70,14 @@ type AgeFilter = "all" | "novo" | "1a7" | "mais7";
 function AlertasPage() {
   const { q: initialSearch = "" } = Route.useSearch();
   const { data: latest, isLoading, error } = useLatestAudit();
+  const coverage = latest ? auditResultSummary(latest.run) : null;
+  const emptyAuditMessage = !coverage
+    ? "Execute uma auditoria para consultar os achados."
+    : coverage.partial
+      ? "A cobertura da última auditoria ainda está incompleta."
+      : coverage.processed === 0
+        ? "Nenhuma apólice foi auditada na última execução."
+        : null;
   const { data: recurrence } = useFindingRecurrence();
   const { rules } = useEscalationRules();
   const { overrides, setOverride, clearOverride } = useUrgencyOverrides();
@@ -511,14 +520,16 @@ function AlertasPage() {
                 <AlertTriangle className="mx-auto mb-3 h-7 w-7 text-muted-foreground" />
                 <div className="mb-1 text-[13px] font-semibold">
                   {items.length === 0
-                    ? "Nenhum incidente na última auditoria"
+                    ? "Nenhum incidente em aberto"
                     : "Nenhum incidente com esses filtros"}
                 </div>
-                <p className="text-[11.5px] text-muted-foreground">
-                  {items.length === 0
-                    ? "Carteira em conformidade ou auditoria ainda não executada."
-                    : "Ajuste os filtros para ver mais resultados."}
-                </p>
+                {items.length > 0 || emptyAuditMessage ? (
+                  <p className="text-[11.5px] text-muted-foreground">
+                    {items.length === 0
+                      ? emptyAuditMessage
+                      : "Ajuste os filtros para ver mais resultados."}
+                  </p>
+                ) : null}
               </div>
             ) : (
               <div className="space-y-4">

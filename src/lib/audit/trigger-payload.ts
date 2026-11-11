@@ -23,8 +23,16 @@ const SpecificExceptionSchema = z
     motivo: z.string().nullable(),
   })
   .strict();
+export const AuditCandidateNumberSchema = z.string().regex(/^\d+$/).max(120);
+export const DispensedPolicySchema = z
+  .object({
+    apolice: AuditCandidateNumberSchema,
+    motivo: z.string().nullable(),
+    origem: z.literal("EXCECAO_INTEGRAL"),
+  })
+  .strict();
 
-export const AuditTriggerPayloadSchema = z
+const AuditTriggerV2Schema = z
   .object({
     run_id: z.string().uuid(),
     callback_url: z.string().url(),
@@ -43,6 +51,28 @@ export const AuditTriggerPayloadSchema = z
     excecoes_especificas: z.array(SpecificExceptionSchema),
   })
   .strict();
+
+const AuditTriggerV3Schema = AuditTriggerV2Schema.extend({
+  audit_contract_version: z.literal(3),
+  apolices_dispensadas: z.array(DispensedPolicySchema),
+});
+
+export const AuditTriggerPayloadSchema = z
+  .discriminatedUnion("audit_contract_version", [AuditTriggerV2Schema, AuditTriggerV3Schema])
+  .superRefine((payload, ctx) => {
+    if (payload.audit_contract_version !== 3) return;
+    const used = new Set(payload.apolices_excluidas.map((entry) => entry.apolice));
+    for (const [index, entry] of payload.apolices_dispensadas.entries()) {
+      if (used.has(entry.apolice)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["apolices_dispensadas", index, "apolice"],
+          message: "Apólice dispensada duplicada ou já excluída por status.",
+        });
+      }
+      used.add(entry.apolice);
+    }
+  });
 
 export type AuditTriggerPayload = z.infer<typeof AuditTriggerPayloadSchema>;
 export interface AuditIgnoreSource {
@@ -63,6 +93,7 @@ export interface AuditExclusionsInput {
 export interface AuditExclusionsSnapshot {
   exclusions_snapshot_at: string;
   apolices_excluidas: AuditTriggerPayload["apolices_excluidas"];
+  apolices_dispensadas: Array<z.infer<typeof DispensedPolicySchema>>;
   excecoes_especificas: AuditTriggerPayload["excecoes_especificas"];
   diagnostics: {
     duplicatePolicies: number;
@@ -118,16 +149,28 @@ export function buildAuditExclusions(input: AuditExclusionsInput): AuditExclusio
     historicalWholePolicyIgnores: [],
   };
   const specific = new Map<string, AuditTriggerPayload["excecoes_especificas"][number]>();
+  const dispensed = new Map<string, AuditExclusionsSnapshot["apolices_dispensadas"][number]>();
   // The lowest id wins duplicate pairs; deterministic even if source order changes.
   for (const row of [...input.ignores].sort((a, b) => compare(a.id, b.id))) {
     const apolice = PolicyNumberSchema.safeParse(row.apolice);
     if (row.scope === "apolice") {
-      if (apolice.success)
-        diagnostics.historicalWholePolicyIgnores.push({
-          apolice: apolice.data,
-          operationalStatus: statuses.get(apolice.data) ?? null,
-          motivo: reason(row.motivo),
+      if (!apolice.success) continue;
+      const number = apolice.data;
+      const status = statuses.get(number) ?? null;
+      const motivo = reason(row.motivo);
+      diagnostics.historicalWholePolicyIgnores.push({
+        apolice: number,
+        operationalStatus: status,
+        motivo,
+      });
+      if (status && status !== "CANCELADA" && status !== "SUSPENSA" && !dispensed.has(number)) {
+        const entry = DispensedPolicySchema.safeParse({
+          apolice: number,
+          motivo,
+          origem: "EXCECAO_INTEGRAL",
         });
+        if (entry.success) dispensed.set(number, entry.data);
+      }
       continue;
     }
     if (row.scope !== "apolice_tipo") continue;
@@ -146,6 +189,7 @@ export function buildAuditExclusions(input: AuditExclusionsInput): AuditExclusio
   return {
     exclusions_snapshot_at: input.referenceAt,
     apolices_excluidas,
+    apolices_dispensadas: [...dispensed.values()].sort((a, b) => compare(a.apolice, b.apolice)),
     excecoes_especificas: [...specific.values()].sort(
       (a, b) => compare(a.apolice, b.apolice) || compare(a.tipo_erro, b.tipo_erro),
     ),
@@ -159,7 +203,9 @@ export function buildAuditTriggerPayload(input: {
   trigger: string;
   at: string;
   snapshot: AuditExclusionsSnapshot;
+  version?: 2 | 3;
 }): AuditTriggerPayload {
+  const version = input.version ?? 2;
   return AuditTriggerPayloadSchema.parse({
     run_id: input.runId,
     callback_url: input.callbackUrl,
@@ -170,9 +216,10 @@ export function buildAuditTriggerPayload(input: {
     resumo: { aprovados: 0, reprovados: 0, total_processado: 0 },
     apolices_com_erro: [],
     at: input.at,
-    audit_contract_version: 2,
+    audit_contract_version: version,
     exclusions_snapshot_at: input.snapshot.exclusions_snapshot_at,
     apolices_excluidas: input.snapshot.apolices_excluidas,
     excecoes_especificas: input.snapshot.excecoes_especificas,
+    ...(version === 3 ? { apolices_dispensadas: input.snapshot.apolices_dispensadas } : {}),
   });
 }

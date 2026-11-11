@@ -3,7 +3,7 @@ import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
 import type { AuditHistoryItem, AuditPayload, LatestAudit } from "./audit/types";
 import type { WebhookMode } from "@/lib/webhook-mode";
-import { auditResultSummary } from "./audit/result-summary";
+import { auditResultSummary, isAuditContractV3 } from "./audit/result-summary";
 
 /**
  * Dispara a auditoria de forma ASSÍNCRONA (implementação em audit-run.server.ts).
@@ -53,7 +53,10 @@ export const getAuditRunStatus = createServerFn({ method: "GET" })
         raw: AuditPayload | null;
       };
 
-      // Desconta exceções da AUDITORIA (audit_ignores) nos números do toast final.
+      // A v3 registra os contadores no fechamento, com as exceções do snapshot da execução.
+      if (isAuditContractV3(r)) return r;
+
+      // Mantém o desconto de exceções nos números do toast das execuções antigas.
       const [{ data: ignores }, { data: resolvidos }, { data: findings }] = await Promise.all([
         context.supabase.from("audit_ignores").select("apolice, tipo_erro"),
         context.supabase
@@ -137,10 +140,8 @@ export const getLatestAudit = createServerFn({ method: "GET" })
       endosso: string | null;
     }>;
     const filtered = filterFindings(sets, all);
-    const adj = adjustRunCounts(run, sets, all);
-
     return {
-      run: { ...run, aprovados: adj.aprovados, reprovados: adj.reprovados },
+      run: isAuditContractV3(run) ? run : { ...run, ...adjustRunCounts(run, sets, all) },
       findings: filtered,
     } as unknown as LatestAudit;
   });
@@ -163,7 +164,8 @@ export const getAuditHistory = createServerFn({ method: "GET" })
 
     if (error) throw new Error(error.message);
     const runs = (data ?? []) as AuditHistoryItem[];
-    if (runs.length === 0) return runs;
+    const legacyRuns = runs.filter((run) => !isAuditContractV3(run));
+    if (legacyRuns.length === 0) return runs;
 
     const { data: ignores } = await context.supabase
       .from("audit_ignores")
@@ -185,7 +187,7 @@ export const getAuditHistory = createServerFn({ method: "GET" })
       .select("run_id, apolice, tipo_erro, endosso")
       .in(
         "run_id",
-        runs.map((r) => r.id),
+        legacyRuns.map((r) => r.id),
       );
 
     const byRun = new Map<
@@ -203,7 +205,9 @@ export const getAuditHistory = createServerFn({ method: "GET" })
       byRun.set(f.run_id, list);
     }
 
-    return runs.map((r) => ({ ...r, ...adjustRunCounts(r, sets, byRun.get(r.id) ?? []) }));
+    return runs.map((r) =>
+      isAuditContractV3(r) ? r : { ...r, ...adjustRunCounts(r, sets, byRun.get(r.id) ?? []) },
+    );
   });
 
 export { CallbackPayloadSchema } from "./audit/callback-payload";
@@ -249,9 +253,9 @@ export const getSystemStatus = createServerFn({ method: "GET" })
     } | null;
     const sync = lastSync as { status: string; created_at: string } | null;
 
-    // Taxa de aprovação desconta as exceções da AUDITORIA (audit_ignores).
+    // Só os resultados antigos recalculam a taxa com exceções atuais.
     let aprovadosAjustado = run?.aprovados ?? 0;
-    if (run && (run.total_processado ?? 0) > 0) {
+    if (run && !isAuditContractV3(run) && (run.total_processado ?? 0) > 0) {
       const [{ data: ignores }, { data: resolvidos }, { data: findings }] = await Promise.all([
         context.supabase.from("audit_ignores").select("apolice, tipo_erro"),
         context.supabase

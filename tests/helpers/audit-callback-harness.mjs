@@ -155,6 +155,7 @@ export function callbackHarness(t, deployment = "preview") {
         if (v.startsWith("neq.")) return row[k] != null && String(row[k]) !== v.slice(4);
         if (v.startsWith("lt.")) return row[k] < v.slice(3);
         if (v.startsWith("gt.")) return row[k] > v.slice(3);
+        if (v.startsWith("gte.")) return row[k] >= v.slice(4);
         if (v.startsWith("in.("))
           return v
             .slice(4, -1)

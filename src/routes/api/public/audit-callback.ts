@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { CallbackPayloadSchema } from "@/lib/audit/callback-payload";
+import { CallbackPayloadSchema, validateV3AuditCoverage } from "@/lib/audit/callback-payload";
 import { auditResultSummary, isCompleteAuditResult } from "@/lib/audit/result-summary";
-import { previousCompleteAudit } from "@/lib/audit/previous-complete.server";
+import { laterAuditEvidence, previousCompleteAudit } from "@/lib/audit/previous-complete.server";
 import { auditFindingId } from "@/lib/audit/finding-id.server";
 
 const CORS = {
@@ -124,9 +124,38 @@ export const Route = createFileRoute("/api/public/audit-callback")({
               existing.raw && typeof existing.raw === "object" && !Array.isArray(existing.raw)
                 ? (existing.raw as Record<string, unknown>)
                 : {};
+            const v3 = original.audit_contract_version === 3;
+            const technicalFailure =
+              payload.status === "error" || !!payload.error || !!payload.error_message;
+            if (
+              (payload.audit_contract_version === 3 && !v3) ||
+              (v3 && !technicalFailure && payload.audit_contract_version !== 3)
+            ) {
+              return json({ error: "Versão de contrato incompatível com a execução." }, 400);
+            }
+            let audited: Set<string> | null = null;
+            if (v3) {
+              const { getOperationalContext } = await import("@/lib/environment/context.server");
+              const context = getOperationalContext();
+              if (
+                context.environment !== "preview" ||
+                context.schema !== "homolog" ||
+                context.webhookMode !== "test"
+              )
+                return json({ error: "Contrato v3 restrito ao Preview de homologação." }, 403);
+              if (!technicalFailure) {
+                audited = validateV3AuditCoverage(payload, original);
+                if (!audited)
+                  return json({ error: "Cobertura do resultado diverge do snapshot v3." }, 400);
+              }
+            }
             const exclusions = Array.isArray(original.apolices_excluidas)
               ? (original.apolices_excluidas as Array<{ apolice: string }>)
               : [];
+            const dispensations =
+              v3 && Array.isArray(original.apolices_dispensadas)
+                ? (original.apolices_dispensadas as Array<{ apolice: string }>)
+                : [];
             const specifics = Array.isArray(original.excecoes_especificas)
               ? (original.excecoes_especificas as Array<{ apolice: string; tipo_erro: string }>)
               : [];
@@ -138,12 +167,20 @@ export const Route = createFileRoute("/api/public/audit-callback")({
                 : (payload.status_geral ?? "SUCESSO"),
               apolices_excluidas: exclusions,
               excecoes_especificas: specifics,
+              ...(v3
+                ? {
+                    audit_contract_version: 3 as const,
+                    exclusions_snapshot_at: original.exclusions_snapshot_at,
+                    apolices_dispensadas: dispensations,
+                  }
+                : {}),
             };
 
-            const startedAt = new Date((existing as { created_at: string }).created_at).getTime();
+            const runCreatedAt = existing.created_at;
+            const startedAt = new Date(runCreatedAt).getTime();
             const durationMs = Date.now() - startedAt;
 
-            if (payload.status === "error" || payload.error || payload.error_message) {
+            if (technicalFailure) {
               // Monta mensagem com o máximo de pistas possível
               let message = payload.error_message ?? payload.error ?? "";
               if (!message) {
@@ -228,11 +265,38 @@ export const Route = createFileRoute("/api/public/audit-callback")({
               `${f.apolice}::${f.tipo_erro}::${f.endosso ?? ""}`;
             const chavesAtuais = new Set(findings.map(chaveDe));
 
+            // A delayed run can record findings, but cannot prove a correction by absence.
+            async function newerResultExists() {
+              const { data, error } = await supabaseAdmin
+                .from("audit_runs")
+                .select("id")
+                .eq("status", "success")
+                .gt("created_at", runCreatedAt)
+                .limit(1);
+              if (error) throw new Error("Falha ao consultar execução mais recente.");
+              return Boolean(data?.length);
+            }
+
             let reopened = 0;
+            let newerResult = false;
             if (findings.length > 0) {
+              let laterEvidence;
+              try {
+                laterEvidence = await laterAuditEvidence(
+                  supabaseAdmin,
+                  runCreatedAt,
+                  new Set(findings.map(({ apolice }) => apolice)),
+                );
+                newerResult = laterEvidence.hasLaterResult;
+              } catch {
+                return json(
+                  { error: "Falha ao verificar a ordem das auditorias; reenvie o callback." },
+                  500,
+                );
+              }
               const { data: ativas, error: reopenReadError } = await supabaseAdmin
                 .from("audit_resolutions")
-                .select("id, apolice, tipo_erro, endosso")
+                .select("id, apolice, tipo_erro, endosso, resolved_at")
                 .is("reopened_at", null);
               if (reopenReadError)
                 return json(
@@ -245,9 +309,19 @@ export const Route = createFileRoute("/api/public/audit-callback")({
                   apolice: string;
                   tipo_erro: string;
                   endosso: string | null;
+                  resolved_at: string | null;
                 }>
               )
-                .filter((r) => chavesAtuais.has(chaveDe(r)))
+                .filter(
+                  (r) =>
+                    chavesAtuais.has(chaveDe(r)) &&
+                    !laterEvidence.audited.has(r.apolice) &&
+                    !(
+                      newerResult &&
+                      r.resolved_at &&
+                      new Date(r.resolved_at).getTime() > startedAt
+                    ),
+                )
                 .map((r) => r.id);
               if (paraReabrir.length > 0) {
                 const { error: reopenErr } = await supabaseAdmin
@@ -295,9 +369,17 @@ export const Route = createFileRoute("/api/public/audit-callback")({
             });
             // Missing exclusion identities are not evidence of correction either.
             const reliableScope = (summary.excluded ?? 0) <= exclusions.length;
-            if (payload.resumo && isCompleteAuditResult(result) && reliableScope) {
+            if (
+              payload.resumo &&
+              result.total_processado > 0 &&
+              !newerResult &&
+              isCompleteAuditResult(result) &&
+              reliableScope
+            ) {
               try {
-                const prevRun = await previousCompleteAudit(supabaseAdmin, existing);
+                const prevRun = (await newerResultExists())
+                  ? null
+                  : await previousCompleteAudit(supabaseAdmin, existing);
 
                 if (prevRun) {
                   const prevId = (prevRun as { id: string }).id;
@@ -326,6 +408,7 @@ export const Route = createFileRoute("/api/public/audit-callback")({
                   const ignoreSets = buildIgnoreSets([
                     ...((ignores ?? []) as Array<{ apolice: string; tipo_erro: string | null }>),
                     ...exclusions.map((e) => ({ apolice: e.apolice, tipo_erro: null })),
+                    ...dispensations.map((e) => ({ apolice: e.apolice, tipo_erro: null })),
                     ...specifics,
                   ]);
                   const resolvidasSets = buildIgnoreSets(
@@ -348,6 +431,7 @@ export const Route = createFileRoute("/api/public/audit-callback")({
                     endosso: string | null;
                   }>) {
                     const chave = chaveDe(f);
+                    if (audited && !audited.has(f.apolice)) continue;
                     if (chavesAtuais.has(chave)) continue; // ainda presente
                     if (isIgnoredFinding(ignoreSets, f)) continue; // exceção: não é resolução
                     if (isIgnoredFinding(resolvidasSets, f)) continue; // já resolvido

@@ -7,7 +7,11 @@ import {
 import { resolveIntegrationWebhook } from "./environment/webhooks.server.ts";
 import { registerExecution } from "./environment/execution.server.ts";
 import { buildAuditTriggerPayload } from "./audit/trigger-payload.ts";
-import { AuditCallbackConfigurationError, resolveAuditCallbackUrl } from "./audit/callback-url.ts";
+import {
+  AUDIT_V3_PREVIEW_ORIGIN,
+  AuditCallbackConfigurationError,
+  resolveAuditCallbackUrl,
+} from "./audit/callback-url.ts";
 import { AuditPreparationError } from "./audit/exclusions-snapshot.server.ts";
 
 // Implementação server-only do disparo da auditoria.
@@ -22,7 +26,8 @@ export async function runAuditImpl(trigger = "ole-copilot", webhookMode?: Webhoo
 }
 
 async function dispatchAudit(trigger: string) {
-  const url = resolveIntegrationWebhook("audit", getOperationalContext());
+  const context = getOperationalContext();
+  const url = resolveIntegrationWebhook("audit", context);
   if (!url) {
     throw new Error(
       "Secret N8N_AUDIT_WEBHOOK_URL não configurada. Cole a URL de produção do webhook n8n (/webhook/...) nos secrets do projeto.",
@@ -57,6 +62,16 @@ async function dispatchAudit(trigger: string) {
     await registerExecution(runId, "audit");
     // Configuration failures after insert must also close the run as error.
     const callbackUrl = resolveAuditCallbackUrl(runId, process.env);
+    const useV3 =
+      context.environment === "preview" &&
+      context.schema === "homolog" &&
+      context.webhookMode === "test" &&
+      process.env.AUDIT_TEST_CONTRACT_VERSION === "3";
+    if (useV3 && new URL(callbackUrl).origin !== AUDIT_V3_PREVIEW_ORIGIN) {
+      throw new AuditCallbackConfigurationError(
+        "O contrato v3 requer o alias de homologação preparado no workflow de teste.",
+      );
+    }
 
     const snapshot = await loadProductionAuditExclusionsSnapshot();
     const payload = buildAuditTriggerPayload({
@@ -65,9 +80,10 @@ async function dispatchAudit(trigger: string) {
       trigger,
       at: new Date().toISOString(),
       snapshot,
+      version: useV3 ? 3 : 2,
     });
     phase = "persisting";
-    // Best-effort historical retention: the unchanged callback replaces raw later.
+    // The callback validates results against this persisted snapshot.
     const { error: snapshotError } = await supabaseAdmin
       .from("audit_runs")
       .update({ raw: { ...payload, exclusions_diagnostics: snapshot.diagnostics } } as never)
@@ -78,6 +94,8 @@ async function dispatchAudit(trigger: string) {
       run_id: runId,
       audit_contract_version: payload.audit_contract_version,
       excluded_policies: payload.apolices_excluidas.length,
+      dispensed_policies:
+        payload.audit_contract_version === 3 ? payload.apolices_dispensadas.length : 0,
       specific_exceptions: payload.excecoes_especificas.length,
       duplicate_policies: snapshot.diagnostics.duplicatePolicies,
       duplicate_specific_exceptions: snapshot.diagnostics.duplicateSpecificExceptions,
@@ -106,7 +124,7 @@ async function dispatchAudit(trigger: string) {
     }
     console.info("[audit-run] webhook acionado", {
       run_id: runId,
-      audit_contract_version: 2,
+      audit_contract_version: payload.audit_contract_version,
       http_status: res.status,
     });
   } catch (err) {
