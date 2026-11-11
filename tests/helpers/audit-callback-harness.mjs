@@ -145,6 +145,46 @@ export function callbackHarness(t, deployment = "preview") {
       return Response.json({ code: "42501", message: "fixture failure" }, { status: 403 });
     const db = state[schema];
     assert.ok(db);
+    if (table === "commit_audit_callback") {
+      assert.equal(method, "POST");
+      const { p_run_id, p_result, p_findings, p_reopen_ids } = JSON.parse(init.body);
+      const run = db.audit_runs.find((r) => r.id === p_run_id);
+      if (!run) return Response.json({ code: "P0002", message: "unknown run" }, { status: 404 });
+
+      // Model one SQL transaction: all injected failures happen BEFORE mutations.
+      // An in-flight cancellation that wins the row lock makes this a duplicate.
+      for (const stage of [
+        { table: "audit_findings", method: "POST" },
+        { table: "audit_resolutions", method: "PATCH", when: p_reopen_ids.length > 0 },
+        { table: "audit_runs", method: "PATCH" },
+      ]) {
+        if (stage.when === false) continue;
+        if (fail?.({ schema, table: stage.table, method: stage.method, query }))
+          return Response.json({ code: "42501", message: "fixture transaction rolled back" }, { status: 403 });
+      }
+      if (run.status !== "running")
+        return Response.json({ duplicate: true, status: run.status });
+
+      let inserted = 0;
+      for (const finding of p_findings) {
+        if (db.audit_findings.some((f) => f.id === finding.id)) continue;
+        db.audit_findings.push({ created_at: NOW, ...finding });
+        inserted++;
+      }
+      let reopened = 0;
+      for (const resolution of db.audit_resolutions) {
+        if (p_reopen_ids.includes(resolution.id) && resolution.reopened_at == null) {
+          resolution.reopened_at = NOW;
+          reopened++;
+        }
+      }
+      Object.assign(run, p_result);
+      return Response.json({
+        duplicate: false,
+        findings_inserted: inserted,
+        reopened_resolutions: reopened,
+      });
+    }
     const rows = db[table] ?? [];
     const matches = (row) =>
       [...query].every(([k, v]) => {
