@@ -37,6 +37,9 @@ jobs:
         run: npm run lint
 
       - name: Production build
+        env:
+          # Vite SSR requires >2 GiB on Node 22; CI defaults to a 2 GiB heap.
+          NODE_OPTIONS: --max-old-space-size=3072
         run: npm run build
 
       - name: Dependency audit
