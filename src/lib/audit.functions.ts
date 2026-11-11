@@ -19,6 +19,80 @@ export const runAudit = createServerFn({ method: "POST" })
     return runAuditImpl("ole-copilot", data.mode);
   });
 
+/** Verifica as runs ativas e registra timeout persistente (não apenas no navegador). */
+export const getActiveAuditRun = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d?: { mode?: WebhookMode }) =>
+    z.object({ mode: z.enum(["test", "production"]).optional() }).parse(d ?? {}),
+  )
+  .handler(async ({ data }) => {
+    const { withIntegrationContext } = await import("./environment/context.server");
+    return withIntegrationContext(data.mode, async () => {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const cutoff = new Date(Date.now() - 15 * 60_000).toISOString();
+      const { error: expireError } = await supabaseAdmin
+        .from("audit_runs")
+        .update({
+          status: "error",
+          status_geral: "ERRO",
+          mensagem_geral: "Auditoria expirada: sem callback em 15 minutos.",
+          error_message: "Tempo limite de 15 minutos sem resultado final do n8n.",
+        } as never)
+        .eq("status", "running")
+        .lt("created_at", cutoff);
+      if (expireError) throw new Error("Falha ao encerrar auditorias expiradas.");
+      const { data: row, error } = await supabaseAdmin
+        .from("audit_runs")
+        .select("id, created_at, status")
+        .eq("status", "running")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw new Error("Falha ao consultar auditoria em andamento.");
+      return row as { id: string; created_at: string; status: string } | null;
+    });
+  });
+
+/** Cancelamento autenticado, sempre no ambiente registrado para a execução. */
+export const cancelAudit = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((d: { runId: string; reason?: "manual" | "timeout" }) =>
+    z.object({
+      runId: z.string().uuid(),
+      reason: z.enum(["manual", "timeout"]).optional(),
+    }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const { withRegisteredExecution } = await import("./environment/execution.server");
+    return withRegisteredExecution(data.runId, "audit", async () => {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const timedOut = data.reason === "timeout";
+      const { data: updated, error } = await supabaseAdmin
+        .from("audit_runs")
+        .update({
+          status: timedOut ? "error" : "cancelled",
+          status_geral: timedOut ? "ERRO" : "CANCELADA",
+          mensagem_geral: timedOut
+            ? "Auditoria expirada: sem callback em 15 minutos."
+            : "Auditoria cancelada manualmente pelo operador.",
+          error_message: timedOut ? "Tempo limite de 15 minutos sem resposta do n8n." : null,
+        } as never)
+        .eq("id", data.runId)
+        .eq("status", "running")
+        .select("id, status")
+        .maybeSingle();
+      if (error) throw new Error("Falha ao cancelar a auditoria.");
+      if (updated) return { runId: data.runId, status: timedOut ? "error" : "cancelled", changed: true };
+      const { data: existing, error: readError } = await supabaseAdmin
+        .from("audit_runs")
+        .select("status")
+        .eq("id", data.runId)
+        .maybeSingle();
+      if (readError || !existing) throw new Error("Execução não encontrada.");
+      return { runId: data.runId, status: existing.status, changed: false };
+    });
+  });
+
 export const getAuditRunStatus = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { runId: string; mode?: WebhookMode }) =>
