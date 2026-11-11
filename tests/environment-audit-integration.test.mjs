@@ -140,6 +140,24 @@ for (const [deployment, requestedMode] of [
         return Response.json({ message: "private provider error", code: "42501" }, { status: 403 });
       const db = state[schema];
       assert.ok(db, "unknown schema");
+      if (table === "commit_audit_callback") {
+        assert.equal(method, "POST");
+        const { p_run_id, p_result, p_findings, p_reopen_ids } = JSON.parse(init.body);
+        const run = db.audit_runs.find((row) => row.id === p_run_id);
+        if (!run) return Response.json({ code: "P0002", message: "unknown run" }, { status: 404 });
+        if (run.status !== "running") return Response.json({ duplicate: true, status: run.status });
+        for (const finding of p_findings) {
+          if (!db.audit_findings.some((row) => row.id === finding.id)) {
+            db.audit_findings.push({ created_at: new Date().toISOString(), ...finding });
+          }
+        }
+        for (const resolution of db.audit_resolutions) {
+          if (p_reopen_ids.includes(resolution.id) && resolution.reopened_at == null)
+            resolution.reopened_at = new Date().toISOString();
+        }
+        Object.assign(run, p_result);
+        return Response.json({ duplicate: false, reopened_resolutions: p_reopen_ids.length });
+      }
       let rows = (db[table] ??= []);
       const matches = (row) =>
         [...url.searchParams].every(([k, v]) => {
