@@ -47,3 +47,13 @@ test("n8n consulta estado autenticado e respeita paradas de execução", async (
   assert.match(docs, /Execução ainda ativa\?/);
   assert.match(docs, /não encerra automaticamente o processamento/);
 });
+
+test("cronômetro sempre pertence à execução nova e descarta cache da anterior", async () => {
+  const hook = await source("src/hooks/use-audit.ts");
+  const button = await source("src/components/audit/run-audit-button.tsx");
+  assert.match(hook, /setActiveRunStartedAt\(startedAt\)/);
+  assert.match(hook, /activeRunCreatedAt: activeRunId\s*\? activeRunStartedAt/);
+  assert.match(hook, /setQueryData\(\["audit", "active", submittedMode\]/);
+  assert.match(hook, /cached\?\.id === result\.runId \? null : cached/);
+  assert.match(button, /mutation\.activeRunId, mutation\.activeRunCreatedAt/);
+});
