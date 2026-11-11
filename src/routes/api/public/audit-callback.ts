@@ -249,15 +249,8 @@ export const Route = createFileRoute("/api/public/audit-callback")({
               }),
             );
 
-            if (findings.length > 0) {
-              const { error: findErr } = await supabaseAdmin
-                .from("audit_findings")
-                .upsert(findings.map((f) => ({ id: auditFindingId(f), ...f })) as never, {
-                  onConflict: "id",
-                  ignoreDuplicates: true,
-                });
-              if (findErr) return json({ error: findErr.message }, 500);
-            }
+            // Findings are committed atomically with the run's terminal status.
+            // Writing before final status allowed cancelled runs to retain findings.
 
             // 6. Reabre automaticamente resoluções cujo problema voltou a aparecer
             //    (chave = apólice + tipo de erro + endosso).
@@ -278,6 +271,7 @@ export const Route = createFileRoute("/api/public/audit-callback")({
             }
 
             let reopened = 0;
+            let reopenIds: string[] = [];
             let newerResult = false;
             if (findings.length > 0) {
               let laterEvidence;
@@ -323,21 +317,12 @@ export const Route = createFileRoute("/api/public/audit-callback")({
                     ),
                 )
                 .map((r) => r.id);
-              if (paraReabrir.length > 0) {
-                const { error: reopenErr } = await supabaseAdmin
-                  .from("audit_resolutions")
-                  .update({ reopened_at: new Date().toISOString() } as never)
-                  .in("id", paraReabrir)
-                  .is("reopened_at", null);
-                if (reopenErr) {
-                  return json({ error: "Falha ao reabrir resoluções; reenvie o callback." }, 500);
-                } else {
-                  reopened = paraReabrir.length;
-                }
-              }
+              // The RPC updates only these resolutions if it wins the run-row lock.
+              reopenIds = paraReabrir;
             }
 
-            // Publish only after findings AND required reopening. Failed reads/writes remain retryable.
+            // One PostgreSQL transaction serializes finalization against manual cancel,
+            // restart and timeout. Any failure rolls back findings and reopened resolutions.
             const result = {
               status: "success",
               data_auditoria: payload.data_auditoria ?? new Date().toISOString(),
@@ -349,15 +334,28 @@ export const Route = createFileRoute("/api/public/audit-callback")({
               duration_ms: durationMs,
               raw: resultRaw,
             };
-            const { data: finalized, error: updErr } = await supabaseAdmin
-              .from("audit_runs")
-              .update(result as never)
-              .eq("id", runId)
-              .eq("status", "running")
-              .select("id")
-              .maybeSingle();
-            if (updErr) return json({ error: updErr.message }, 500);
-            if (!finalized) return json({ ok: true, run_id: runId, duplicate: true });
+            const { data: finalized, error: commitErr } = await supabaseAdmin.rpc(
+              "commit_audit_callback" as never,
+              {
+                p_run_id: runId,
+                p_result: result,
+                p_findings: findings.map((f) => ({ id: auditFindingId(f), ...f })),
+                p_reopen_ids: reopenIds,
+              } as never,
+            );
+            if (commitErr) return json({ error: "Falha ao finalizar auditoria atomicamente." }, 500);
+            const transaction = finalized as
+              | { duplicate?: boolean; status?: string; reopened_resolutions?: number }
+              | null;
+            if (!transaction || transaction.duplicate) {
+              return json({
+                ok: true,
+                run_id: runId,
+                duplicate: true,
+                status: transaction?.status ?? "unknown",
+              });
+            }
+            reopened = transaction.reopened_resolutions ?? 0;
 
             // 7. Resolução AUTOMÁTICA: achados presentes na auditoria anterior que
             //    não aparecem mais nesta. Exceções (audit_ignores) nunca contam como
