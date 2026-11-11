@@ -50,7 +50,7 @@ BEGIN
     ON CONFLICT (id) DO NOTHING;
   GET DIAGNOSTICS inserted_count = ROW_COUNT;
 
-  IF pg_catalog.coalesce(pg_catalog.array_length(p_reopen_ids, 1), 0) > 0 THEN
+  IF coalesce(pg_catalog.array_length(p_reopen_ids, 1), 0) > 0 THEN
     UPDATE homolog.audit_resolutions SET reopened_at = pg_catalog.now()
      WHERE id = ANY(p_reopen_ids) AND reopened_at IS NULL;
     GET DIAGNOSTICS reopened_count = ROW_COUNT;
@@ -124,7 +124,7 @@ BEGIN
     ON CONFLICT (id) DO NOTHING;
   GET DIAGNOSTICS inserted_count = ROW_COUNT;
 
-  IF pg_catalog.coalesce(pg_catalog.array_length(p_reopen_ids, 1), 0) > 0 THEN
+  IF coalesce(pg_catalog.array_length(p_reopen_ids, 1), 0) > 0 THEN
     UPDATE public.audit_resolutions SET reopened_at = pg_catalog.now()
      WHERE id = ANY(p_reopen_ids) AND reopened_at IS NULL;
     GET DIAGNOSTICS reopened_count = ROW_COUNT;
