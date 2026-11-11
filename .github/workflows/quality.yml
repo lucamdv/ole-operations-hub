@@ -24,44 +24,26 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Prepare diagnostics
-        run: mkdir -p quality-logs
-
       - name: Install dependencies
-        run: |
-          npm ci > quality-logs/install.log 2>&1 || { tail -n 80 quality-logs/install.log; exit 1; }
+        run: npm ci
 
       - name: Architecture tests
-        run: |
-          npm run test:static > quality-logs/static.log 2>&1 || { tail -n 90 quality-logs/static.log; exit 1; }
+        run: npm run test:static
 
       - name: TypeScript
-        run: |
-          npm run typecheck > quality-logs/typecheck.log 2>&1 || { cat quality-logs/typecheck.log; exit 1; }
+        run: npm run typecheck
 
       - name: ESLint
-        run: |
-          npm run lint > quality-logs/lint.log 2>&1 || { tail -n 90 quality-logs/lint.log; exit 1; }
+        run: npm run lint
 
       - name: Production build
         env:
           # Vite SSR requires >2 GiB on Node 22; CI defaults to a 2 GiB heap.
           NODE_OPTIONS: --max-old-space-size=3072
-        run: |
-          npm run build > quality-logs/build.log 2>&1 || { tail -n 95 quality-logs/build.log; exit 1; }
+        run: npm run build
 
       - name: Dependency audit
-        run: |
-          npm audit --audit-level=high > quality-logs/audit.log 2>&1 || { tail -n 95 quality-logs/audit.log; exit 1; }
-
-      - name: Preserve quality diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: quality-gate-logs
-          path: quality-logs/
-          retention-days: 3
-          if-no-files-found: warn
+        run: npm audit --audit-level=high
 
   smoke:
     name: Production smoke tests
