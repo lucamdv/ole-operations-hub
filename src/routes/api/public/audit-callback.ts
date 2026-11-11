@@ -341,33 +341,10 @@ export const Route = createFileRoute("/api/public/audit-callback")({
               duration_ms: durationMs,
               raw: resultRaw,
             };
-            const { data: finalized, error: commitErr } = await supabaseAdmin.rpc(
-              "commit_audit_callback" as never,
-              {
-                p_run_id: runId,
-                p_result: result,
-                p_findings: findings.map((f) => ({ id: auditFindingId(f), ...f })),
-                p_reopen_ids: reopenIds,
-              } as never,
-            );
-            if (commitErr) return json({ error: "Falha ao finalizar auditoria atomicamente." }, 500);
-            const transaction = finalized as
-              | { duplicate?: boolean; status?: string; reopened_resolutions?: number }
-              | null;
-            if (!transaction || transaction.duplicate) {
-              return json({
-                ok: true,
-                run_id: runId,
-                duplicate: true,
-                status: transaction?.status ?? "unknown",
-              });
-            }
-            reopened = transaction.reopened_resolutions ?? 0;
-
             // 7. Resolução AUTOMÁTICA: achados presentes na auditoria anterior que
             //    não aparecem mais nesta. Exceções (audit_ignores) nunca contam como
             //    resolvidas, e resoluções ativas não são duplicadas.
-            let autoResolved = 0;
+            let automatic: { baseline: string; rows: unknown[] } | undefined;
             const summary = auditResultSummary({
               status_geral: payload.status_geral,
               raw: payload,
@@ -477,25 +454,47 @@ export const Route = createFileRoute("/api/public/audit-callback")({
                       origem: "auto",
                       motivo: "Resolvido automaticamente: ausente na auditoria seguinte",
                     }));
-                    const { error: autoErr } = await supabaseAdmin
-                      .from("audit_resolutions")
-                      .insert(linhas as never);
-                    if (autoErr) {
-                      console.error(
-                        "[audit-callback] falha ao registrar resoluções automáticas",
-                        autoErr.message,
-                      );
-                    } else {
-                      autoResolved = linhas.length;
-                    }
+                    automatic = { baseline: prevId, rows: linhas };
                   }
                 }
               } catch {
                 console.error(
-                  "[audit-callback] resolução automática pendente por falha de leitura/gravação",
+                  "[audit-callback] resolução automática pendente por falha de leitura",
                 );
               }
             }
+
+            const { data: finalized, error: commitErr } = await supabaseAdmin.rpc(
+              "commit_audit_callback" as never,
+              {
+                p_run_id: runId,
+                p_result: {
+                  ...result,
+                  auto_baseline_id: automatic?.baseline ?? null,
+                  auto_resolutions: automatic?.rows ?? [],
+                },
+                p_findings: findings.map((f) => ({ id: auditFindingId(f), ...f })),
+                p_reopen_ids: reopenIds,
+              } as never,
+            );
+            if (commitErr)
+              return json({ error: "Falha ao finalizar auditoria atomicamente." }, 500);
+            const transaction = finalized as {
+              duplicate?: boolean;
+              status?: string;
+              reopened_resolutions?: number;
+              auto_resolutions?: number;
+            } | null;
+            if (!transaction || transaction.duplicate) {
+              return json({
+                ok: true,
+                run_id: runId,
+                duplicate: true,
+                status: transaction?.status ?? "unknown",
+              });
+            }
+            reopened = transaction.reopened_resolutions ?? 0;
+            const autoResolved = transaction.auto_resolutions ?? 0;
 
             return json({
               ok: true,

@@ -148,6 +148,7 @@ export function callbackHarness(t, deployment = "preview") {
     if (table === "commit_audit_callback") {
       assert.equal(method, "POST");
       const { p_run_id, p_result, p_findings, p_reopen_ids } = JSON.parse(init.body);
+      const { auto_resolutions = [], auto_baseline_id: _baseline, ...runResult } = p_result;
       const run = db.audit_runs.find((r) => r.id === p_run_id);
       if (!run) return Response.json({ code: "P0002", message: "unknown run" }, { status: 404 });
 
@@ -156,14 +157,17 @@ export function callbackHarness(t, deployment = "preview") {
       for (const stage of [
         { table: "audit_findings", method: "POST" },
         { table: "audit_resolutions", method: "PATCH", when: p_reopen_ids.length > 0 },
+        { table: "audit_resolutions", method: "POST", when: auto_resolutions.length > 0 },
         { table: "audit_runs", method: "PATCH" },
       ]) {
         if (stage.when === false) continue;
         if (fail?.({ schema, table: stage.table, method: stage.method, query }))
-          return Response.json({ code: "42501", message: "fixture transaction rolled back" }, { status: 403 });
+          return Response.json(
+            { code: "42501", message: "fixture transaction rolled back" },
+            { status: 403 },
+          );
       }
-      if (run.status !== "running")
-        return Response.json({ duplicate: true, status: run.status });
+      if (run.status !== "running") return Response.json({ duplicate: true, status: run.status });
 
       let inserted = 0;
       for (const finding of p_findings) {
@@ -178,11 +182,15 @@ export function callbackHarness(t, deployment = "preview") {
           reopened++;
         }
       }
-      Object.assign(run, p_result);
+      db.audit_resolutions.push(
+        ...auto_resolutions.map((resolution) => ({ id: randomUUID(), ...resolution })),
+      );
+      Object.assign(run, runResult);
       return Response.json({
         duplicate: false,
         findings_inserted: inserted,
         reopened_resolutions: reopened,
+        auto_resolutions: auto_resolutions.length,
       });
     }
     const rows = db[table] ?? [];

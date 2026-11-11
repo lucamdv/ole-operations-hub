@@ -1,6 +1,44 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
+import { callbackHarness, readers } from "./helpers/audit-callback-harness.mjs";
+const { Route: auditControl } = await import("../src/routes/api/public/audit-control.ts");
+
+test("timeout solicitado pelo cliente só encerra uma auditoria após o prazo", async (t) => {
+  const h = callbackHarness(t);
+  const fresh = h.addRun({ created_at: new Date().toISOString() });
+  const expired = h.addRun({ created_at: new Date(Date.now() - 16 * 60_000).toISOString() });
+  const cancel = (run) => readers.cancelAudit({ data: { runId: run.id, reason: "timeout" } });
+  assert.deepEqual(await cancel(fresh), { runId: fresh.id, status: "running", changed: false });
+  assert.deepEqual(await cancel(expired), { runId: expired.id, status: "error", changed: true });
+});
+
+test("controle n8n só consulta uma auditoria autenticada no schema registrado", async (t) => {
+  const h = callbackHarness(t);
+  const run = h.addRun({ created_at: new Date().toISOString() });
+  const get = (secret) =>
+    auditControl.server.handlers.GET({
+      request: new Request(
+        `https://preview.example/api/public/audit-control?run_id=${run.id}&apolice=0001`,
+        {
+          headers: { "x-audit-secret": secret },
+        },
+      ),
+    });
+  assert.equal((await get("invalid")).status, 401);
+  assert.equal(h.requests.length, 0);
+  h.state.homolog.execution_contexts[0].integration = "extraction";
+  assert.equal((await get("fixture-callback")).status, 403);
+  assert.ok(h.requests.every(({ table }) => table === "execution_contexts"));
+  h.state.homolog.execution_contexts[0].integration = "audit";
+  const response = await get("fixture-callback");
+  assert.deepEqual(await response.json(), {
+    continue: true,
+    numero_apolice: "0001",
+    status: "running",
+  });
+  assert.ok(h.requests.every(({ schema, method }) => schema === "homolog" && method === "GET"));
+});
 
 async function source(path) {
   return readFile(new URL(`../${path}`, import.meta.url), "utf8");

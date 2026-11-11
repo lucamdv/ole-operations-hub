@@ -1,16 +1,57 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { callbackHarness, resultPayload } from "./helpers/audit-callback-harness.mjs";
+import {
+  callbackHarness,
+  completePayload,
+  resultPayload,
+  PREV,
+} from "./helpers/audit-callback-harness.mjs";
 
-const sql = readFileSync(
-  new URL("../supabase/migrations/20261111183000_audit_027_atomic_callback.sql", import.meta.url),
+test("falha ao gravar resolução automática mantém a execução aberta e permite retry", async (t) => {
+  const h = callbackHarness(t);
+  const before = h.addRun({
+    created_at: PREV,
+    status: "success",
+    status_geral: "ALERTA",
+    aprovados: 0,
+    reprovados: 1,
+    total_processado: 1,
+    raw: {},
+  });
+  const run = h.addRun();
+  h.state.homolog.audit_findings.push({
+    run_id: before.id,
+    apolice: "000002",
+    tipo_erro: "GAP DE DIA",
+    endosso: "000001",
+    created_at: PREV,
+  });
+  h.fail(({ table, method }) => table === "audit_resolutions" && method === "POST");
+  const first = await h.send(run, completePayload());
+  assert.equal(first.status, 500);
+  assert.equal(run.status, "running");
+  assert.equal(h.state.homolog.audit_resolutions.length, 0);
+  h.fail(() => false);
+  assert.equal((await h.send(run, completePayload())).status, 200);
+  assert.equal(run.status, "success");
+  assert.equal(h.state.homolog.audit_resolutions.length, 1);
+});
+
+const homologSql = readFileSync(
+  new URL("../supabase/migrations/20261111220023_audit_027_atomic_callback.sql", import.meta.url),
+  "utf8",
+);
+const publicSql = readFileSync(
+  new URL("../docs/audit-02-7/public-commit-audit-callback.sql", import.meta.url),
   "utf8",
 );
 
 test("AUDIT-02.7 SQL finalizes each run under a PostgreSQL row lock", () => {
-  for (const schema of ["homolog", "public"]) {
-    const part = sql.split(`-- Applies exclusively to the ${schema} operational scope.`)[1]?.split("-- Applies exclusively")[0];
+  for (const [schema, part] of [
+    ["homolog", homologSql],
+    ["public", publicSql],
+  ]) {
     assert.ok(part, `missing ${schema} transaction`);
     assert.match(part, /FOR UPDATE/);
     assert.match(part, /IF current_status <> 'running' THEN/);
@@ -21,9 +62,10 @@ test("AUDIT-02.7 SQL finalizes each run under a PostgreSQL row lock", () => {
     assert.match(part, /SECURITY INVOKER/);
     assert.match(part, new RegExp(`REVOKE ALL ON FUNCTION ${schema}`));
     assert.match(part, new RegExp(`GRANT EXECUTE ON FUNCTION ${schema}`));
+    assert.match(part, /^BEGIN;/m);
+    assert.match(part, /^COMMIT;/m);
   }
-  assert.match(sql, /^BEGIN;/m);
-  assert.match(sql, /^COMMIT;/m);
+  assert.doesNotMatch(homologSql, /\bpublic\./);
 });
 
 test("cancelled run cannot acquire findings even when cancellation wins just before SQL commit", async (t) => {
@@ -69,7 +111,10 @@ test("retry after any SQL stage failure leaves zero partial findings or reopenin
 
 test("production v3 requires a dedicated opt-in; preview remains isolated", () => {
   const trigger = readFileSync(new URL("../src/lib/audit-run.server.ts", import.meta.url), "utf8");
-  const callback = readFileSync(new URL("../src/routes/api/public/audit-callback.ts", import.meta.url), "utf8");
+  const callback = readFileSync(
+    new URL("../src/routes/api/public/audit-callback.ts", import.meta.url),
+    "utf8",
+  );
   assert.match(trigger, /process\.env\.AUDIT_PRODUCTION_CONTRACT_VERSION === "3"/);
   assert.match(trigger, /context\.schema === "public"/);
   assert.match(trigger, /"https:\/\/olexcockpit\.vercel\.app"/);

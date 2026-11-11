@@ -57,17 +57,19 @@ export const getActiveAuditRun = createServerFn({ method: "GET" })
 export const cancelAudit = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d: { runId: string; reason?: "manual" | "timeout" }) =>
-    z.object({
-      runId: z.string().uuid(),
-      reason: z.enum(["manual", "timeout"]).optional(),
-    }).parse(d),
+    z
+      .object({
+        runId: z.string().uuid(),
+        reason: z.enum(["manual", "timeout"]).optional(),
+      })
+      .parse(d),
   )
   .handler(async ({ data }) => {
     const { withRegisteredExecution } = await import("./environment/execution.server");
     return withRegisteredExecution(data.runId, "audit", async () => {
       const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
       const timedOut = data.reason === "timeout";
-      const { data: updated, error } = await supabaseAdmin
+      let update = supabaseAdmin
         .from("audit_runs")
         .update({
           status: timedOut ? "error" : "cancelled",
@@ -78,11 +80,13 @@ export const cancelAudit = createServerFn({ method: "POST" })
           error_message: timedOut ? "Tempo limite de 15 minutos sem resposta do n8n." : null,
         } as never)
         .eq("id", data.runId)
-        .eq("status", "running")
-        .select("id, status")
-        .maybeSingle();
+        .eq("status", "running");
+      if (timedOut)
+        update = update.lt("created_at", new Date(Date.now() - 15 * 60_000).toISOString());
+      const { data: updated, error } = await update.select("id, status").maybeSingle();
       if (error) throw new Error("Falha ao cancelar a auditoria.");
-      if (updated) return { runId: data.runId, status: timedOut ? "error" : "cancelled", changed: true };
+      if (updated)
+        return { runId: data.runId, status: timedOut ? "error" : "cancelled", changed: true };
       const { data: existing, error: readError } = await supabaseAdmin
         .from("audit_runs")
         .select("status")
