@@ -19,7 +19,7 @@ export function auditDatabase(tables = {}, options = {}) {
         if (method !== "GET") {
           assert.equal(table, "audit_runs", "only audit_runs may be written");
           const body = JSON.parse(init.body);
-          writes.push({ method, body });
+          writes.push({ method, body, search: url.searchParams });
           if (options.failUpdate && method === "PATCH" && (body.raw || body.status === "error"))
             return Response.json({ message: "write failure", code: "42501" }, { status: 403 });
           // A atualização de outras runs não altera a run atual na fixture.
