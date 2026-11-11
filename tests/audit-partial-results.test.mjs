@@ -245,7 +245,7 @@ test("legacy complete callbacks retain resolution behavior", async (t) => {
   assert.equal(h.state.homolog.audit_resolutions.length, 1);
 });
 
-test("retry after run publication failure retains exactly one copy of each finding", async (t) => {
+test("atomic callback failure leaves no findings and retry writes once", async (t) => {
   const h = callbackHarness(t),
     run = h.addRun();
   let failOnce = true;
@@ -258,7 +258,7 @@ test("retry after run publication failure retains exactly one copy of each findi
   });
   assert.equal((await h.send(run, resultPayload())).status, 500);
   assert.equal(run.status, "running");
-  assert.equal(h.state.homolog.audit_findings.length, 1);
+  assert.equal(h.state.homolog.audit_findings.length, 0, "failed transaction must roll back");
   assert.equal((await h.send(run, resultPayload())).status, 200);
   assert.equal(h.state.homolog.audit_findings.length, 1);
   assert.equal(run.status_geral, "PARCIAL");
@@ -356,7 +356,7 @@ for (const operation of ["GET", "PATCH"])
     });
     assert.equal((await h.send(run, resultPayload())).status, 500);
     assert.equal(run.status, "running");
-    assert.equal(h.state.homolog.audit_findings.length, 1);
+    assert.equal(h.state.homolog.audit_findings.length, 0, "rollback retains no provisional findings");
     assert.equal((await h.send(run, resultPayload())).status, 200);
     assert.equal(run.status, "success");
     assert.equal(h.state.homolog.audit_findings.length, 1);
