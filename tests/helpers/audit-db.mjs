@@ -20,12 +20,21 @@ export function auditDatabase(tables = {}, options = {}) {
           assert.equal(table, "audit_runs", "only audit_runs may be written");
           const body = JSON.parse(init.body);
           writes.push({ method, body });
-          if (options.failUpdate && method === "PATCH")
+          if (options.failUpdate && method === "PATCH" && (body.raw || body.status === "error"))
             return Response.json({ message: "write failure", code: "42501" }, { status: 403 });
-          Object.assign(state, body);
-          return Response.json(method === "POST" ? { id: RUN_ID } : null, { status: 200 });
+          // A atualização de outras runs não altera a run atual na fixture.
+          if (url.searchParams.get("id") !== `neq.${RUN_ID}`) Object.assign(state, body);
+          return Response.json(method === "POST" ? { id: RUN_ID, created_at: "2026-11-11T12:00:00.000Z" } : null, { status: 200 });
         }
         queries.push({ table, search: url.searchParams });
+        if (table === "audit_runs") {
+          const wanted = url.searchParams.get("id") === `eq.${RUN_ID}`;
+          const running = url.searchParams.get("status") === "eq.running";
+          if (wanted && (!running || state.status === "running")) {
+            return Response.json({ id: RUN_ID, status: state.status }, { status: 200 });
+          }
+          return Response.json(null, { status: 200 });
+        }
         if (
           options.failTable === table &&
           (!options.failAfterCursor || url.searchParams.has("id"))
