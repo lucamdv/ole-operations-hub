@@ -26,6 +26,7 @@ import { Route as AuthenticatedFerramentasIndexRouteImport } from './routes/_aut
 import { Route as AuthenticatedFerramentasExtratorEndossosRouteImport } from './routes/_authenticated/ferramentas.extrator-endossos'
 import { Route as AuthenticatedFerramentasMapaRepassesRouteImport } from './routes/_authenticated/ferramentas.mapa-repasses'
 import { Route as ApiPublicAuditCallbackRouteImport } from './routes/api/public/audit-callback'
+import { Route as ApiPublicAuditControlRouteImport } from './routes/api/public/audit-control'
 import { Route as ApiPublicBillingSyncCallbackRouteImport } from './routes/api/public/billing-sync-callback'
 import { Route as ApiPublicEndorsementExtractionCallbackRouteImport } from './routes/api/public/endorsement-extraction-callback'
 import { Route as ApiPublicPolicySyncCallbackRouteImport } from './routes/api/public/policy-sync-callback'
@@ -127,6 +128,11 @@ const ApiPublicAuditCallbackRoute = ApiPublicAuditCallbackRouteImport.update({
   path: '/api/public/audit-callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicAuditControlRoute = ApiPublicAuditControlRouteImport.update({
+  id: '/api/public/audit-control',
+  path: '/api/public/audit-control',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicBillingSyncCallbackRoute =
   ApiPublicBillingSyncCallbackRouteImport.update({
     id: '/api/public/billing-sync-callback',
@@ -190,6 +196,7 @@ export interface FileRoutesByFullPath {
   '/ferramentas/extrator-endossos': typeof AuthenticatedFerramentasExtratorEndossosRoute
   '/ferramentas/mapa-repasses': typeof AuthenticatedFerramentasMapaRepassesRoute
   '/api/public/audit-callback': typeof ApiPublicAuditCallbackRoute
+  '/api/public/audit-control': typeof ApiPublicAuditControlRoute
   '/api/public/billing-sync-callback': typeof ApiPublicBillingSyncCallbackRoute
   '/api/public/endorsement-extraction-callback': typeof ApiPublicEndorsementExtractionCallbackRoute
   '/api/public/policy-sync-callback': typeof ApiPublicPolicySyncCallbackRoute
@@ -215,6 +222,7 @@ export interface FileRoutesByTo {
   '/ferramentas/extrator-endossos': typeof AuthenticatedFerramentasExtratorEndossosRoute
   '/ferramentas/mapa-repasses': typeof AuthenticatedFerramentasMapaRepassesRoute
   '/api/public/audit-callback': typeof ApiPublicAuditCallbackRoute
+  '/api/public/audit-control': typeof ApiPublicAuditControlRoute
   '/api/public/billing-sync-callback': typeof ApiPublicBillingSyncCallbackRoute
   '/api/public/endorsement-extraction-callback': typeof ApiPublicEndorsementExtractionCallbackRoute
   '/api/public/policy-sync-callback': typeof ApiPublicPolicySyncCallbackRoute
@@ -243,6 +251,7 @@ export interface FileRoutesById {
   '/_authenticated/ferramentas/extrator-endossos': typeof AuthenticatedFerramentasExtratorEndossosRoute
   '/_authenticated/ferramentas/mapa-repasses': typeof AuthenticatedFerramentasMapaRepassesRoute
   '/api/public/audit-callback': typeof ApiPublicAuditCallbackRoute
+  '/api/public/audit-control': typeof ApiPublicAuditControlRoute
   '/api/public/billing-sync-callback': typeof ApiPublicBillingSyncCallbackRoute
   '/api/public/endorsement-extraction-callback': typeof ApiPublicEndorsementExtractionCallbackRoute
   '/api/public/policy-sync-callback': typeof ApiPublicPolicySyncCallbackRoute
@@ -271,6 +280,7 @@ export interface FileRouteTypes {
     | '/ferramentas/extrator-endossos'
     | '/ferramentas/mapa-repasses'
     | '/api/public/audit-callback'
+    | '/api/public/audit-control'
     | '/api/public/billing-sync-callback'
     | '/api/public/endorsement-extraction-callback'
     | '/api/public/policy-sync-callback'
@@ -296,6 +306,7 @@ export interface FileRouteTypes {
     | '/ferramentas/extrator-endossos'
     | '/ferramentas/mapa-repasses'
     | '/api/public/audit-callback'
+    | '/api/public/audit-control'
     | '/api/public/billing-sync-callback'
     | '/api/public/endorsement-extraction-callback'
     | '/api/public/policy-sync-callback'
@@ -323,6 +334,7 @@ export interface FileRouteTypes {
     | '/_authenticated/ferramentas/extrator-endossos'
     | '/_authenticated/ferramentas/mapa-repasses'
     | '/api/public/audit-callback'
+    | '/api/public/audit-control'
     | '/api/public/billing-sync-callback'
     | '/api/public/endorsement-extraction-callback'
     | '/api/public/policy-sync-callback'
@@ -340,6 +352,7 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRoute
   InviteTokenRoute: typeof InviteTokenRoute
   ApiPublicAuditCallbackRoute: typeof ApiPublicAuditCallbackRoute
+  ApiPublicAuditControlRoute: typeof ApiPublicAuditControlRoute
   ApiPublicBillingSyncCallbackRoute: typeof ApiPublicBillingSyncCallbackRoute
   ApiPublicEndorsementExtractionCallbackRoute: typeof ApiPublicEndorsementExtractionCallbackRoute
   ApiPublicPolicySyncCallbackRoute: typeof ApiPublicPolicySyncCallbackRoute
@@ -469,6 +482,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicAuditCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/audit-control': {
+      id: '/api/public/audit-control'
+      path: '/api/public/audit-control'
+      fullPath: '/api/public/audit-control'
+      preLoaderRoute: typeof ApiPublicAuditControlRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/billing-sync-callback': {
       id: '/api/public/billing-sync-callback'
       path: '/api/public/billing-sync-callback'
@@ -587,6 +607,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRoute,
   InviteTokenRoute: InviteTokenRoute,
   ApiPublicAuditCallbackRoute: ApiPublicAuditCallbackRoute,
+  ApiPublicAuditControlRoute: ApiPublicAuditControlRoute,
   ApiPublicBillingSyncCallbackRoute: ApiPublicBillingSyncCallbackRoute,
   ApiPublicEndorsementExtractionCallbackRoute:
     ApiPublicEndorsementExtractionCallbackRoute,
