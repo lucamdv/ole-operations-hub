@@ -22,9 +22,18 @@ export function auditDatabase(tables = {}, options = {}) {
           writes.push({ method, body, search: url.searchParams });
           if (options.failUpdate && method === "PATCH" && (body.raw || body.status === "error"))
             return Response.json({ message: "write failure", code: "42501" }, { status: 403 });
-          // A atualização de outras runs não altera a run atual na fixture.
-          if (url.searchParams.get("id") !== `neq.${RUN_ID}`) Object.assign(state, body);
-          return Response.json(method === "POST" ? { id: RUN_ID, created_at: "2026-11-11T12:00:00.000Z" } : null, { status: 200 });
+          // Simulate conditional compare-and-swap and PostgREST's select/maybeSingle
+          // after snapshot persistence. Old cancelled runs cannot be overwritten.
+          const current = url.searchParams.get("id") !== `neq.${RUN_ID}`;
+          const allowed = !url.searchParams.has("status") ||
+            url.searchParams.get("status") !== "eq.running" || state.status === "running";
+          if (current && allowed) Object.assign(state, body);
+          const result = method === "POST"
+            ? { id: RUN_ID, created_at: "2026-11-11T12:00:00.000Z" }
+            : url.searchParams.has("select") && current && allowed
+              ? { id: RUN_ID }
+              : null;
+          return Response.json(result, { status: 200 });
         }
         queries.push({ table, search: url.searchParams });
         if (table === "audit_runs") {
