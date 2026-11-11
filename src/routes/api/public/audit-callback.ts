@@ -137,12 +137,19 @@ export const Route = createFileRoute("/api/public/audit-callback")({
             if (v3) {
               const { getOperationalContext } = await import("@/lib/environment/context.server");
               const context = getOperationalContext();
-              if (
-                context.environment !== "preview" ||
-                context.schema !== "homolog" ||
-                context.webhookMode !== "test"
-              )
-                return json({ error: "Contrato v3 restrito ao Preview de homologação." }, 403);
+              const previewAllowed =
+                context.environment === "preview" &&
+                context.schema === "homolog" &&
+                context.webhookMode === "test";
+              // A v3 run created by the explicitly enabled production trigger
+              // remains eligible for its callback even if the dispatch flag is
+              // turned off during rollback. The registered run scope is immutable.
+              const productionAllowed =
+                context.environment === "production" &&
+                context.schema === "public" &&
+                context.webhookMode === "production";
+              if (!previewAllowed && !productionAllowed)
+                return json({ error: "Contexto do contrato v3 não autorizado." }, 403);
               if (!technicalFailure) {
                 audited = validateV3AuditCoverage(payload, original);
                 if (!audited)
