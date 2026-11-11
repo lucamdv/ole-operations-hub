@@ -228,3 +228,20 @@ test("v3 parcial mais nova não esconde achado recebido depois de apólice que e
   assert.equal((await late.json()).reopened_resolutions, 1);
   assert.ok(h.state.homolog.audit_resolutions[0].reopened_at);
 });
+
+test("callback recebido após cancelamento é ignorado sem alterar achados nem resoluções", async (t) => {
+  const h = callbackHarness(t);
+  const run = h.addRun({ raw: original, status: "cancelled", status_geral: "CANCELADA" });
+  const beforeFindings = h.state.homolog.audit_findings.length;
+  const beforeResolutions = h.state.homolog.audit_resolutions.length;
+  const response = await h.send(run, result({
+    status_geral: "ALERTA",
+    resumo: { ...summary, aprovados: 0, reprovados: 1 },
+    apolices_com_erro: [policyError("000002")],
+  }));
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).duplicate, true);
+  assert.equal(run.status, "cancelled");
+  assert.equal(h.state.homolog.audit_findings.length, beforeFindings);
+  assert.equal(h.state.homolog.audit_resolutions.length, beforeResolutions);
+});
