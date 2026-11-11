@@ -39,6 +39,7 @@ function setup(t, data = cancelledPolicyData(), options = {}) {
     VERCEL_URL: "",
     VERCEL_BRANCH_URL: "",
     AUDIT_TEST_CONTRACT_VERSION: "",
+    AUDIT_PRODUCTION_CONTRACT_VERSION: "",
     VERCEL_ENV: "production",
     SUPABASE_SERVICE_ROLE_KEY: "SECRET-NEVER-SEND",
     AUDIT_CALLBACK_SECRET: "SECRET-CALLBACK",
@@ -227,4 +228,34 @@ test("novo disparo cancela somente runs anteriores antes de consultar o n8n", as
   assert.match(cancellation.search.get("created_at"), /^lt\./);
   assert.match(cancellation.body.mensagem_geral, /automaticamente|nova auditoria/);
   assert.equal(db.state.status, "running", "a nova execução permanece em andamento");
+});
+
+test("v3 in production is an explicit post-cutover opt-in; callback uses official host", async (t) => {
+  const { sent } = setup(t);
+  process.env.AUDIT_PRODUCTION_CONTRACT_VERSION = "3";
+  process.env.PUBLIC_APP_URL = "https://olexcockpit.vercel.app";
+  await runAuditImpl("ole-copilot", "production");
+  assert.equal(sent[0].body.audit_contract_version, 3);
+  assert.equal(
+    sent[0].body.callback_url,
+    `https://olexcockpit.vercel.app/api/public/audit-callback?run_id=${RUN_ID}`,
+  );
+  assert.match(sent[0].url, /\/webhook\//);
+});
+
+test("production opt-in fails closed on an unofficial callback origin", async (t) => {
+  const { db, sent } = setup(t);
+  process.env.AUDIT_PRODUCTION_CONTRACT_VERSION = "3";
+  await assert.rejects(runAuditImpl("ole-copilot", "production"), /callback oficial/);
+  assert.equal(sent.length, 0);
+  assert.equal(db.state.status, "error");
+});
+
+test("production-v3 flag never activates the Preview outside its own test gate", async (t) => {
+  const { sent } = setup(t);
+  process.env.AUDIT_PRODUCTION_CONTRACT_VERSION = "3";
+  process.env.VERCEL_ENV = "preview";
+  process.env.VERCEL_BRANCH_URL = "olexcockpit-git-codex-env-homolo-3ffb4d-luca-monteiros-projects.vercel.app";
+  await runAuditImpl("ole-copilot", "test");
+  assert.equal(sent[0].body.audit_contract_version, 2);
 });
