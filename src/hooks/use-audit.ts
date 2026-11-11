@@ -6,6 +6,8 @@ import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import { auditCompletionNotice } from "@/lib/audit/result-summary";
 import {
+  cancelAudit,
+  getActiveAuditRun,
   getAuditHistory,
   getAuditRunStatus,
   getLatestAudit,
@@ -33,19 +35,29 @@ export function useAuditHistory() {
 }
 
 /**
- * Dispara a auditoria e faz polling até o callback do n8n preencher o resultado.
+ * Executa auditorias com acompanhamento global entre abas e terminação persistida.
+ * Um reinício substitui a execução anterior; cancelamento não depende de callback.
  */
 export function useRunAudit() {
   const qc = useQueryClient();
   const fireFn = useServerFn(runAudit);
-  const { mode } = useWebhookMode("audit");
+  const activeFn = useServerFn(getActiveAuditRun);
+  const cancelFn = useServerFn(cancelAudit);
   const statusFn = useServerFn(getAuditRunStatus);
+  const { mode } = useWebhookMode("audit");
 
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [isPolling, setIsPolling] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollingRun = useRef<string | null>(null);
 
-  // Limpa timer ao desmontar
+  const activeQuery = useQuery({
+    queryKey: ["audit", "active", mode] as const,
+    queryFn: () => activeFn({ data: { mode } }),
+    refetchInterval: 3_000,
+    staleTime: 1_000,
+  });
+
   useEffect(
     () => () => {
       if (pollTimer.current) clearTimeout(pollTimer.current);
@@ -53,7 +65,9 @@ export function useRunAudit() {
     [],
   );
 
-  const stopPolling = () => {
+  const stopPolling = (runId: string) => {
+    if (pollingRun.current !== runId) return;
+    pollingRun.current = null;
     if (pollTimer.current) {
       clearTimeout(pollTimer.current);
       pollTimer.current = null;
@@ -62,41 +76,55 @@ export function useRunAudit() {
     setActiveRunId(null);
   };
 
+  const refreshAudit = () => {
+    qc.invalidateQueries({ queryKey: ["audit"] });
+    qc.invalidateQueries({ queryKey: ["system-status"] });
+  };
+
   const pollOnce = async (runId: string, startedAt: number, submittedMode: WebhookMode) => {
+    if (pollingRun.current !== runId) return;
     try {
       const row = await statusFn({ data: { runId, mode: submittedMode } });
-      if (!row) {
-        // ainda não disponível, segue polling
-      } else if (row.status === "success") {
+      if (pollingRun.current !== runId) return;
+      if (row?.status === "success") {
         const notice = auditCompletionNotice(row);
         toast[notice.tone](notice.title, { description: notice.description });
-        qc.invalidateQueries({ queryKey: ["audit"] });
-        qc.invalidateQueries({ queryKey: ["system-status"] });
-        stopPolling();
+        refreshAudit();
+        stopPolling(runId);
         return;
-      } else if (row.status === "error") {
+      }
+      if (row?.status === "cancelled") {
+        toast.info("Auditoria cancelada", {
+          description: "Esta execução não aceitará novos resultados do n8n.",
+        });
+        refreshAudit();
+        stopPolling(runId);
+        return;
+      }
+      if (row?.status === "error") {
         toast.error("Falha na auditoria", {
           description: row.error_message ?? "Erro desconhecido no motor.",
           duration: 30_000,
-          style: {
-            whiteSpace: "pre-wrap",
-            fontFamily: "ui-monospace, SFMono-Regular, monospace",
-            fontSize: "12px",
-          },
         });
-        stopPolling();
+        refreshAudit();
+        stopPolling(runId);
         return;
       }
     } catch (err) {
-      console.error("[poll] erro consultando status:", err);
+      console.error("[audit-poll] erro consultando status:", err);
     }
 
-    // timeout de segurança: 15 min
     if (Date.now() - startedAt > 15 * 60_000) {
-      toast.error("Auditoria expirou", {
-        description: "Sem resposta do motor após 15 minutos.",
+      try {
+        await cancelFn({ data: { runId, reason: "timeout" } });
+      } catch (err) {
+        console.error("[audit-poll] falha encerrando timeout:", err);
+      }
+      toast.error("Auditoria expirada", {
+        description: "Sem resposta do motor após 15 minutos. O encerramento foi solicitado no servidor.",
       });
-      stopPolling();
+      refreshAudit();
+      stopPolling(runId);
       return;
     }
 
@@ -109,23 +137,64 @@ export function useRunAudit() {
       const result = await fireFn({ data: { mode: submittedMode } });
       return { ...result, submittedMode };
     },
-    onSuccess: ({ runId, submittedMode }) => {
+    onSuccess: ({ runId, submittedMode, status }) => {
+      if (pollTimer.current) clearTimeout(pollTimer.current);
+      pollingRun.current = runId;
       setActiveRunId(runId);
-      setIsPolling(true);
+      setIsPolling(status === "running");
+      refreshAudit();
+      if (status === "cancelled") {
+        toast.info("Execução substituída", {
+          description: "Uma solicitação mais recente já substituiu esta auditoria.",
+        });
+        stopPolling(runId);
+        return;
+      }
       toast.info("Auditoria iniciada", {
         description: "Aguardando retorno do motor n8n…",
       });
-      const startedAt = Date.now();
-      pollTimer.current = setTimeout(() => pollOnce(runId, startedAt, submittedMode), 3_000);
+      pollTimer.current = setTimeout(
+        () => pollOnce(runId, Date.now(), submittedMode),
+        3_000,
+      );
     },
     onError: (err: Error) => {
+      refreshAudit();
       toast.error("Falha ao disparar auditoria", { description: err.message });
+    },
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: async () => {
+      const runId = activeQuery.data?.id ?? activeRunId;
+      if (!runId) throw new Error("Nenhuma auditoria em andamento.");
+      return cancelFn({ data: { runId, reason: "manual" } });
+    },
+    onSuccess: (result) => {
+      stopPolling(result.runId);
+      refreshAudit();
+      if (result.status === "cancelled") {
+        toast.info("Auditoria cancelada", {
+          description: "O Cockpit ignorará qualquer callback tardio desta execução.",
+        });
+      } else {
+        toast.info("Auditoria já encerrada", {
+          description: "A execução terminou antes do pedido de cancelamento.",
+        });
+      }
+    },
+    onError: (err: Error) => {
+      toast.error("Não foi possível cancelar a auditoria", { description: err.message });
     },
   });
 
   return {
     ...mutation,
-    isRunning: mutation.isPending || isPolling,
-    activeRunId,
+    isRunning: mutation.isPending || isPolling || Boolean(activeQuery.data?.id),
+    isStarting: mutation.isPending,
+    isCancelling: cancelMutation.isPending,
+    activeRunId: activeQuery.data?.id ?? activeRunId,
+    activeRunCreatedAt: activeQuery.data?.created_at ?? null,
+    cancel: () => cancelMutation.mutate(),
   };
 }
