@@ -862,6 +862,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      commit_audit_callback: {
+        Args: {
+          p_run_id: string
+          p_result: Json
+          p_findings: Json
+          p_reopen_ids: string[]
+        }
+        Returns: Json
+      }
       claim_billing_sync_fallbacks: {
         Args: { lease_seconds?: number; max_items?: number }
         Returns: Database["public"]["Tables"]["billing_sync_fallbacks"]["Row"][]
