@@ -12,6 +12,7 @@ import {
   severityOf,
 } from "./derive";
 import { formatDateTime, formatInt, formatPct } from "@/lib/format";
+import { auditResultSummary } from "./result-summary";
 
 function pad(n: number) {
   return n.toString().padStart(2, "0");
@@ -34,7 +35,7 @@ const COLORS = {
   chartBg: [248, 250, 252] as [number, number, number],
 };
 
-export function exportAuditPdf(latest: LatestAudit, history: AuditHistoryItem[] = []) {
+export function buildAuditPdf(latest: LatestAudit, history: AuditHistoryItem[] = []) {
   const { run, findings } = latest;
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -64,14 +65,15 @@ export function exportAuditPdf(latest: LatestAudit, history: AuditHistoryItem[] 
   const total = run.total_processado ?? 0;
   const aprov = run.aprovados ?? 0;
   const reprov = run.reprovados ?? 0;
-  const conformidade = total > 0 ? (aprov / total) * 100 : 0;
+  const coverage = auditResultSummary(run);
+  const conformidade = coverage.approvalRate;
 
   autoTable(doc, {
     startY: 90,
     theme: "grid",
     styles: { fontSize: 10, cellPadding: 7, halign: "center" },
     headStyles: { fillColor: COLORS.header, textColor: 255, fontStyle: "bold" },
-    head: [["Total processado", "OK", "Intervencoes", "Erros", "Alertas", "Conformidade"]],
+    head: [["Apolices auditadas", "Aprovadas", "Reprovadas", "Erros", "Alertas", "Conformidade"]],
     body: [
       [
         formatInt(total),
@@ -79,13 +81,38 @@ export function exportAuditPdf(latest: LatestAudit, history: AuditHistoryItem[] 
         formatInt(reprov),
         formatInt(sev.erros),
         formatInt(sev.alertas),
-        formatPct(conformidade, 1),
+        coverage.partial
+          ? "Pendente"
+          : conformidade !== null
+            ? formatPct(conformidade, 1)
+            : "Sem apolices auditadas",
       ],
     ],
     margin: { left: margin, right: margin },
   });
 
-  let cursorY = (doc as any).lastAutoTable.finalY + 22;
+  let cursorY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 22;
+  if (coverage.partial || coverage.hasCoverageCounters) {
+    const coverageColumns = [
+      { label: coverage.partial ? "PARCIAL - Auditadas" : "Auditadas", value: total },
+      { label: "Candidatas", value: coverage.candidates },
+      { label: "Excluidas por status", value: coverage.excluded },
+      ...(coverage.contractV3
+        ? [{ label: "Dispensadas por excecao integral", value: coverage.dispensed }]
+        : []),
+      { label: "Ignoradas por falha", value: coverage.ignored },
+    ];
+    autoTable(doc, {
+      startY: cursorY,
+      theme: "grid",
+      styles: { fontSize: 9, cellPadding: 6 },
+      headStyles: { fillColor: coverage.partial ? COLORS.warn : COLORS.header },
+      head: [coverageColumns.map(({ label }) => label)],
+      body: [coverageColumns.map(({ value }) => value ?? "Nao informado")],
+      margin: { left: margin, right: margin },
+    });
+    cursorY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 22;
+  }
 
   // Top apólices (resumo tabular agora com motivos e endossos)
   doc.setFont("helvetica", "bold");
@@ -272,7 +299,11 @@ export function exportAuditPdf(latest: LatestAudit, history: AuditHistoryItem[] 
     doc.text("OLE COPILOT — Relatorio de Auditoria", margin, pageHeight - 16);
   }
 
-  doc.save(`auditoria-OLE-${fileTimestamp()}.pdf`);
+  return doc;
+}
+
+export function exportAuditPdf(latest: LatestAudit, history: AuditHistoryItem[] = []) {
+  buildAuditPdf(latest, history).save(`auditoria-OLE-${fileTimestamp()}.pdf`);
 }
 
 // ---------- Analytics rendering ----------

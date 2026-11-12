@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { AuditCoverageNotice } from "./audit-coverage-notice";
+import { auditCompletionNotice, auditResultSummary } from "@/lib/audit/result-summary";
 import {
   AlertTriangle,
   ChevronDown,
@@ -113,6 +115,11 @@ export function FindingsListDialog({
 
   const copyAll = () => {
     const lines: string[] = [];
+    const coverage = auditResultSummary(latest.run);
+    if (coverage.partial || coverage.hasCoverageCounters || coverage.processed === 0) {
+      const notice = auditCompletionNotice(latest.run);
+      lines.push(`${notice.title} — ${notice.description}`);
+    }
     lines.push(
       `Relatório Consolidado de Auditoria — ${formatDateTime(latest.run.data_auditoria ?? latest.run.created_at)}`,
     );
@@ -162,6 +169,7 @@ export function FindingsListDialog({
             <Chip tone="info">🔍 {formatInt(grouped.length)} apólices</Chip>
             <Chip tone="default">📋 {formatInt(filtered.length)} achados</Chip>
           </div>
+          <AuditCoverageNotice run={latest.run} />
         </DialogHeader>
 
         {/* Toolbar */}

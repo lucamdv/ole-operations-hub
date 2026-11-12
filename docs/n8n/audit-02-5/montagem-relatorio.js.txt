@@ -1,0 +1,239 @@
+// AUDIT-02.5 | consolida exclusões por status, dispensas e resultados da auditoria.
+// Concluída com achados é status técnico success + status_geral ALERTA.
+const requestState = $("Validar Contrato AUDIT-02").first().json;
+const config = requestState._audit_request;
+const v3 = config.audit_contract_version === 3;
+const filteredInput = $("Filtrar Carteira AUDIT-02")
+  .all()
+  .map((item) => item.json);
+const context = filteredInput[0]?._audit_context;
+
+if (!context) throw new Error("AUDIT-02: metadados da carteira indisponíveis.");
+
+const eligibleSet = new Set(
+  filteredInput.filter((p) => !p._audit_empty).map((p) => p.numero_apolice),
+);
+
+const reportError = (message) => [
+  {
+    json: {
+      run_id: config.run_id,
+      status: "error",
+      error_message: `AUDIT-02: ${message}`,
+      payload: {
+        status: "error",
+        error_message: `AUDIT-02: ${message}`,
+        status_geral: "ERRO",
+      },
+    },
+  },
+];
+
+if (v3 && context.error) return reportError(context.error);
+if (eligibleSet.size !== context.auditaveis_total) {
+  return reportError("carteira filtrada com contagem inconsistente");
+}
+
+const candidates = context.apolices_candidatas;
+const totalDispensed = v3 ? context.total_dispensadas : 0;
+if (v3) {
+  if (
+    !Array.isArray(candidates) ||
+    candidates.length !== context.total_candidatas ||
+    candidates.some((id) => typeof id !== "string" || !/^\d{1,120}$/.test(id)) ||
+    new Set(candidates).size !== candidates.length
+  ) {
+    return reportError("lista de candidatas da carteira inválida");
+  }
+
+  const excluded = new Set(config.excludedPolicies);
+  const dispensed = new Set(config.dispensedPolicies.map(({ apolice }) => apolice));
+  let matchedExcluded = 0;
+  let matchedDispensed = 0;
+  for (const id of candidates) {
+    if (excluded.has(id)) matchedExcluded++;
+    else if (dispensed.has(id)) matchedDispensed++;
+    else if (!eligibleSet.has(id)) return reportError("carteira filtrada diverge das candidatas");
+  }
+  if (matchedExcluded !== context.total_excluidas || matchedDispensed !== totalDispensed) {
+    return reportError("exclusões ou dispensas da carteira divergem do snapshot");
+  }
+}
+
+const results = [];
+
+// n8n Loop Over Items v3: auditoria executada uma vez por iteração.
+for (let runIndex = 0; runIndex < eligibleSet.size; runIndex++) {
+  try {
+    const rows = $("Auditoria de Vigência").all(0, runIndex);
+    if (Array.isArray(rows)) {
+      results.push(...rows.map((item) => item.json));
+    }
+  } catch (error) {
+    // Não interpretar ausência de resultado como aprovação.
+    break;
+  }
+}
+
+const byPolicy = new Map();
+
+for (const result of results) {
+  const apolice = String(result?.apolice ?? "");
+
+  if (!eligibleSet.has(apolice)) {
+    return reportError("a auditoria retornou apólice fora do conjunto auditável");
+  }
+
+  if (byPolicy.has(apolice)) {
+    return reportError(`resultado duplicado da apólice ${apolice}`);
+  }
+
+  byPolicy.set(apolice, result);
+}
+
+if (byPolicy.size !== eligibleSet.size) {
+  return reportError(
+    `auditoria incompleta: ${byPolicy.size}/${eligibleSet.size} apólices com resultado`,
+  );
+}
+
+// AUDIT-02.3
+// IGNORADO não representa uma falha global.
+// As demais apólices e seus erros são preservados.
+
+let aprovados = 0;
+let reprovados = 0;
+let achadosDispensados = 0;
+
+const detalhesReprovados = [];
+const apolicesIgnoradas = [];
+
+for (const [apolice, result] of byPolicy) {
+  const status = result.status_auditoria;
+
+  // Apólices sem coberturas válidas.
+  if (status === "IGNORADO") {
+    const findings = result.erros_encontrados ?? [];
+
+    if (!Array.isArray(findings) || findings.length > 0) {
+      return reportError(`apólice ${apolice} ignorada com achados incompatíveis`);
+    }
+
+    apolicesIgnoradas.push({
+      apolice,
+      motivo: String(result.motivo || "Sem coberturas válidas para auditoria").slice(0, 500),
+    });
+
+    continue;
+  }
+
+  // Qualquer outro status inesperado continua sendo erro técnico.
+  if (!["APROVADO", "REPROVADO"].includes(status)) {
+    return reportError(`status não auditável na apólice ${apolice}: ${status ?? "ausente"}`);
+  }
+
+  const findings = result.erros_encontrados ?? [];
+
+  if (!Array.isArray(findings)) {
+    return reportError(`lista de ocorrências inválida em ${apolice}`);
+  }
+
+  if (status === "REPROVADO" && findings.length === 0) {
+    return reportError(`apólice ${apolice} reprovada sem detalhes`);
+  }
+
+  if (status === "APROVADO" && findings.length > 0) {
+    return reportError(`apólice ${apolice} aprovada com achados inconsistentes`);
+  }
+
+  if (findings.some((f) => !f || typeof f.tipo_erro !== "string" || !f.tipo_erro.trim())) {
+    return reportError(`achado sem tipo válido na apólice ${apolice}`);
+  }
+
+  // Exceções específicas por apólice + tipo exato de erro.
+  const ignoredRules = new Set(config.specificRules[apolice] ?? []);
+
+  const kept = findings.filter((f) => {
+    // Não retirar acentos nem mudar capitalização.
+    if (ignoredRules.has(f.tipo_erro)) {
+      achadosDispensados++;
+      return false;
+    }
+
+    return true;
+  });
+
+  if (kept.length > 0) {
+    reprovados++;
+
+    detalhesReprovados.push({
+      apolice,
+      total_erros: kept.length,
+      erros: kept,
+    });
+  } else {
+    aprovados++;
+  }
+}
+
+// Consolidação final.
+const totalAuditadas = aprovados + reprovados;
+const totalIgnoradas = apolicesIgnoradas.length;
+
+if (
+  totalAuditadas + totalIgnoradas !== context.auditaveis_total ||
+  context.auditaveis_total + context.total_excluidas + totalDispensed !== context.total_candidatas
+) {
+  return reportError("invariantes de consolidação violadas");
+}
+
+const parcial = totalIgnoradas > 0;
+
+const resumo = {
+  aprovados,
+  reprovados,
+  total_processado: totalAuditadas,
+  total_candidatas: context.total_candidatas,
+  total_excluidas: context.total_excluidas,
+  ...(v3 ? { total_dispensadas: totalDispensed } : {}),
+  total_ignoradas: totalIgnoradas,
+  achados_dispensados: achadosDispensados,
+};
+
+const descricao =
+  `Auditoria ${parcial ? "parcialmente " : ""}concluída: ` +
+  `${aprovados} aprovada(s), ${reprovados} reprovada(s), ` +
+  `${context.total_excluidas} excluída(s) por status, ` +
+  (v3 ? `${totalDispensed} dispensada(s) por exceção integral, ` : "") +
+  `${totalIgnoradas} ignorada(s) sem coberturas válidas, ` +
+  `${achadosDispensados} achado(s) dispensado(s).`;
+
+return [
+  {
+    json: {
+      run_id: config.run_id,
+
+      // Mantém compatibilidade com o callback legado.
+      // A incompletude é indicada por status_geral PARCIAL.
+      status: "success",
+
+      payload: {
+        status: "success",
+        data_auditoria: new Date().toISOString(),
+        audit_contract_version: config.audit_contract_version,
+        exclusions_snapshot_at: config.exclusions_snapshot_at,
+        ...(v3 ? { apolices_candidatas: candidates } : {}),
+
+        resumo,
+
+        status_geral: parcial ? "PARCIAL" : reprovados === 0 ? "SUCESSO" : "ALERTA",
+
+        mensagem_geral: descricao,
+
+        apolices_ignoradas: apolicesIgnoradas,
+
+        apolices_com_erro: detalhesReprovados,
+      },
+    },
+  },
+];

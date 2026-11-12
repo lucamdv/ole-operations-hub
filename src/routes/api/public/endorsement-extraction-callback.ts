@@ -57,115 +57,119 @@ export const Route = createFileRoute("/api/public/endorsement-extraction-callbac
       OPTIONS: async () => new Response(null, { status: 204, headers: CORS }),
 
       POST: async ({ request }) => {
-        const url = new URL(request.url);
-        const runId = url.searchParams.get("run_id");
-        const expected = process.env.ENDORSEMENT_CALLBACK_SECRET;
-        const provided = request.headers.get("x-callback-secret");
-        if (!expected || provided !== expected) return json({ error: "Unauthorized" }, 401);
-        if (!runId) return json({ error: "run_id ausente" }, 400);
+        const { handleScopedCallback } = await import("@/lib/environment/callback.server");
+        return handleScopedCallback(request, {
+          integration: "extraction",
+          secrets: [process.env.ENDORSEMENT_CALLBACK_SECRET],
+          handler: async () => {
+            const url = new URL(request.url);
+            const runId = url.searchParams.get("run_id");
+            const expected = process.env.ENDORSEMENT_CALLBACK_SECRET;
+            const provided = request.headers.get("x-callback-secret");
+            if (!expected || provided !== expected) return json({ error: "Unauthorized" }, 401);
+            if (!runId) return json({ error: "run_id ausente" }, 400);
 
-        let raw: unknown;
-        try {
-          raw = await request.json();
-        } catch {
-          return json({ error: "Invalid JSON" }, 400);
-        }
+            let raw: unknown;
+            try {
+              raw = await request.json();
+            } catch {
+              return json({ error: "Invalid JSON" }, 400);
+            }
 
-        const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+            const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
 
-        const { data: runRow } = await supabaseAdmin
-          .from("endorsement_extraction_runs")
-          .select("id, created_at")
-          .eq("id", runId)
-          .maybeSingle();
-        if (!runRow) return json({ error: "Execução não encontrada" }, 404);
+            const { data: runRow } = await supabaseAdmin
+              .from("endorsement_extraction_runs")
+              .select("id, created_at")
+              .eq("id", runId)
+              .maybeSingle();
+            if (!runRow) return json({ error: "Execução não encontrada" }, 404);
 
-        const rows = toRows(raw);
-        const items = rows
-          .map((r) => {
-            const policy = pick(r, [
-              "PolicyNumber",
-              "policy_number",
-              "policynumber",
-              "NumeroApolice",
-              "numero_apolice",
-              "apolice",
-            ]);
-            const last = pick(r, [
-              "last_sequencial_endosso_used",
-              "lastSequencialEndossoUsed",
-              "last_endosso",
-              "ultimo_endosso",
-              "numero_endosso_atual",
-            ]);
-            if (policy === undefined) return null;
-            const parsed =
-              last === undefined || last === "" ? null : Number.parseInt(String(last), 10);
-            return {
-              run_id: runId,
-              policy_number: String(policy).trim(),
-              last_sequencial_endosso_used: Number.isFinite(parsed as number)
-                ? (parsed as number)
-                : null,
-            };
-          })
-          .filter(Boolean) as Array<{
-          run_id: string;
-          policy_number: string;
-          last_sequencial_endosso_used: number | null;
-        }>;
+            const rows = toRows(raw);
+            const items = rows
+              .map((r) => {
+                const policy = pick(r, [
+                  "PolicyNumber",
+                  "policy_number",
+                  "policynumber",
+                  "NumeroApolice",
+                  "numero_apolice",
+                  "apolice",
+                ]);
+                const last = pick(r, [
+                  "last_sequencial_endosso_used",
+                  "lastSequencialEndossoUsed",
+                  "last_endosso",
+                  "ultimo_endosso",
+                  "numero_endosso_atual",
+                ]);
+                if (policy === undefined) return null;
+                const parsed =
+                  last === undefined || last === "" ? null : Number.parseInt(String(last), 10);
+                return {
+                  run_id: runId,
+                  policy_number: String(policy).trim(),
+                  last_sequencial_endosso_used: Number.isFinite(parsed as number)
+                    ? (parsed as number)
+                    : null,
+                };
+              })
+              .filter(Boolean) as Array<{
+              run_id: string;
+              policy_number: string;
+              last_sequencial_endosso_used: number | null;
+            }>;
 
-        if (items.length === 0) {
-          await supabaseAdmin
-            .from("endorsement_extraction_runs")
-            .update({
-              status: "error",
-              error_message: "Callback recebido sem apólices válidas.",
-              raw: raw as never,
-              finished_at: new Date().toISOString(),
-            } as never)
-            .eq("id", runId);
-          return json({ error: "Nenhuma apólice válida no payload" }, 422);
-        }
+            if (items.length === 0) {
+              await supabaseAdmin
+                .from("endorsement_extraction_runs")
+                .update({
+                  status: "error",
+                  error_message: "Callback recebido sem apólices válidas.",
+                  raw: raw as never,
+                  finished_at: new Date().toISOString(),
+                } as never)
+                .eq("id", runId);
+              return json({ error: "Nenhuma apólice válida no payload" }, 422);
+            }
 
-        // Substitui itens anteriores desta execução (idempotente)
-        await supabaseAdmin
-          .from("endorsement_extraction_items")
-          .delete()
-          .eq("run_id", runId);
+            // Substitui itens anteriores desta execução (idempotente)
+            await supabaseAdmin.from("endorsement_extraction_items").delete().eq("run_id", runId);
 
-        for (let i = 0; i < items.length; i += 500) {
-          const chunk = items.slice(i, i + 500);
-          const { error } = await supabaseAdmin
-            .from("endorsement_extraction_items")
-            .insert(chunk as never);
-          if (error) {
+            for (let i = 0; i < items.length; i += 500) {
+              const chunk = items.slice(i, i + 500);
+              const { error } = await supabaseAdmin
+                .from("endorsement_extraction_items")
+                .insert(chunk as never);
+              if (error) {
+                await supabaseAdmin
+                  .from("endorsement_extraction_runs")
+                  .update({
+                    status: "error",
+                    error_message: error.message,
+                    finished_at: new Date().toISOString(),
+                  } as never)
+                  .eq("id", runId);
+                return json({ error: error.message }, 500);
+              }
+            }
+
+            const startedAt = new Date((runRow as { created_at: string }).created_at).getTime();
             await supabaseAdmin
               .from("endorsement_extraction_runs")
               .update({
-                status: "error",
-                error_message: error.message,
+                status: "success",
+                total_apolices: items.length,
+                duration_ms: Date.now() - startedAt,
+                raw: raw as never,
+                error_message: null,
                 finished_at: new Date().toISOString(),
               } as never)
               .eq("id", runId);
-            return json({ error: error.message }, 500);
-          }
-        }
 
-        const startedAt = new Date((runRow as { created_at: string }).created_at).getTime();
-        await supabaseAdmin
-          .from("endorsement_extraction_runs")
-          .update({
-            status: "success",
-            total_apolices: items.length,
-            duration_ms: Date.now() - startedAt,
-            raw: raw as never,
-            error_message: null,
-            finished_at: new Date().toISOString(),
-          } as never)
-          .eq("id", runId);
-
-        return json({ ok: true, received: items.length });
+            return json({ ok: true, received: items.length });
+          },
+        });
       },
     },
   },

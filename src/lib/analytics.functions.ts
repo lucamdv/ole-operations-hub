@@ -21,7 +21,7 @@ import {
   type PortfolioStatusSummary,
 } from "@/lib/analytics/dashboard-core";
 import { dedupeBillingRecords, type BillingRecord } from "@/lib/billing/status";
-import { translateProposta } from "@/lib/excelsior/translate";
+import { policyEndorsementSignal, translateProposta } from "@/lib/excelsior/translate";
 import { derivePolicyStatus, type PolicyEndorsementSignal } from "@/lib/policies/status";
 
 export interface IssuanceBucket {
@@ -308,20 +308,8 @@ export const getAnalyticsAggregates = createServerFn({ method: "GET" })
 
     const endorsementSignalsByPolicy = new Map<string, PolicyEndorsementSignal[]>();
     for (const emission of emissions) {
-      const translated = translateProposta(emission.proposta);
       const signals = endorsementSignalsByPolicy.get(emission.numero_apolice) ?? [];
-      signals.push({
-        tipo_endosso: translated.tipoEndosso,
-        motivo_endosso: [
-          translated.motivoEndosso?.codigo,
-          translated.motivoEndosso?.descricao,
-          translated.motivoEndosso?.tipoCancelamento,
-          translated.cancelamento?.motivo,
-          translated.cancelamento?.descricaoMotivo,
-        ]
-          .filter(Boolean)
-          .join(" "),
-      });
+      signals.push(policyEndorsementSignal(emission));
       endorsementSignalsByPolicy.set(emission.numero_apolice, signals);
     }
 

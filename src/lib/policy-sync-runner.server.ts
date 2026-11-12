@@ -2,6 +2,8 @@ import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { getExcelsiorMotorConfig } from "@/lib/excelsior/motor-client.server";
 import { executeDirectMotorSync } from "@/lib/excelsior/motor-sync.server";
 import { keepRequestAlive } from "@/lib/request-lifecycle.server";
+import { assertProductionExternalAccess } from "./environment/context.server";
+import { registerExecution } from "./environment/execution.server";
 
 const STALE_RUN_AFTER_MS = 6 * 60 * 1_000;
 
@@ -41,6 +43,7 @@ async function recoverInterruptedRun(run: {
 // Implementação interna (sem auth). Usada tanto pela serverFn protegida quanto
 // pelo hook público /api/public/hooks/policy-sync (que já valida shared-secret).
 export async function runPolicySyncImpl() {
+  assertProductionExternalAccess();
   const { data: activeRun, error: activeRunError } = await supabaseAdmin
     .from("policy_sync_runs")
     .select("id, created_at, emissoes_status, cobrancas_status")
@@ -99,6 +102,7 @@ export async function runPolicySyncImpl() {
 
   const work = (async () => {
     try {
+      await registerExecution(runId, "policy_sync");
       await executeDirectMotorSync(runId, syncStartedAt);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

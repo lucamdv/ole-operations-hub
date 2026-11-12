@@ -1,4 +1,8 @@
 import { flattenApiItems, isJsonRecord, type JsonRecord } from "./motor-sync.core";
+import {
+  assertProductionExternalAccess,
+  getOperationalContext,
+} from "../environment/context.server";
 
 // The public api.sistemaexcelsior.com.br hostname is protected by Cloudflare and
 // rejects requests coming from Vercel with HTTP 403. The Azure hostname reaches
@@ -29,6 +33,7 @@ function secureBaseUrl(value: string | undefined, fallback: string, variableName
 }
 
 export function getExcelsiorMotorConfig(): MotorClientConfig {
+  assertProductionExternalAccess();
   const username = process.env.EXCELSIOR_API_USERNAME?.trim();
   const password = process.env.EXCELSIOR_API_PASSWORD;
   const missing = [
@@ -63,6 +68,7 @@ export function getExcelsiorMotorConfig(): MotorClientConfig {
 }
 
 export function isExcelsiorMotorConfigured() {
+  if (getOperationalContext().scope !== "production") return false;
   return !!(process.env.EXCELSIOR_API_USERNAME?.trim() && process.env.EXCELSIOR_API_PASSWORD);
 }
 
@@ -123,6 +129,7 @@ export class ExcelsiorMotorClient {
     init: RequestInit,
     options: { attempts?: number; timeoutMs?: number } = {},
   ): Promise<unknown> {
+    assertProductionExternalAccess();
     const attempts = options.attempts ?? 3;
     const timeoutMs = options.timeoutMs ?? this.config.requestTimeoutMs;
     let lastError: unknown;

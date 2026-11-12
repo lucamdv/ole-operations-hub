@@ -1,0 +1,70 @@
+// AUDIT-02.5 | filtra apólices inteiras antes de consultar contratos e endossos.
+// Chave da carteira: numero_apolice quando a API fornece, ou documento-base 000000.
+const state = $("Validar Contrato AUDIT-02").first().json;
+if (!state._audit_contract_ok) throw new Error("AUDIT-02: contrato não validado.");
+const config = state._audit_request;
+const v3 = config.audit_contract_version === 3;
+const excluded = new Set(config.excludedPolicies);
+const dispensed = new Set(v3 ? config.dispensedPolicies.map(({ apolice }) => apolice) : []);
+const input = $input.all().map((item) => item.json);
+const docMap = new Map();
+const invalidPortfolio = () => [
+  { json: { _audit_empty: true, _audit_context: { error: "resposta da carteira inválida" } } },
+];
+for (const raw of input) {
+  if (!raw || typeof raw !== "object") {
+    if (v3) return invalidPortfolio();
+    continue;
+  }
+  // n8n Always Output Data emits a single empty object for a successful empty response.
+  if (v3 && input.length === 1 && !Array.isArray(raw) && Object.keys(raw).length === 0) continue;
+  const docs = Array.isArray(raw) ? raw : [raw];
+  for (const doc of docs) {
+    const numero = doc?.numero_documento;
+    if (v3 && (typeof numero !== "string" || !/^\d{1,120}$/.test(numero.trim())))
+      return invalidPortfolio();
+    if (numero === undefined || numero === null) continue;
+    const numberText = String(numero).trim();
+    if (!/^\d+$/.test(numberText))
+      throw new Error("AUDIT-02: número de documento inválido retornado pela API.");
+    if (!numberText.endsWith("000000")) continue;
+    if (v3 && doc.numero_apolice != null && typeof doc.numero_apolice !== "string")
+      return invalidPortfolio();
+    const canonicalNumber =
+      doc.numero_apolice == null || String(doc.numero_apolice).trim() === ""
+        ? numberText
+        : String(doc.numero_apolice).trim();
+    if (!/^\d+$/.test(canonicalNumber)) {
+      if (v3) return invalidPortfolio();
+      throw new Error("AUDIT-02: número de apólice inválido retornado pela API.");
+    }
+    if (!docMap.has(canonicalNumber))
+      docMap.set(canonicalNumber, { ...doc, numero_apolice: canonicalNumber });
+  }
+}
+const candidates = [...docMap.keys()].sort();
+const eligible = [];
+let totalExcluded = 0;
+let totalDispensed = 0;
+for (const candidate of candidates) {
+  if (excluded.has(candidate)) totalExcluded++;
+  else if (dispensed.has(candidate)) totalDispensed++;
+  else eligible.push(candidate);
+}
+const meta = {
+  total_candidatas: candidates.length,
+  total_excluidas: totalExcluded,
+  auditaveis_total: eligible.length,
+};
+if (v3) meta.total_dispensadas = totalDispensed;
+
+// O relatório lê o primeiro item. A lista inteira da carteira fica somente nele.
+const reportMeta = v3 ? { ...meta, apolices_candidatas: candidates } : meta;
+if (eligible.length === 0) return [{ json: { _audit_empty: true, _audit_context: reportMeta } }];
+return eligible.map((number, index) => ({
+  json: {
+    ...docMap.get(number),
+    _audit_empty: false,
+    _audit_context: index === 0 ? reportMeta : meta,
+  },
+}));

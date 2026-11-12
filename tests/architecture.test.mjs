@@ -143,19 +143,23 @@ test("detalhes de apólice e endosso priorizam a composição financeira", async
   assert.match(endorsement, /data=\{endo\.proposta\}/);
 });
 
-test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manual", async () => {
+test("UI oculta SOLUCIONAR e preserva integração legada fora da interface", async () => {
   const alertPage = await read("src/routes/_authenticated/alertas.tsx");
   const incidentRow = await read("src/components/alertas/incident-row.tsx");
   const incidentDetail = await read("src/components/alertas/incident-detail.tsx");
   const findingsDialog = await read("src/components/audit/findings-list-dialog.tsx");
   const serverFn = await read("src/lib/audit-corrections.functions.ts");
+  const webhookRouter = await read("src/lib/environment/webhooks.server.ts");
   const correctionHook = await read("src/hooks/use-audit-corrections.ts");
   const payload = await read("src/lib/audit/correction-payload.ts");
   const errorGroups = await read("src/lib/audit/error-groups.ts");
   const envExample = await read(".env.example");
 
-  assert.match(alertPage, /Solucionar seleção/);
-  assert.match(alertPage, /Solucionar/);
+  // A solicitação de correção foi descontinuada na interface por decisão do produto.
+  assert.doesNotMatch(alertPage, /Solucionar seleção|Solucionar/);
+  assert.doesNotMatch(alertPage, /useRequestAuditCorrection|requestCorrection/);
+  const integrations = await read("src/components/settings/integracoes-tab.tsx");
+  assert.doesNotMatch(integrations, /integration="correction"/);
   assert.match(alertPage, /Ignorar apólice/);
   assert.doesNotMatch(
     `${alertPage}\n${incidentRow}\n${incidentDetail}\n${findingsDialog}`,
@@ -163,8 +167,9 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
   );
   assert.doesNotMatch(alertPage, /useResolveFinding/);
 
-  assert.match(serverFn, /process\.env\.N8N_CORRECTION_WEBHOOK_URL/);
-  assert.match(serverFn, /resolveWebhookUrl\(rawWebhookUrl, data\.mode\)/);
+  assert.match(webhookRouter, /correction:\s*"N8N_CORRECTION"/);
+  assert.match(serverFn, /resolveIntegrationWebhook\("correction", getOperationalContext\(\)\)/);
+  assert.match(serverFn, /withIntegrationContext\(data\.mode/);
   assert.match(serverFn, /modo teste/);
   assert.match(serverFn, /groups: payload\.total_grupos_erros/);
   assert.match(correctionHook, /useWebhookMode/);

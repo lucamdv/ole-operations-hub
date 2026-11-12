@@ -116,6 +116,15 @@ async function handleBillingSyncCallback(
   const runId = new URL(request.url).searchParams.get("run_id");
   if (!runId) return json({ error: "run_id obrigatório" }, 400);
 
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: parentRun, error: parentError } = await supabaseAdmin
+    .from("policy_sync_runs")
+    .select("id")
+    .eq("id", runId)
+    .maybeSingle();
+  if (parentError) return json({ error: "Falha ao validar execução da cobrança." }, 500);
+  if (!parentRun) return json({ error: "Execução da cobrança não encontrada." }, 404);
+
   let raw: unknown;
   try {
     raw = await request.json();
@@ -255,7 +264,6 @@ async function handleBillingSyncCallback(
     return json({ ok: true, upserted: 0 });
   }
 
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const policyNumbers = [...new Set(rows.map((row) => row.numero_apolice))];
   const { data: existingRows, error: existingError } = await supabaseAdmin
     .from("policy_billing")
@@ -401,7 +409,14 @@ export const Route = createFileRoute("/api/public/billing-sync-callback")({
   server: {
     handlers: {
       OPTIONS: async () => new Response(null, { status: 204, headers: CORS }),
-      POST: (context) => handleBillingSyncCallback(context),
+      POST: async (context) => {
+        const { handleScopedCallback } = await import("@/lib/environment/callback.server");
+        return handleScopedCallback(context.request, {
+          integration: "policy_sync",
+          secrets: [process.env.BILLING_CALLBACK_SECRET, process.env.AUDIT_CALLBACK_SECRET],
+          handler: () => handleBillingSyncCallback(context),
+        });
+      },
     },
   },
 });

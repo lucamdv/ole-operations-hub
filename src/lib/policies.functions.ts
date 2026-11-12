@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { z } from "zod";
 import type { Json } from "@/integrations/supabase/types";
+import type { PolicyEndorsementSignal } from "@/lib/policies/status";
 
 export interface PolicyListItem {
   id: string;
@@ -15,12 +16,10 @@ export interface PolicyListItem {
   corretor_nome: string | null;
   produto: string | null;
   coberturas: string[];
-  endorsements: Array<{
+  endorsements: Array<PolicyEndorsementSignal & {
     id: string;
     numero_endosso: string;
     ordem: number;
-    tipo_endosso: string | null;
-    motivo_endosso: string | null;
   }>;
 }
 
@@ -211,7 +210,7 @@ export const getPolicies = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async () => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { translateProposta, computePremioLiquido, normalizeEndossoNum } =
+    const { translateProposta, computePremioLiquido, normalizeEndossoNum, policyEndorsementSignal } =
       await import("@/lib/excelsior/translate");
     const { data, error } = await supabaseAdmin
       .from("policies")
@@ -271,20 +270,12 @@ export const getPolicies = createServerFn({ method: "GET" })
           translated.dadosGerais.idProduto ??
           translated.dadosGerais.tipoApolice,
         coberturas,
-        endorsements: endos.map((endorsement) => {
-          const translatedEndorsement = translateProposta(endorsement.proposta ?? {});
-          const reason = translatedEndorsement.motivoEndosso;
-          return {
-            id: endorsement.id,
-            numero_endosso: normalizeEndossoNum(endorsement.numero_endosso),
-            ordem: endorsement.ordem,
-            tipo_endosso: translatedEndorsement.tipoEndosso,
-            motivo_endosso:
-              [reason?.codigo, reason?.descricao, reason?.tipoCancelamento]
-                .filter(Boolean)
-                .join(" · ") || null,
-          };
-        }),
+        endorsements: endos.map((endorsement) => ({
+          id: endorsement.id,
+          numero_endosso: normalizeEndossoNum(endorsement.numero_endosso),
+          ordem: endorsement.ordem,
+          ...policyEndorsementSignal({ ...endorsement, numero_apolice: p.numero_apolice }),
+        })),
       };
     }) as PolicyListItem[];
   });

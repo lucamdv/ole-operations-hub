@@ -1,27 +1,40 @@
-import { resolveWebhookUrl, type WebhookMode } from "@/lib/webhook-mode";
+import type { WebhookMode } from "@/lib/webhook-mode";
+import {
+  withIntegrationContext,
+  getOperationalContext,
+  assertProductionScheduler,
+} from "./environment/context.server.ts";
+import { resolveIntegrationWebhook } from "./environment/webhooks.server.ts";
+import { registerExecution } from "./environment/execution.server.ts";
+import { buildAuditTriggerPayload } from "./audit/trigger-payload.ts";
+import {
+  AUDIT_V3_PREVIEW_ORIGIN,
+  AuditCallbackConfigurationError,
+  resolveAuditCallbackUrl,
+} from "./audit/callback-url.ts";
+import { AuditPreparationError } from "./audit/exclusions-snapshot.server.ts";
 
 // Implementação server-only do disparo da auditoria.
 // Usada tanto pela server function protegida (botão manual) quanto pelo
 // agendador público /api/public/hooks/scheduler.
 
-const EMPTY_SUMMARY = {
-  aprovados: 0,
-  reprovados: 0,
-  total_processado: 0,
-};
+class AuditDispatchError extends Error {}
 
-export async function runAuditImpl(
-  trigger = "ole-copilot",
-  webhookMode?: WebhookMode | null,
-) {
-  const rawUrl = process.env.N8N_AUDIT_WEBHOOK_URL;
-  const url = rawUrl ? resolveWebhookUrl(rawUrl, webhookMode) : rawUrl;
+export async function runAuditImpl(trigger = "ole-copilot", webhookMode?: WebhookMode | null) {
+  if (trigger === "scheduler") assertProductionScheduler();
+  return withIntegrationContext(webhookMode, () => dispatchAudit(trigger));
+}
+
+async function dispatchAudit(trigger: string) {
+  const context = getOperationalContext();
+  const url = resolveIntegrationWebhook("audit", context);
   if (!url) {
     throw new Error(
       "Secret N8N_AUDIT_WEBHOOK_URL não configurada. Cole a URL de produção do webhook n8n (/webhook/...) nos secrets do projeto.",
     );
   }
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { supabaseAdmin, loadProductionAuditExclusionsSnapshot } =
+    await import("@/integrations/supabase/client.server");
 
   const { data: runRow, error: insertErr } = await supabaseAdmin
     .from("audit_runs")
@@ -34,61 +47,168 @@ export async function runAuditImpl(
       origem: trigger === "scheduler" ? "auto" : "manual",
       raw: {},
     } as never)
-    .select("id")
+    .select("id, created_at")
     .single();
 
   if (insertErr || !runRow) {
-    throw new Error("Falha ao criar run: " + (insertErr?.message ?? "sem id"));
+    throw new Error("Falha ao criar execução da auditoria.");
   }
 
   const runId = (runRow as { id: string }).id;
 
-  // Callback usa a URL pública estável configurada na Vercel (ou domínio customizado).
-  const base =
-    process.env.PUBLIC_APP_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
-  if (!base) throw new Error("PUBLIC_APP_URL não configurada e nenhuma URL da Vercel disponível.");
-  const normalizedBase = /^https?:\/\//.test(base) ? base : `https://${base}`;
-  const callbackUrl = `${normalizedBase.replace(/\/$/, "")}/api/public/audit-callback?run_id=${runId}`;
-
+  const startedAt = Date.now();
+  let phase: "preparing" | "persisting" | "sending" = "preparing";
   try {
+    await registerExecution(runId, "audit");
+    // O disparo mais recente cancela os anteriores. Não toca em execuções mais novas,
+    // inclusive quando duas requisições começam quase simultaneamente.
+    const createdAt = (runRow as { created_at?: string }).created_at ?? new Date().toISOString();
+    const { error: cancellationError } = await supabaseAdmin
+      .from("audit_runs")
+      .update({
+        status: "cancelled",
+        status_geral: "CANCELADA",
+        mensagem_geral: "Cancelada automaticamente pelo início de uma nova auditoria.",
+        error_message: null,
+      } as never)
+      .eq("status", "running")
+      .neq("id", runId)
+      .lt("created_at", createdAt);
+    if (cancellationError) throw new AuditDispatchError("Falha ao cancelar execução anterior.");
+    // Configuration failures after insert must also close the run as error.
+    const callbackUrl = resolveAuditCallbackUrl(runId, process.env);
+    const previewV3 =
+      context.environment === "preview" &&
+      context.schema === "homolog" &&
+      context.webhookMode === "test" &&
+      process.env.AUDIT_TEST_CONTRACT_VERSION === "3";
+    // Production stays on v2 until the original n8n has been upgraded,
+    // the public SQL RPC has been installed and this opt-in is configured.
+    const productionV3 =
+      context.environment === "production" &&
+      context.schema === "public" &&
+      context.webhookMode === "production" &&
+      process.env.AUDIT_PRODUCTION_CONTRACT_VERSION === "3";
+    const useV3 = previewV3 || productionV3;
+    if (previewV3 && new URL(callbackUrl).origin !== AUDIT_V3_PREVIEW_ORIGIN) {
+      throw new AuditCallbackConfigurationError(
+        "O contrato v3 requer o alias de homologação preparado no workflow de teste.",
+      );
+    }
+    if (productionV3) {
+      const destination = new URL(url);
+      if (
+        new URL(callbackUrl).origin !== "https://olexcockpit.vercel.app" ||
+        !destination.pathname.includes("/webhook/") ||
+        destination.pathname.includes("/webhook-test/")
+      ) {
+        throw new AuditCallbackConfigurationError(
+          "Contrato v3 de produção exige callback oficial e webhook n8n publicado.",
+        );
+      }
+    }
+
+    const snapshot = await loadProductionAuditExclusionsSnapshot();
+    const payload = buildAuditTriggerPayload({
+      runId,
+      callbackUrl,
+      trigger,
+      at: new Date().toISOString(),
+      snapshot,
+      version: useV3 ? 3 : 2,
+    });
+    phase = "persisting";
+    // The callback validates results against this persisted snapshot.
+    const { data: persisted, error: snapshotError } = await supabaseAdmin
+      .from("audit_runs")
+      .update({ raw: { ...payload, exclusions_diagnostics: snapshot.diagnostics } } as never)
+      .eq("id", runId)
+      .eq("status", "running")
+      .select("id")
+      .maybeSingle();
+    if (snapshotError) throw new AuditDispatchError("Falha ao persistir snapshot da auditoria.");
+    if (!persisted) return { runId, status: "cancelled" as const };
+
+    console.info("[audit-run] contrato preparado", {
+      run_id: runId,
+      audit_contract_version: payload.audit_contract_version,
+      excluded_policies: payload.apolices_excluidas.length,
+      dispensed_policies:
+        payload.audit_contract_version === 3 ? payload.apolices_dispensadas.length : 0,
+      specific_exceptions: payload.excecoes_especificas.length,
+      duplicate_policies: snapshot.diagnostics.duplicatePolicies,
+      duplicate_specific_exceptions: snapshot.diagnostics.duplicateSpecificExceptions,
+      invalid_specific_exceptions: snapshot.diagnostics.invalidSpecificExceptions,
+      historical_whole_policy_ignores: snapshot.diagnostics.historicalWholePolicyIgnores.length,
+      historical_status_divergences: snapshot.diagnostics.historicalWholePolicyIgnores.filter(
+        (entry) =>
+          entry.operationalStatus !== "CANCELADA" && entry.operationalStatus !== "SUSPENSA",
+      ).length,
+      preparation_ms: Date.now() - startedAt,
+    });
+    phase = "sending";
+    // Uma chamada concorrente pode ter cancelado esta execução durante o preparo.
+    const { data: stillRunning, error: stateError } = await supabaseAdmin
+      .from("audit_runs")
+      .select("id")
+      .eq("id", runId)
+      .eq("status", "running")
+      .maybeSingle();
+    if (stateError) throw new AuditDispatchError("Falha ao validar estado da auditoria.");
+    if (!stillRunning) return { runId, status: "cancelled" as const };
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        run_id: runId,
-        callback_url: callbackUrl,
-        trigger,
-        mode: "async_callback",
-        status_geral: "PROCESSANDO",
-        mensagem_geral: "Auditoria em processamento.",
-        resumo: EMPTY_SUMMARY,
-        apolices_com_erro: [],
-        at: new Date().toISOString(),
-      }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(30_000),
     });
 
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
       const errMsg =
         res.status === 404 && url.includes("/webhook-test/")
           ? 'Webhook n8n (modo teste) não está escutando. Clique em "Listen for test event" no n8n.'
-          : `Motor de auditoria retornou ${res.status}: ${body.slice(0, 200)}`;
-
-      await supabaseAdmin
-        .from("audit_runs")
-        .update({ status: "error", error_message: errMsg } as never)
-        .eq("id", runId);
-
-      throw new Error(errMsg);
+          : `Motor de auditoria retornou HTTP ${res.status}.`;
+      throw new AuditDispatchError(errMsg);
     }
+    console.info("[audit-run] webhook acionado", {
+      run_id: runId,
+      audit_contract_version: payload.audit_contract_version,
+      http_status: res.status,
+    });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Falha de rede";
-    await supabaseAdmin
-      .from("audit_runs")
-      .update({ status: "error", error_message: msg } as never)
-      .eq("id", runId);
-    throw new Error(`Não foi possível disparar a auditoria: ${msg}`);
+    const msg =
+      err instanceof AuditPreparationError ||
+      err instanceof AuditDispatchError ||
+      err instanceof AuditCallbackConfigurationError
+        ? err.message
+        : phase === "sending"
+          ? "Falha de rede ou tempo limite ao acionar o webhook de auditoria."
+          : phase === "persisting"
+            ? "Falha ao persistir snapshot da auditoria."
+            : "Falha na preparação ou validação do contrato de auditoria.";
+    console.error("[audit-run] falha no acionamento", { run_id: runId, phase, error: msg });
+    let closed = false;
+    for (let attempt = 0; attempt < 2 && !closed; attempt++) {
+      try {
+        const { error } = await supabaseAdmin
+          .from("audit_runs")
+          .update({
+            status: "error",
+            status_geral: "ERRO",
+            error_message: msg,
+            duration_ms: Date.now() - startedAt,
+          } as never)
+          .eq("id", runId)
+          .eq("status", "running");
+        closed = !error;
+      } catch {
+        /* Retry a transient failure without logging provider data. */
+      }
+    }
+    if (!closed)
+      console.error("[audit-run] falha ao encerrar execução com status error", { run_id: runId });
+    const closingError = closed ? "" : " Também não foi possível registrar status error no banco.";
+    throw new Error(`Não foi possível disparar a auditoria: ${msg}${closingError}`);
   }
 
   return { runId, status: "running" as const };

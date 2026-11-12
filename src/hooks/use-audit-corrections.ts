@@ -6,7 +6,7 @@ import { useWebhookMode } from "@/hooks/use-webhook-mode";
 
 export function useRequestAuditCorrection() {
   const requestFn = useServerFn(requestAuditCorrection);
-  const { mode } = useWebhookMode();
+  const { mode } = useWebhookMode("correction");
   const queryClient = useQueryClient();
 
   return useMutation({

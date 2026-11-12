@@ -1,0 +1,15 @@
+const request = $("Validar Contrato AUDIT-02").first().json;
+const version = request._audit_request.audit_contract_version;
+const label = version === 2 || version === 3 ? `Contrato v${version}` : "Contrato AUDIT-02";
+const errorMessage = `${label} recusado: ${request._audit_error}`;
+return [
+  {
+    json: {
+      run_id: request._audit_request.run_id,
+      status: "error",
+      error_message: errorMessage,
+      // O Cockpit lê o status técnico dentro de payload.
+      payload: { status: "error", error_message: errorMessage, status_geral: "ERRO" },
+    },
+  },
+];

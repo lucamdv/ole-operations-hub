@@ -1,6 +1,7 @@
 import { runAuditImpl } from "@/lib/audit-run.server";
 import { zonedParts, zonedTimeToUtc } from "@/lib/automation/next-run";
 import { runPolicySyncImpl } from "@/lib/policy-sync-runner.server";
+import { assertProductionScheduler } from "./environment/context.server";
 
 interface ScheduleRow {
   job: string;
@@ -24,6 +25,7 @@ export interface AutomationDispatchResult {
  * e o tick interno do Supabase, mantendo no máximo um disparo por job/dia.
  */
 export async function runDueAutomations(now = new Date()) {
+  assertProductionScheduler();
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { data, error } = await supabaseAdmin
     .from("automation_schedules")

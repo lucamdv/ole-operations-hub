@@ -6,10 +6,13 @@ import {
   Clock3,
   FileDown,
   List,
+  Shield,
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import { AuditEmptyState } from "@/components/audit/empty-state";
+import { AuditCoverageNotice } from "@/components/audit/audit-coverage-notice";
+import { auditResultSummary } from "@/lib/audit/result-summary";
 import { FindingsListDialog } from "@/components/audit/findings-list-dialog";
 import { RunAuditButton } from "@/components/audit/run-audit-button";
 import { NextRunCountdown } from "@/components/automation/next-run-countdown";
@@ -126,20 +129,41 @@ function AuditOverview({
   const priorityPolicies = groupByApolice(latest.findings).slice(0, 5);
   const needsAttention = kpis.rejected > 0 || severity.erros > 0;
   const hasWarnings = !needsAttention && latest.findings.length > 0;
-  const tone = needsAttention ? "danger" : hasWarnings ? "warning" : "success";
-  const title = needsAttention
-    ? "A auditoria encontrou pontos que exigem atenção."
-    : hasWarnings
-      ? "A carteira está estável, com ressalvas para revisar."
-      : "A auditoria não encontrou desvios.";
-  const description = needsAttention
-    ? `${formatInt(kpis.affectedPolicies)} apólice${kpis.affectedPolicies === 1 ? " precisa" : "s precisam"} de revisão antes do próximo ciclo.`
-    : hasWarnings
-      ? "Não há falhas críticas, mas existem ocorrências informativas pendentes."
-      : `${formatInt(kpis.audited)} apólices foram verificadas e estão em conformidade.`;
+  const coverage = auditResultSummary(latest.run);
+  const noAudited = coverage.processed === 0;
+  const tone = coverage.partial
+    ? "warning"
+    : noAudited
+      ? "muted"
+      : needsAttention
+        ? "danger"
+        : hasWarnings
+          ? "warning"
+          : "success";
+  const title = coverage.partial
+    ? "Auditoria parcialmente concluída."
+    : noAudited
+      ? "Nenhuma apólice foi auditada."
+      : needsAttention
+        ? "A auditoria encontrou pontos que exigem atenção."
+        : hasWarnings
+          ? "A carteira está estável, com ressalvas para revisar."
+          : "A auditoria não encontrou desvios.";
+  const description = coverage.partial
+    ? "Parte da carteira não pôde ser auditada."
+    : noAudited
+      ? "A taxa de conformidade está indisponível para esta execução."
+      : needsAttention
+        ? kpis.affectedPolicies > 0
+          ? `${formatInt(kpis.affectedPolicies)} apólice${kpis.affectedPolicies === 1 ? " precisa" : "s precisam"} de revisão antes do próximo ciclo.`
+          : `${formatInt(kpis.rejected)} de ${formatInt(kpis.audited)} com inconsistências no resultado original.`
+        : hasWarnings
+          ? "Não há falhas críticas, mas existem ocorrências informativas pendentes."
+          : `${formatInt(kpis.audited)} apólices foram verificadas e estão em conformidade.`;
 
   return (
     <>
+      <AuditCoverageNotice run={latest.run} />
       {preferences.auditSummary && (
         <section
           className={cn(
@@ -167,7 +191,9 @@ function AuditOverview({
                   tone === "success" && "border-success/25 bg-success/10 text-success",
                 )}
               >
-                {tone === "success" ? (
+                {tone === "muted" ? (
+                  <Shield className="h-5 w-5 text-muted-foreground sm:h-6 sm:w-6" />
+                ) : tone === "success" ? (
                   <ShieldCheck className="h-5 w-5 sm:h-6 sm:w-6" />
                 ) : (
                   <ShieldAlert className="h-5 w-5 sm:h-6 sm:w-6" />
@@ -194,7 +220,9 @@ function AuditOverview({
             </div>
 
             <div className="border-t border-border pt-5 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
-              <div className="metric-label">Conformidade</div>
+              <div className="metric-label">
+                {coverage.partial ? "Conformidade pendente" : "Conformidade"}
+              </div>
               <div className="mt-2 flex items-baseline gap-2">
                 <span
                   className={cn(
@@ -202,11 +230,13 @@ function AuditOverview({
                     tone === "success" ? "text-success" : "text-foreground",
                   )}
                 >
-                  {formatPct(kpis.approvedRate)}
+                  {kpis.approvedRate === null ? "—" : formatPct(kpis.approvedRate)}
                 </span>
               </div>
               <p className="mt-1 text-[11px] text-muted-foreground">
-                {formatInt(kpis.approved)} de {formatInt(kpis.audited)} aprovadas
+                {noAudited
+                  ? "Sem apólices auditadas"
+                  : `${formatInt(kpis.approved)} de ${formatInt(kpis.audited)} aprovadas`}
               </p>
             </div>
           </div>
@@ -270,10 +300,26 @@ function AuditOverview({
 
               {priorityPolicies.length === 0 ? (
                 <div className="flex min-h-56 flex-col items-center justify-center px-6 py-12 text-center">
-                  <CheckCircle2 className="mb-3 h-7 w-7 text-success" />
-                  <div className="text-sm font-semibold">Nada para tratar agora</div>
+                  {coverage.partial ? (
+                    <AlertTriangle className="mb-3 h-7 w-7 text-warning" />
+                  ) : noAudited ? (
+                    <Shield className="mb-3 h-7 w-7 text-muted-foreground" />
+                  ) : (
+                    <CheckCircle2 className="mb-3 h-7 w-7 text-success" />
+                  )}
+                  <div className="text-sm font-semibold">
+                    {coverage.partial
+                      ? "Nenhum achado disponível"
+                      : noAudited
+                        ? "Nenhuma apólice foi auditada"
+                        : "Nada para tratar agora"}
+                  </div>
                   <p className="mt-1 max-w-sm text-[12px] leading-relaxed text-muted-foreground">
-                    A execução mais recente terminou sem achados pendentes.
+                    {coverage.partial
+                      ? "A cobertura da auditoria ainda está incompleta."
+                      : noAudited
+                        ? "Consulte a cobertura da execução."
+                        : "A execução mais recente terminou sem achados pendentes."}
                   </p>
                 </div>
               ) : (

@@ -2,10 +2,10 @@ import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 
 export const lookupInvite = createServerFn({ method: "POST" })
-  .inputValidator((input: unknown) =>
-    z.object({ token: z.string().min(10).max(200) }).parse(input),
-  )
+  .inputValidator((input: unknown) => z.object({ token: z.string().min(10).max(200) }).parse(input))
   .handler(async ({ data }) => {
+    const { assertProductionIdentityMutation } = await import("./environment/context.server");
+    assertProductionIdentityMutation();
     const crypto = await import("crypto");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const tokenHash = crypto.createHash("sha256").update(data.token).digest("hex");
@@ -36,6 +36,8 @@ export const consumeInvite = createServerFn({ method: "POST" })
       .parse(input),
   )
   .handler(async ({ data }) => {
+    const { assertProductionIdentityMutation } = await import("./environment/context.server");
+    assertProductionIdentityMutation();
     const crypto = await import("crypto");
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const tokenHash = crypto.createHash("sha256").update(data.token).digest("hex");
@@ -49,8 +51,7 @@ export const consumeInvite = createServerFn({ method: "POST" })
     if (!invite) throw new Error("Convite inválido");
     if (invite.revoked_at) throw new Error("Convite revogado");
     if (invite.used_at) throw new Error("Convite já utilizado");
-    if (new Date(invite.expires_at).getTime() < Date.now())
-      throw new Error("Convite expirado");
+    if (new Date(invite.expires_at).getTime() < Date.now()) throw new Error("Convite expirado");
 
     const { data: created, error: cErr } = await supabaseAdmin.auth.admin.createUser({
       email: invite.email,
@@ -67,9 +68,7 @@ export const consumeInvite = createServerFn({ method: "POST" })
       .eq("id", userId);
 
     if (invite.role !== "user") {
-      await supabaseAdmin
-        .from("user_roles")
-        .insert({ user_id: userId, role: invite.role });
+      await supabaseAdmin.from("user_roles").insert({ user_id: userId, role: invite.role });
     }
 
     // Atomically mark invite as used; if someone else used it first, undo user creation.

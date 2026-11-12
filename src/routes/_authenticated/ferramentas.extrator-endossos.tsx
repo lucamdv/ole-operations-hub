@@ -235,7 +235,7 @@ function ExtratorPage() {
               >
                 <div className="font-mono text-[12px] break-all min-w-0">{r.policy_number}</div>
                 <div className="text-right font-mono text-[12px] tabular-nums">
-                  {r.last_sequencial_endosso_used ?? "—"}
+                  {r.last_sequencial_endosso_used ?? "null"}
                 </div>
                 {isAdmin && (
                   <div className="text-right">

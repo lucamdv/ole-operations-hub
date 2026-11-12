@@ -1,0 +1,79 @@
+import type { BillingRecord } from "../billing/status.ts";
+import { buildAuditExclusions, type AuditIgnoreSource } from "./trigger-payload.ts";
+import {
+  AUDIT_SOURCE_COLUMNS,
+  type AuditSourceTable,
+  type AuditSnapshotClient,
+} from "./source-access.server.ts";
+
+const PAGE_SIZE = 1_000;
+
+/** Only controlled messages reach logs/audit_runs, never raw provider errors. */
+export class AuditPreparationError extends Error {}
+
+export async function loadAuditExclusionsSnapshot(
+  client: AuditSnapshotClient,
+  snapshotAt = new Date().toISOString(),
+) {
+  const signal = AbortSignal.timeout(30_000);
+
+  async function readPages<T>(table: AuditSourceTable): Promise<T[]> {
+    const rows: T[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      try {
+        let query = client
+          .from(table)
+          .select(AUDIT_SOURCE_COLUMNS[table])
+          .order("id", { ascending: true });
+        if (cursor) query = query.gt("id", cursor);
+        const { data, error } = await query.range(0, PAGE_SIZE - 1).abortSignal(signal);
+        if (error) {
+          const code = /^[A-Z0-9]{3,10}$/.test(error.code) ? ` (${error.code})` : "";
+          throw new AuditPreparationError(
+            `Falha ao consultar ${table}${code}. Snapshot de exclusões não preparado.`,
+          );
+        }
+        if (!Array.isArray(data))
+          throw new AuditPreparationError(`Resposta inválida ao consultar ${table}.`);
+        if (data.length === 0) return rows;
+        // A repeated/out-of-order cursor is an incomplete snapshot, not success.
+        let previous = cursor;
+        for (const row of data as unknown as Array<T & { id: string }>) {
+          if (typeof row.id !== "string" || !row.id || (previous && row.id <= previous)) {
+            throw new AuditPreparationError(
+              `Paginação inconsistente em ${table}: id repetido ou fora de ordem.`,
+            );
+          }
+          previous = row.id;
+          rows.push(row);
+        }
+        cursor = previous;
+        // Continue until EMPTY, even if the server caps responses below PAGE_SIZE.
+      } catch (error) {
+        if (error instanceof AuditPreparationError) throw error;
+        throw new AuditPreparationError(`Falha de rede ou tempo limite ao consultar ${table}.`);
+      }
+    }
+  }
+
+  const [policies, endorsements, billing, ignores] = await Promise.all([
+    readPages<{ numero_apolice: string }>("policies"),
+    readPages<{ numero_apolice: string; numero_endosso: string; proposta: unknown }>("endorsements"),
+    readPages<BillingRecord>("policy_billing"),
+    readPages<AuditIgnoreSource>("audit_ignores"),
+  ]);
+  try {
+    return buildAuditExclusions({
+      policies,
+      endorsements,
+      billing,
+      ignores,
+      referenceAt: snapshotAt,
+    });
+  } catch {
+    throw new AuditPreparationError(
+      "Dados operacionais inválidos ao preparar o snapshot de exclusões.",
+    );
+  }
+}
