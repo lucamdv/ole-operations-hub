@@ -119,13 +119,9 @@ export function IntegracoesTab() {
         <code className="mx-1 px-1.5 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
           EXCELSIOR_API_PASSWORD
         </code>
-        . A auditoria e a correção de alertas continuam usando, respectivamente,
+        . A auditoria utiliza o webhook
         <code className="mx-1 px-1.5 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
           N8N_AUDIT_WEBHOOK_URL
-        </code>
-        e
-        <code className="mx-1 px-1.5 py-0.5 rounded bg-surface border border-border font-mono text-[11px]">
-          N8N_CORRECTION_WEBHOOK_URL
         </code>
         no backend.
       </p>
