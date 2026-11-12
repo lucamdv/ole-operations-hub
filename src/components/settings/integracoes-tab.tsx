@@ -94,11 +94,6 @@ export function IntegracoesTab() {
               label="Extração de endossos"
               allowProduction={environment.environment === "production"}
             />
-            <WebhookModeControl
-              integration="correction"
-              label="Solicitações de correção"
-              allowProduction={environment.environment === "production"}
-            />
           </div>
           <p className="mt-2 text-[11.5px] text-muted-foreground">
             O modo teste exige “Listen for test event” no n8n e utiliza exclusivamente dados de{" "}
