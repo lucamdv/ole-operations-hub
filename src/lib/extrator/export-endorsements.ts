@@ -17,7 +17,7 @@ function stamp(d = new Date()) {
 export function exportEndorsementsCsv(rows: ExportRow[]) {
   const header = "PolicyNumber;last_sequencial_endosso_used";
   const body = rows
-    .map((r) => `${r.policy_number};${r.last_sequencial_endosso_used ?? ""}`)
+    .map((r) => `${r.policy_number};${r.last_sequencial_endosso_used ?? "null"}`)
     .join("\n");
   const blob = new Blob([`\uFEFF${header}\n${body}\n`], {
     type: "text/csv;charset=utf-8;",
@@ -53,7 +53,7 @@ export function exportEndorsementsPdf(rows: ExportRow[], generatedAt?: string | 
   autoTable(doc, {
     startY: 84,
     head: [["PolicyNumber", "last_sequencial_endosso_used"]],
-    body: rows.map((r) => [r.policy_number, String(r.last_sequencial_endosso_used ?? "—")]),
+    body: rows.map((r) => [r.policy_number, String(r.last_sequencial_endosso_used ?? "null")]),
     styles: { fontSize: 8, cellPadding: 4, textColor: [15, 23, 42] },
     headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontSize: 8 },
     alternateRowStyles: { fillColor: [241, 245, 249] },
