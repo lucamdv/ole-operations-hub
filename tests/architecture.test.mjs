@@ -143,7 +143,7 @@ test("detalhes de apólice e endosso priorizam a composição financeira", async
   assert.match(endorsement, /data=\{endo\.proposta\}/);
 });
 
-test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manual", async () => {
+test("UI oculta SOLUCIONAR e preserva integração legada fora da interface", async () => {
   const alertPage = await read("src/routes/_authenticated/alertas.tsx");
   const incidentRow = await read("src/components/alertas/incident-row.tsx");
   const incidentDetail = await read("src/components/alertas/incident-detail.tsx");
@@ -155,8 +155,11 @@ test("SOLUCIONAR envia ocorrências reais ao webhook sem marcar resolução manu
   const errorGroups = await read("src/lib/audit/error-groups.ts");
   const envExample = await read(".env.example");
 
-  assert.match(alertPage, /Solucionar seleção/);
-  assert.match(alertPage, /Solucionar/);
+  // A solicitação de correção foi descontinuada na interface por decisão do produto.
+  assert.doesNotMatch(alertPage, /Solucionar seleção|Solucionar/);
+  assert.doesNotMatch(alertPage, /useRequestAuditCorrection|requestCorrection/);
+  const integrations = await read("src/components/settings/integracoes-tab.tsx");
+  assert.doesNotMatch(integrations, /integration="correction"/);
   assert.match(alertPage, /Ignorar apólice/);
   assert.doesNotMatch(
     `${alertPage}\n${incidentRow}\n${incidentDetail}\n${findingsDialog}`,
