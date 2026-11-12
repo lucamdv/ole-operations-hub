@@ -7,9 +7,7 @@ import {
   EyeOff,
   History,
   Layers,
-  Loader2,
   Search,
-  Sparkles,
 } from "lucide-react";
 import { useLatestAudit } from "@/hooks/use-audit";
 import { auditResultSummary } from "@/lib/audit/result-summary";
@@ -18,7 +16,6 @@ import { useEscalationRules } from "@/hooks/use-escalation-rules";
 import { useUrgencyOverrides } from "@/hooks/use-urgency-overrides";
 import { useAddAuditIgnore, useAuditIgnores } from "@/hooks/use-audit-ignores";
 import { useAuditResolutions } from "@/hooks/use-audit-resolutions";
-import { useRequestAuditCorrection } from "@/hooks/use-audit-corrections";
 import {
   buildAlertItems,
   keyOf,
@@ -83,7 +80,6 @@ function AlertasPage() {
   const { overrides, setOverride, clearOverride } = useUrgencyOverrides();
   const { data: resolutions = [] } = useAuditResolutions();
   const { data: ignores = [] } = useAuditIgnores();
-  const correction = useRequestAuditCorrection();
   const addIgnore = useAddAuditIgnore();
 
   const [tab, setTab] = useState<Tab>("abertos");
@@ -190,21 +186,6 @@ function AlertasPage() {
       }
       return next;
     });
-
-  const requestCorrection = (targets: AlertItem[], clearSelection = false) => {
-    if (!run || targets.length === 0) return;
-    correction.mutate(
-      {
-        run_id: run.id,
-        finding_ids: Array.from(new Set(targets.map((item) => item.f.id))),
-      },
-      {
-        onSuccess: () => {
-          if (clearSelection) setSelected(new Set());
-        },
-      },
-    );
-  };
 
   const confirmIgnore = (res: IgnoreReasonResult) => {
     if (ignorePolicyTarget) {
@@ -463,23 +444,10 @@ function AlertasPage() {
           {/* Bulk bar */}
           {selectedItems.length > 0 && (
             <div className="flex flex-wrap items-center gap-2 rounded-xl border border-primary/40 bg-primary/5 px-4 py-2.5">
-              <Sparkles className="h-3.5 w-3.5 text-primary" />
               <span className="text-[12.5px] font-medium">
                 {selectedItems.length} ocorrência(s) selecionada(s) em{" "}
                 {new Set(selectedItems.map((item) => item.f.apolice)).size} apólice(s)
               </span>
-              <button
-                onClick={() => requestCorrection(selectedItems, true)}
-                disabled={correction.isPending || !run}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-semibold uppercase tracking-wide text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {correction.isPending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Sparkles className="h-3.5 w-3.5" />
-                )}
-                Solucionar seleção
-              </button>
               <button
                 onClick={() => setBulkIgnoreOpen(true)}
                 className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 text-[12px] transition hover:border-warning/60 hover:text-warning"
@@ -586,18 +554,6 @@ function AlertasPage() {
                             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface px-3 text-[11.5px] transition hover:border-warning/60 hover:text-warning"
                           >
                             <EyeOff className="h-3.5 w-3.5" /> Ignorar apólice
-                          </button>
-                          <button
-                            onClick={() => requestCorrection(group.allItems)}
-                            disabled={correction.isPending || !run}
-                            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-[11.5px] font-semibold uppercase tracking-wide text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {correction.isPending ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Sparkles className="h-3.5 w-3.5" />
-                            )}
-                            Solucionar
                           </button>
                         </div>
                       </div>
