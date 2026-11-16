@@ -23,6 +23,7 @@ import type { AuditHistoryItem } from "@/lib/audit/types";
 import { formatDateTime, formatInt, formatPct, relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorState } from "@/components/ui/query-error-state";
 import { AuditCoverageNotice } from "@/components/audit/audit-coverage-notice";
 import { auditResultSummary } from "@/lib/audit/result-summary";
 
@@ -153,6 +154,33 @@ function OperacaoPage() {
         : statusGeral === "ERRO"
           ? "destructive"
           : "default";
+
+  const hasQueryError =
+    latestQ.isError || historyQ.isError || policiesQ.isError || syncQ.isError || operationKpisQ.isError;
+  const isRetrying =
+    latestQ.isFetching || historyQ.isFetching || policiesQ.isFetching ||
+    syncQ.isFetching || operationKpisQ.isFetching;
+
+  if (hasQueryError) {
+    return (
+      <div className="mx-auto w-full max-w-[1180px]">
+        <QueryErrorState
+          title="Não foi possível carregar a Operação"
+          description="Uma ou mais consultas operacionais falharam. Os indicadores ficam indisponíveis até a conexão ser restabelecida."
+          isRetrying={isRetrying}
+          onRetry={() => {
+            void Promise.all([
+              latestQ.refetch(),
+              historyQ.refetch(),
+              policiesQ.refetch(),
+              syncQ.refetch(),
+              operationKpisQ.refetch(),
+            ]);
+          }}
+        />
+      </div>
+    );
+  }
 
   const noData = !isLoading && !run;
 
