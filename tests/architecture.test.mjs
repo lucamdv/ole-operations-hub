@@ -463,6 +463,8 @@ test("consultas indisponíveis não são exibidas como carteira vazia", async ()
   const overview = await read("src/routes/_authenticated/index.tsx");
   const policies = await read("src/routes/_authenticated/apolices.index.tsx");
   const errorState = await read("src/components/ui/query-error-state.tsx");
+  const operation = await read("src/routes/_authenticated/operacao.tsx");
+  const alerts = await read("src/routes/_authenticated/alertas.tsx");
 
   assert.match(overview, /if \(isError\)/);
   assert.match(overview, /QueryErrorState/);
@@ -470,6 +472,8 @@ test("consultas indisponíveis não são exibidas como carteira vazia", async ()
   assert.match(policies, /!isLoading && isError/);
   assert.match(policies, /!isLoading && !isError && filtered.length === 0/);
   assert.match(policies, /isRunning \|\| isCheckingSync \|\| isError/);
+  assert.match(operation, /if \(hasQueryError\)/);
+  assert.match(alerts, /if \(isError\)/);
   assert.match(errorState, /role="alert"/);
   assert.match(errorState, /onRetry=\{onRetry\}/);
 });
