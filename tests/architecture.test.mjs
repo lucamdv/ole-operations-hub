@@ -475,5 +475,5 @@ test("consultas indisponíveis não são exibidas como carteira vazia", async ()
   assert.match(operation, /if \(hasQueryError\)/);
   assert.match(alerts, /if \(isError\)/);
   assert.match(errorState, /role="alert"/);
-  assert.match(errorState, /onRetry=\{onRetry\}/);
+  assert.match(errorState, /onClick=\{onRetry\}/);
 });
