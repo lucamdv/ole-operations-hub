@@ -28,6 +28,7 @@ import { downloadAlertsCsv } from "@/lib/audit/export-alerts";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { QueryErrorState } from "@/components/ui/query-error-state";
 import { IncidentRow } from "@/components/alertas/incident-row";
 import { IncidentDetail } from "@/components/alertas/incident-detail";
 import { ResolvedTab } from "@/components/alertas/resolved-tab";
@@ -66,7 +67,7 @@ type AgeFilter = "all" | "novo" | "1a7" | "mais7";
 
 function AlertasPage() {
   const { q: initialSearch = "" } = Route.useSearch();
-  const { data: latest, isLoading, error } = useLatestAudit();
+  const { data: latest, isLoading, isError, isFetching, refetch } = useLatestAudit();
   const coverage = latest ? auditResultSummary(latest.run) : null;
   const emptyAuditMessage = !coverage
     ? "Execute uma auditoria para consultar os achados."
@@ -229,6 +230,17 @@ function AlertasPage() {
   const detailKey = detail ? keyOf(detail.f.apolice, detail.f.tipo_erro, detail.f.endosso) : null;
   const detailRuns = (recurrence?.items ?? []).find((r) => r.key === detailKey)?.runs ?? [];
 
+  if (isError) {
+    return (
+      <QueryErrorState
+        title="Não foi possível carregar os Alertas"
+        description="Falha ao consultar os achados da auditoria. A ausência de dados nesta tela não significa que não existam incidentes."
+        onRetry={() => { void refetch(); }}
+        isRetrying={isFetching}
+      />
+    );
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -303,12 +315,6 @@ function AlertasPage() {
 
       {tab === "abertos" && (
         <>
-          {error && (
-            <div className="rounded-xl border border-destructive/40 bg-destructive/5 px-4 py-3 text-[12px] text-destructive">
-              Falha ao carregar findings: {error.message}
-            </div>
-          )}
-
           {/* Urgency tiles */}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             <button
