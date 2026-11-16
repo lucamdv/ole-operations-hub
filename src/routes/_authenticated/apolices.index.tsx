@@ -9,6 +9,7 @@ import {
 } from "@/hooks/use-policies";
 import { NextRunCountdown } from "@/components/automation/next-run-countdown";
 import { SyncDetailsDialog } from "@/components/policies/sync-details-dialog";
+import { QueryErrorState } from "@/components/ui/query-error-state";
 
 import { formatDateTime, relativeTime } from "@/lib/format";
 import { fmtNum } from "@/components/apolice/cards";
@@ -87,7 +88,7 @@ function ApolicesPage() {
   const [q, setQ] = useState("");
   const [statuses, setStatuses] = useState<PolicyStatus[]>([]);
   const [sort, setSort] = useState("atualizado");
-  const { data: policies, isLoading } = usePolicies();
+  const { data: policies, isLoading, isError, isFetching, refetch } = usePolicies();
   const { data: lastSync } = useLatestPolicySync();
   const {
     mutate: runSync,
@@ -144,7 +145,7 @@ function ApolicesPage() {
   }, [policies, q, statuses, sort, policyStatuses]);
 
   const synced = !!lastSync?.finished_at;
-  const syncLocked = isRunning || isCheckingSync;
+  const syncLocked = isRunning || isCheckingSync || isError;
 
   return (
     <div className="space-y-8">
@@ -163,10 +164,16 @@ function ApolicesPage() {
                     : "bg-muted-foreground/50",
               )}
             />
-            <span>
-              <span className="text-foreground font-medium">{policies?.length ?? 0}</span> apólices
-              na carteira
-            </span>
+            {isError ? (
+              <span className="font-medium text-destructive">Carteira indisponível</span>
+            ) : isLoading ? (
+              <span>Carregando carteira…</span>
+            ) : (
+              <span>
+                <span className="text-foreground font-medium">{policies?.length ?? 0}</span> apólices
+                na carteira
+              </span>
+            )}
             <span className="text-border">•</span>
             <span>
               {isRunning || lastSync?.status === "running"
@@ -249,7 +256,7 @@ function ApolicesPage() {
           sortOptions={SORT_OPTIONS}
         />
         <span className="text-[11.5px] text-muted-foreground">
-          {filtered.length} de {policies?.length ?? 0}
+          {isError || isLoading ? "—" : `${filtered.length} de ${policies?.length ?? 0}`}
         </span>
       </div>
 
@@ -269,7 +276,16 @@ function ApolicesPage() {
           </div>
         )}
 
-        {!isLoading && filtered.length === 0 && (
+        {!isLoading && isError && (
+          <QueryErrorState
+            title="Não foi possível carregar as apólices"
+            description="A consulta da carteira falhou. Isso não significa que existam zero apólices. Tente novamente quando a conexão com o banco estiver disponível."
+            onRetry={() => { void refetch(); }}
+            isRetrying={isFetching}
+          />
+        )}
+
+        {!isLoading && !isError && filtered.length === 0 && (
           <div className="px-4 py-16 text-center bg-surface/40 border border-border/60 rounded-xl">
             <FileText className="h-8 w-8 mx-auto text-muted-foreground/40 mb-3" />
             <div className="text-[13px] text-foreground font-medium">
@@ -285,7 +301,7 @@ function ApolicesPage() {
           </div>
         )}
 
-        {!isLoading && filtered.length > 0 && (
+        {!isLoading && !isError && filtered.length > 0 && (
           <VirtualList
             items={filtered}
             getKey={(p) => p.id}
