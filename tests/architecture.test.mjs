@@ -458,3 +458,18 @@ test("sincronização ativa é recuperada após F5 e possui trava contra concorr
   assert.match(migration, /CREATE UNIQUE INDEX IF NOT EXISTS policy_sync_runs_single_running/);
   assert.match(migration, /WHERE status = 'running'/);
 });
+
+test("consultas indisponíveis não são exibidas como carteira vazia", async () => {
+  const overview = await read("src/routes/_authenticated/index.tsx");
+  const policies = await read("src/routes/_authenticated/apolices.index.tsx");
+  const errorState = await read("src/components/ui/query-error-state.tsx");
+
+  assert.match(overview, /if \(isError\)/);
+  assert.match(overview, /QueryErrorState/);
+  assert.match(policies, /Carteira indisponível/);
+  assert.match(policies, /!isLoading && isError/);
+  assert.match(policies, /!isLoading && !isError && filtered.length === 0/);
+  assert.match(policies, /isRunning \|\| isCheckingSync \|\| isError/);
+  assert.match(errorState, /role="alert"/);
+  assert.match(errorState, /onRetry=\{onRetry\}/);
+});
