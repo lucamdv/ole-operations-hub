@@ -17,6 +17,7 @@ import { FindingsListDialog } from "@/components/audit/findings-list-dialog";
 import { RunAuditButton } from "@/components/audit/run-audit-button";
 import { NextRunCountdown } from "@/components/automation/next-run-countdown";
 import { PageHeader } from "@/components/layout/page-header";
+import { QueryErrorState } from "@/components/ui/query-error-state";
 import {
   OverviewPersonalizer,
   type OverviewPreferences,
@@ -45,7 +46,7 @@ export const Route = createFileRoute("/_authenticated/")({
 });
 
 function VisaoGeral() {
-  const { data: latest, isLoading } = useLatestAudit();
+  const { data: latest, isLoading, isError, isFetching, refetch } = useLatestAudit();
   const { data: history = [] } = useAuditHistory();
   const { profile } = useProfile();
   const { preferences, updatePreferences, resetPreferences } = useOverviewPreferences();
@@ -63,6 +64,19 @@ function VisaoGeral() {
           <Skeleton className="h-80 rounded-2xl" />
           <Skeleton className="h-80 rounded-2xl" />
         </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <div className="mx-auto w-full max-w-[1180px]">
+        <QueryErrorState
+          title="Não foi possível carregar a Visão Geral"
+          description="Falha ao consultar os dados da auditoria. Não é possível determinar a situação da carteira neste momento."
+          onRetry={() => { void refetch(); }}
+          isRetrying={isFetching}
+        />
       </div>
     );
   }
